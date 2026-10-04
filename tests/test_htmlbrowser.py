@@ -618,8 +618,9 @@ class TestPage(unittest.TestCase):
         # fallback needs no server round-trip -- ~16 KB gzip-compressed,
         # ~22 KB once base64-encoded into the page -- plus viewer.js's own
         # new RSF-fallback/preferred-line code. +1_000: the rare-element
-        # ranking penalty in V.candidates (mirrors xpslines._plausibility)
-        self.assertLess(len(page), 146_000 + raw)     # far below plain JSON
+        # ranking penalty in V.candidates (mirrors xpslines._plausibility).
+        # +4_000: the CasaXPS-curves switch and the zoom limit (viewer code)
+        self.assertLess(len(page), 150_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR

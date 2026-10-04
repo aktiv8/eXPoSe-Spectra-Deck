@@ -140,6 +140,18 @@
     native.ok = false;                                            /* no photon energy */
     return native;
   };
+  /* a zoom window kept inside the data span [dlo, dhi]: one as wide as the span (or wider)
+     is the full view (null); otherwise it keeps its width and slides back in. A window
+     that is not a number, or lies wholly outside the span (a zoom made on another axis),
+     is dropped too */
+  V.clampView = function (lo, hi, dlo, dhi) {
+    if (!(isFinite(lo) && isFinite(hi) && hi > lo)) return null;
+    var span = dhi - dlo, w = hi - lo;
+    if (w >= span || hi <= dlo || lo >= dhi) return null;
+    if (lo < dlo) return [dlo, dlo + w];
+    if (hi > dhi) return [dhi - w, dhi];
+    return [lo, hi];
+  };
   V.normName = function (n) { return String(n || '').replace(/\s+/g, ' ').trim().toLowerCase(); };
   /* spectra with the same element name share a panel; first appearance order */
   V.groupSpectra = function (specs) {
@@ -201,7 +213,19 @@
     for (var k = 0; k < curve.length && cur.i0 + k < n; k++) out[cur.i0 + k] = curve[k];
     return out;
   };
-  V.fitRows = function (reg) { return reg && reg.fit ? reg.fit.rows : []; };
+  /* A fit region that a CasaXPS CSV export matched carries two row sets: `rows` (the
+     reconstruction from the stored parameters) and `csv_rows` (CasaXPS's own curves, with
+     the area / RMS / chi-square worked out from them). V.fitSource.csv picks the set
+     everywhere on the page, so the plots, tables, quantification and CSVs agree. */
+  V.fitSource = { csv: false };
+  V.fitRows = function (reg) {
+    if (!reg || !reg.fit) return [];
+    return V.fitSource.csv && reg.fit.csv_rows ? reg.fit.csv_rows : reg.fit.rows;
+  };
+  V.fitNotes = function (reg) {
+    if (!reg || !reg.fit) return [];
+    return (V.fitSource.csv && reg.fit.csv_rows ? reg.fit.csv_notes : reg.fit.notes) || [];
+  };
   /* the chemical states of a spectrum's fit, by display name, in
      first-appearance order (what the app's legend shows): two components
      with the same name -- even from different fit regions of this
@@ -620,6 +644,11 @@
     (data.files || []).forEach(function (f) { L.push('  ' + f.name + (f.format ? ' (' + f.format + ')' : '')); });
     L.push('');
     L.push('Energies are as shown in the data browser (binding-energy corrections applied where the file or the analyst gave one).');
+    if (data.fit_csv) {
+      L.push(V.fitSource.csv
+        ? 'Fits with a CasaXPS CSV export are drawn, tabulated and quantified from CasaXPS\'s own exported curves.'
+        : 'Fits are drawn, tabulated and quantified from the reconstruction of their stored parameters (CasaXPS\'s own exported curves were switched off).');
+    }
     return L.join('\n') + '\n';
   };
 
@@ -1163,7 +1192,7 @@
       var s = singleFit(p.group);
       if (s) {
         anyFit = true;
-        (s.reg.fit.notes || []).forEach(function (t) { notes.push('fit: ' + t); });
+        V.fitNotes(s.reg).forEach(function (t) { notes.push('fit: ' + t); });
       }
     });
     $('fitbar').hidden = !anyFit;
@@ -1216,7 +1245,7 @@
     if (!s) { if (p.fitbox) { p.wrap.removeChild(p.fitbox); p.fitbox = null; } return; }
     if (!p.fitbox) { p.fitbox = h('div', { class: 'fitbox' }); p.wrap.appendChild(p.fitbox); }
     var box = clear(p.fitbox), slot = fitSlotMap(s.reg), kin = S.scale === 'Kinetic' && s.reg.hv;
-    var rows = s.reg.fit.rows, shown = 0;
+    var rows = V.fitRows(s.reg), shown = 0;
     rows.forEach(function (row, ri) {
       if (shown >= 8) return;
       shown++;
@@ -1279,7 +1308,7 @@
       var d = p.drag; p.drag = null;
       if (Math.abs(d.b - d.a) > 6 && p.lay) {
         var v1 = p.lay.toX(d.a), v2 = p.lay.toX(d.b);
-        p.zoom = [Math.min(v1, v2), Math.max(v1, v2)];
+        p.zoom = V.clampView(Math.min(v1, v2), Math.max(v1, v2), p.lay.dlo, p.lay.dhi);
       } else if (S.ident.on && p.lay) identifyAt(p, d.a);
       redraw(p);
     });
@@ -1289,7 +1318,7 @@
       e.preventDefault();
       var x = px(p, e), c = p.lay.toX(x), f = e.deltaY < 0 ? 0.8 : 1.25;
       var lo = p.lay.lo, hi = p.lay.hi;
-      p.zoom = [c - (c - lo) * f, c + (hi - c) * f];
+      p.zoom = V.clampView(c - (c - lo) * f, c + (hi - c) * f, p.lay.dlo, p.lay.dhi);
       redraw(p);
     }, { passive: false });
     return p;
@@ -1378,8 +1407,8 @@
     axes.forEach(function (a) { a.x.forEach(function (v) { if (v < xlo) xlo = v; if (v > xhi) xhi = v; }); });
     var pad = (xhi - xlo) * 0.02 || 1;
     var dlo = xlo - pad, dhi = xhi + pad;
+    P.zoom = P.zoom ? V.clampView(P.zoom[0], P.zoom[1], dlo, dhi) : null;
     var lo = P.zoom ? P.zoom[0] : dlo, hi = P.zoom ? P.zoom[1] : dhi;
-    if (!(hi > lo)) { lo = dlo; hi = dhi; }
 
     var ylo = Infinity, yhi = -Infinity;
     yoff.forEach(function (v, i) {
@@ -1412,7 +1441,7 @@
       ctx.font = font(11);
       gutter = Math.min(150, Math.max.apply(null, labels.map(function (t) { return ctx.measureText(t).width; })) + 16);
     }
-    var lay = { l: stacked ? 46 : 62, t: 30, w: 0, h: 0, lo: lo, hi: hi };
+    var lay = { l: stacked ? 46 : 62, t: 30, w: 0, h: 0, lo: lo, hi: hi, dlo: dlo, dhi: dhi };
     lay.w = Math.max(50, W - lay.l - gutter);
     lay.h = Math.max(50, H - lay.t - 44);
     var invert = ax0.invert;
@@ -2652,6 +2681,9 @@
     buildTree();
     buildTabs();
     V.seedInclude(S.q.include, data.quant_include);
+    V.fitSource.csv = !!(data.fit_csv && data.fit_csv.default);
+    $('fit-csv').checked = V.fitSource.csv;
+    $('fit-csv-field').hidden = !data.fit_csv;
     renderQuant(); renderFigures(); renderNotes(); renderMethods(); renderHolder(); renderMeta(); renderCameras(); renderMaps();
     $('boot').hidden = true; $('app').hidden = false;
     showTab('plot');
@@ -2680,6 +2712,10 @@
     $('nearbyAuger').addEventListener('change', function (e) { S.ident.auger = e.target.checked; requestRender(); });
     V.FIT_LAYERS.forEach(function (k) {
       $('fit-' + k).addEventListener('change', function (e) { S.fit[k] = e.target.checked; requestRender(); });
+    });
+    $('fit-csv').addEventListener('change', function (e) {
+      V.fitSource.csv = e.target.checked;
+      requestRender(); renderQuant(); renderDepth();
     });
     $('zipall').addEventListener('click', downloadEverything);
     $('levPrev').addEventListener('click', function () { stepLevel(-1, false); });

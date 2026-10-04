@@ -628,27 +628,56 @@ class TestPreferCsvConsumers(unittest.TestCase):
         self.assertTrue(self._flat(on["curves"]["bg"], 2.0))
         self.assertFalse(self._flat(off["curves"]["bg"], 2.0))
 
-    def test_html_fit_block_follows_the_flag(self):
+    def test_html_fit_block_carries_both_sets(self):
         import htmlbrowser
         r = self._region()
-        on = htmlbrowser._fit_block(r, [10 ** 6], prefer_csv=True)
-        off = htmlbrowser._fit_block(r, [10 ** 6])
-        self.assertTrue(self._flat(on["rows"][0]["curve"]["bg"], 2.0))
-        self.assertFalse(self._flat(off["rows"][0]["curve"]["bg"], 2.0))
+        block = htmlbrowser._fit_block(r, [10 ** 6])
+        self.assertFalse(self._flat(block["rows"][0]["curve"]["bg"], 2.0))
+        self.assertTrue(self._flat(block["csv_rows"][0]["curve"]["bg"], 2.0))
+        self.assertIn("csv_notes", block)
+        self.assertEqual([x["region"] for x in block["rows"]],
+                         [x["region"] for x in block["csv_rows"]])
 
-    def test_html_payload_says_which_source_it_used(self):
+    def test_html_fit_block_without_a_match_has_only_one_set(self):
         import htmlbrowser
         r = self._region()
+        r.fit.regions[0].csv_curves = None
+        block = htmlbrowser._fit_block(r, [10 ** 6])
+        self.assertNotIn("csv_rows", block)
+        self.assertNotIn("csv_notes", block)
+
+    def _doc(self, r):
         doc = readers.SpectrumFile()
         doc.path, doc.format_name, doc.regions = "a.vms", "Test", [r]
         doc.instrument = {}
         doc._finish()
-        on = htmlbrowser.build_payload([doc], prefer_csv=True)
-        off = htmlbrowser.build_payload([doc])
+        return doc
+
+    def test_html_payload_opens_on_the_casaxps_curves(self):
+        import htmlbrowser
+        payload = htmlbrowser.build_payload([self._doc(self._region())])
+        self.assertEqual(payload["fit_csv"], {"default": True})
         self.assertTrue(any("CasaXPS's own exported curves" in n
-                            for n in on["build_notes"]))
+                            for n in payload["build_notes"]))
+        fit = payload["samples"][0]["regions"][0]["fit"]
+        self.assertIn("csv_rows", fit)
+
+    def test_html_payload_can_open_on_the_reconstruction(self):
+        import htmlbrowser
+        payload = htmlbrowser.build_payload([self._doc(self._region())],
+                                            prefer_csv=False)
+        self.assertEqual(payload["fit_csv"], {"default": False})
+        self.assertTrue(any("reconstruction" in n
+                            for n in payload["build_notes"]))
+
+    def test_html_payload_without_a_match_has_no_toggle(self):
+        import htmlbrowser
+        r = self._region()
+        r.fit.regions[0].csv_curves = None
+        payload = htmlbrowser.build_payload([self._doc(r)])
+        self.assertNotIn("fit_csv", payload)
         self.assertFalse(any("exported curves" in n
-                             for n in off["build_notes"]))
+                             for n in payload["build_notes"]))
 
     def test_csv_export_columns_follow_the_flag(self):
         import exporters

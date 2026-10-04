@@ -3843,7 +3843,6 @@ class Workspace:
                 self.docs, self._display_for_export, self._report_details(),
                 self.methods_text(), self.calibration_statement(), [], None,
                 cameras=False, snapmaps=False, casa_quant=self.casa_quant,
-                prefer_csv=bool(self.csv_curves_var.get()),
                 quant_overrides=dict(self.quant_panel.view.include))
         except htmlbrowser.ViewerError:
             return None
@@ -4362,7 +4361,6 @@ class Workspace:
             self.docs, self._display_for_export, self._report_details(),
             self.methods_text(), self.calibration_statement(), figures,
             self.calib, casa_quant=self.casa_quant,
-            prefer_csv=bool(self.csv_curves_var.get()),
             quant_overrides=dict(self.quant_panel.view.include))
 
     def export_html_browser(self):

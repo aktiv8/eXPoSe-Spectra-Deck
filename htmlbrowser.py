@@ -326,16 +326,39 @@ def _round_curve(values):
         None if v is None else round_sig(v, FIT_DIGITS) for v in values]
 
 
-def _fit_block(d, budget, prefer_csv=False):
+def _fit_block(d, budget):
     """The CasaXPS fit of a (display) region for the page, or None: for every
     fit region its numbers (``quant.fit_rows``: RSF, area, limits, components
     with their positions) and the curves that draw it (background, envelope,
     components from the region's first point on, so ``y - env`` is the
     residual). ``budget`` is a one-item list counting the curve values left;
-    curves that would not fit are left out and the table stays."""
-    rows = quant.fit_rows(d, curves=True, prefer_csv=prefer_csv)
+    curves that would not fit are left out and the table stays.
+
+    ``rows`` is the reconstruction from the stored parameters. When a CasaXPS
+    CSV import matched any fit region of ``d``, ``csv_rows`` is the same fit
+    drawn and quantified from CasaXPS's own exported curves and the page
+    switches between the two (``rows`` stays for a viewer that never looks)."""
+    rows = quant.fit_rows(d, curves=True)
     if not rows:
         return None
+    out, dropped = _page_rows(rows, budget)
+    block = {"rows": out, "notes": fit_notes(rows), "dropped": dropped}
+    if any(fr.csv_curves is not None for fr in d.fit.regions):
+        alt = quant.fit_rows(d, curves=True, prefer_csv=True)
+        # the page indexes a row by position (ticks, the fit box), so the two
+        # lists must describe the same regions in the same order
+        if [a["region"] for a in alt] == [a["region"] for a in rows]:
+            alt_out, alt_dropped = _page_rows(alt, budget)
+            block["csv_rows"] = alt_out
+            block["csv_notes"] = fit_notes(alt)
+            block["dropped"] = dropped or alt_dropped
+    return block
+
+
+def _page_rows(rows, budget):
+    """``rows`` of ``quant.fit_rows(curves=True)`` as the page holds them
+    (curves rounded and counted against ``budget``) and whether any curves
+    had to be left out."""
     out, dropped = [], False
     for row in rows:
         cur = row.pop("curves", None)
@@ -357,7 +380,7 @@ def _fit_block(d, budget, prefer_csv=False):
         for c in row["components"]:
             c["be"] = round(c["be"], 4)
         out.append(row)
-    return {"rows": out, "notes": fit_notes(rows), "dropped": dropped}
+    return out, dropped
 
 
 # -- element identification ----------------------------------------------------------
@@ -418,7 +441,7 @@ def _meta(md):
 def build_payload(docs, display=None, details=None, methods_text="",
                   calibration="", figures=(), calib=None, generated=None,
                   cameras=True, snapmaps=True, lines=None, casa_quant=None,
-                  rsf_entries=None, prefer_csv=False, quant_overrides=None):
+                  rsf_entries=None, prefer_csv=True, quant_overrides=None):
     """The data of the browser as a JSON-able dict.
 
     ``figures`` is ``[{"name", "caption", "pages": [png bytes]}]``; ``calib``
@@ -435,10 +458,12 @@ def build_payload(docs, display=None, details=None, methods_text="",
     any embedded fit (curve overlay, CSV) are unaffected. ``rsf_entries``
     (default: ``rsf.load_rsf()``) is the RSF reference table the page's own
     quantification fallback offers (off by default, the same "nothing is
-    guessed" stance ``quant.py`` takes on the desktop). ``prefer_csv`` draws
-    and quantifies every fit region that has a complete CasaXPS CSV match
-    (``casacsv.py``) from CasaXPS's own exported curves instead of the
-    reconstruction, and ``build_notes`` says how many did.
+    guessed" stance ``quant.py`` takes on the desktop). A fit region with a
+    complete CasaXPS CSV match (``casacsv.py``) carries both sets of rows, the
+    reconstruction and one drawn and quantified from CasaXPS's own exported
+    curves, and the page has a tick box between them (``fit_csv``, present only
+    when some region has both); ``prefer_csv`` is whether that box starts
+    ticked, and ``build_notes`` says how many regions have the exported curves.
     ``quant_overrides`` is the user's own choice of which fitted regions
     count, ``{resultspages.entry_key: bool}`` (the Quantification tab's
     ticks): the page starts its Quantification and Depth profile tabs with
@@ -512,7 +537,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
             auto = auto_labels(d, element_lines)
             if auto:
                 reg["auto"] = auto
-            fit = (_fit_block(d, fit_budget, prefer_csv)
+            fit = (_fit_block(d, fit_budget)
                    if getattr(d, "fit", None) else None)
             if fit:
                 reg["fit"] = fit
@@ -525,7 +550,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
                         if tick is not None:
                             hand.append((reg, ri, bool(tick)))
                 fit_dropped += bool(fit.pop("dropped"))
-                if prefer_csv:
+                if "csv_rows" in fit:
                     fit_csv += sum(1 for fr in d.fit.regions
                                    if fr.csv_curves is not None)
             entry["regions"].append(reg)
@@ -536,14 +561,18 @@ def build_payload(docs, display=None, details=None, methods_text="",
     if not n_regions:
         raise ViewerError("There are no spectra with data to put in the "
                           "browser.")
-    if prefer_csv:
+    if fit_csv:
         notes.append(
-            f"{fit_csv} fit region(s) are drawn and quantified from "
-            "CasaXPS's own exported curves (CSV import); any other fit "
-            "is reconstructed from its stored parameters."
-            if fit_csv else
-            "CasaXPS exported curves were requested but none matched a fit "
-            "here; all fits are reconstructed from their stored parameters.")
+            f"{fit_csv} fit region(s) have CasaXPS's own exported curves "
+            "(CSV import). "
+            + ("They are drawn and quantified from those curves; tick "
+               "\"CasaXPS exported curves\" off to use the reconstruction "
+               "from the stored parameters instead. "
+               if prefer_csv else
+               "They are drawn from the reconstruction of the stored "
+               "parameters; tick \"CasaXPS exported curves\" to use the "
+               "exported ones instead. ")
+            + "Any other fit is always reconstructed.")
     if fit_dropped:
         notes.append(f"Fit curves were left out of {fit_dropped} "
                      f"spectr{'um' if fit_dropped == 1 else 'a'} to keep the "
@@ -592,6 +621,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
         "palette": {"light": list(light["cycle"]), "dark": list(dark["cycle"]),
                     "bg": {"light": light["plot_bg"], "dark": dark["plot_bg"]}},
         **({"quant_include": quant_include} if quant_include else {}),
+        **({"fit_csv": {"default": bool(prefer_csv)}} if fit_csv else {}),
     }
 
 

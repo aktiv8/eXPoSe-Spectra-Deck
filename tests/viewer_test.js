@@ -161,6 +161,33 @@ function near(a, b, msg, tol) {
     eq(V.fitRows({}).length, 0, 'a spectrum without a fit has no rows');
   }
 
+  // ---- the CasaXPS-curves switch picks one of the two row sets everywhere ----
+  {
+    const rg = { fit: { rows: ['recon'], csv_rows: ['casa'], notes: ['n'], csv_notes: ['cn'] } };
+    const plain = { fit: { rows: ['recon'], notes: ['n'] } };
+    V.fitSource.csv = false;
+    eq(V.fitRows(rg), ['recon'], 'reconstruction rows when the switch is off');
+    eq(V.fitNotes(rg), ['n'], 'reconstruction notes when the switch is off');
+    V.fitSource.csv = true;
+    eq(V.fitRows(rg), ['casa'], 'CasaXPS rows when the switch is on');
+    eq(V.fitNotes(rg), ['cn'], 'CasaXPS notes when the switch is on');
+    eq(V.fitRows(plain), ['recon'], 'a fit with no CasaXPS match keeps its one set');
+    eq(V.fitNotes(plain), ['n'], 'and its notes');
+    V.fitSource.csv = false;
+  }
+
+  // ---- zoom stays inside the data ----
+  {
+    eq(V.clampView(525, 535, 518, 547), [525, 535], 'a zoom inside the data is kept');
+    eq(V.clampView(505, 520, 518, 547), [518, 533], 'a zoom past the low edge slides back in');
+    eq(V.clampView(535, 555, 518, 547), [527, 547], 'a zoom past the high edge slides back in');
+    eq(V.clampView(0, 2000, 518, 547), null, 'a zoom wider than the data is the full view');
+    eq(V.clampView(518, 547, 518, 547), null, 'a zoom as wide as the data is the full view');
+    eq(V.clampView(1000, 1010, 518, 547), null, 'a zoom wholly outside the data is dropped');
+    eq(V.clampView(530, 530, 518, 547), null, 'an empty zoom is dropped');
+    eq(V.clampView(NaN, 530, 518, 547), null, 'a zoom that is not a number is dropped');
+  }
+
   // ---- quantification: the same table as quant.csv_rows ----
   if (fx.fit && fx.fit.quant) {
     const qx = fx.fit.quant;
