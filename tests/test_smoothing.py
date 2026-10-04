@@ -66,6 +66,27 @@ class TestFourierLowpass(unittest.TestCase):
         out = smoothing.fourier_lowpass(y, cutoff=1)
         np.testing.assert_array_equal(out, y)
 
+    def test_straight_line_unchanged(self):
+        y = np.linspace(10.0, 250.0, 120)
+        out = smoothing.fourier_lowpass(y, cutoff=4)
+        np.testing.assert_allclose(out, y, atol=1e-9)
+
+    def test_sloping_trace_does_not_ring_at_the_ends(self):
+        rng = np.random.default_rng(12)
+        x = np.linspace(0, 1, 200)
+        trend = 80 * x
+        noisy = trend + rng.normal(0, 0.5, size=x.size)
+        out = smoothing.fourier_lowpass(noisy, cutoff=10)
+        # what the same filter did to the raw trace before the line was removed
+        k = np.arange(noisy.size // 2 + 1, dtype=float)
+        raw = np.fft.irfft(np.fft.rfft(noisy) * np.exp(-(k / 10.0) ** 4),
+                           n=noisy.size)
+        ends = [0, 1, -2, -1]
+        err_new = np.max(np.abs(out[ends] - trend[ends]))
+        err_raw = np.max(np.abs(raw[ends] - trend[ends]))
+        self.assertLess(err_new, 1.5)
+        self.assertLess(err_new, err_raw * 0.5)
+
 
 class TestGaussHermiteTransfer(unittest.TestCase):
     def test_unity_at_dc(self):
@@ -129,6 +150,15 @@ class TestAutoCutoff(unittest.TestCase):
         y = np.array([1.0, 2.0, 1.0, 2.0])
         cutoff = smoothing.auto_cutoff(y)
         self.assertGreaterEqual(cutoff, 1)
+
+    def test_a_sloping_background_does_not_move_the_knee(self):
+        rng = np.random.default_rng(3)
+        n = 512
+        x = np.arange(n)
+        y = 5 * np.sin(2 * np.pi * 3 * x / n) + rng.normal(0, 0.05, size=n)
+        flat = smoothing.auto_cutoff(y)
+        sloped = smoothing.auto_cutoff(y + 40 * x / n)
+        self.assertLessEqual(abs(sloped - flat), 3)
 
 
 class TestSmoothDispatcher(unittest.TestCase):

@@ -8,7 +8,8 @@ Three methods, all numpy-only (no scipy dependency):
   standard method in the field.
 * ``fourier_lowpass`` — a simple smooth (super-Gaussian) roll-off applied to
   the real FFT, with ``auto_cutoff`` finding the knee between signal and
-  noise floor in the log-magnitude spectrum.
+  noise floor in the log-magnitude spectrum. Both work on the trace minus
+  its first-to-last-point line, which is added back afterwards.
 * ``gauss_hermite_smooth`` — the actual order-4 Gauss-Hermite filter (a
   faithful port of "Gauss Hermite filter code 2024 Jan.pdf": originally
   written by Long Le Van and David Apsnes, edited by BYU students Kristopher
@@ -56,13 +57,24 @@ def savitzky_golay(y, window, order=2):
     return np.correlate(padded, kernel, mode="valid")
 
 
+def _line(y):
+    """The straight line from the first to the last point of ``y``. An FFT
+    treats a trace as periodic, so a sloping one has a jump at its ends that
+    leaks into every coefficient; the Fourier methods work on ``y - _line(y)``
+    and add the line back."""
+    import numpy as np
+    return np.linspace(y[0], y[-1], y.size)
+
+
 def auto_cutoff(y):
     """The Fourier coefficient index where the log-magnitude spectrum bends
     from signal to noise floor: the index that minimises the combined
-    residual of two independent straight-line fits before and after it."""
+    residual of two independent straight-line fits before and after it. Taken
+    on ``y`` with its end-to-end line removed, so a sloping background does
+    not pull the knee up."""
     import numpy as np
     y = np.asarray(y, dtype=float)
-    coeffs = np.fft.rfft(y)
+    coeffs = np.fft.rfft(y - _line(y))
     mag = np.abs(coeffs)
     mag[mag == 0] = 1e-300
     log_mag = np.log(mag)
@@ -84,19 +96,23 @@ def auto_cutoff(y):
 def fourier_lowpass(y, cutoff=None, order=2):
     """Low-pass ``y`` in the Fourier domain with transfer function
     ``exp(-(k/cutoff)**(2*order))`` (flat near k=0, falling smoothly to zero
-    past ``cutoff``). ``cutoff=None`` picks it with :func:`auto_cutoff`."""
+    past ``cutoff``). ``cutoff=None`` picks it with :func:`auto_cutoff`. The
+    straight line from the first to the last point is removed before the
+    transform and added back after it, so a sloping trace does not ring at
+    its ends."""
     import numpy as np
     y = np.asarray(y, dtype=float)
     n = y.size
     if n < 4:
         return y.copy()
-    coeffs = np.fft.rfft(y)
+    line = _line(y)
+    coeffs = np.fft.rfft(y - line)
     if cutoff is None:
         cutoff = auto_cutoff(y)
     cutoff = max(1e-6, float(cutoff))
     k = np.arange(coeffs.size, dtype=float)
     transfer = np.exp(-(k / cutoff) ** (2 * order))
-    return np.fft.irfft(coeffs * transfer, n=n)
+    return np.fft.irfft(coeffs * transfer, n=n) + line
 
 
 def _gh_half_power_x():
