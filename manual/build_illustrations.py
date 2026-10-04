@@ -181,12 +181,32 @@ def fig_theme_compare():
 # ----------------------------------------------------------------------
 
 def fig_cover():
+    import io
     import covers
-    art = covers.art({"design": "ribbon", "image": "", "accent": "#2C3E50"}, "pdf")
+    # the PDF cover is a full A4 page (text panel at the chosen zone is drawn
+    # by the report itself, so show the artwork with a pale stand-in panel)
+    cover = {"design": "ribbon", "image": "", "accent": "#2C3E50",
+             "zone": "bottom"}
+    art = covers.page_art(cover, "a4")
     out = os.path.join(OUT, "fig_cover.png")
-    with open(out, "wb") as f:
-        f.write(art.data)
-    print("wrote", out)
+    from PIL import ImageDraw
+    im = Image.open(io.BytesIO(art.data)).convert("RGB")
+    im.thumbnail((700, 990))
+    w, h = im.size
+    lo, hi = covers.panel_span(cover["zone"])
+    top, bot = round(h * (1 - hi)), round(h * (1 - lo))
+    over = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    d = ImageDraw.Draw(over)
+    d.rectangle([0, top, w, bot], fill=(255, 255, 255, 242))
+    d.line([0, top, w, top], fill=(44, 62, 80, 255), width=3)
+    for i, (y, frac) in enumerate([(0.18, 0.7), (0.34, 0.45), (0.52, 0.6),
+                                   (0.64, 0.5), (0.76, 0.4)]):
+        yy = top + round((bot - top) * y)
+        d.rectangle([40, yy, 40 + round((w - 80) * frac), yy + (14 if i == 0 else 7)],
+                    fill=(44, 62, 80, 255) if i == 0 else (170, 175, 182, 255))
+    im = Image.alpha_composite(im.convert("RGBA"), over).convert("RGB")
+    im.save(out)
+    print("wrote", out, im.size)
 
 
 # ----------------------------------------------------------------------
