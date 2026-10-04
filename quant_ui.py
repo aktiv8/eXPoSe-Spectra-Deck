@@ -7,6 +7,12 @@ just not routed through a report. Embedded as a tab beside Images / Stage
 map / CasaXPS quant (``Workspace._build_side_tabs`` / ``_refresh_info``),
 shown only when at least one ticked region has a fit.
 
+With CasaXPS's own quantification files beside the data, a sample's
+percentages are CasaXPS's (``casamatch``): the survey is its own entry in the
+sample list ("<sample> (survey)") and the ticked high-resolution regions
+another, never one total; "Use CasaXPS's own numbers" off recomputes
+everything from the fits.
+
 Unlike the CasaXPS-quant tab (``casaquant_ui.py``: CasaXPS's own *exported*
 numbers, unconditionally shown when a folder had them), this tab has its own
 RSF-library choice, independent of the Report generator's spec, so a
@@ -100,6 +106,11 @@ class QuantPanel(ttk.Frame):
             variable=self.trans_var, command=self._transmission_toggled,
             state="disabled")
         self.trans_check.pack(side="left")
+        self.casa_var = tk.BooleanVar(value=True)
+        self.casa_check = ttk.Checkbutton(
+            bar, text="Use CasaXPS's own numbers", variable=self.casa_var,
+            command=self._casa_toggled, state="disabled")
+        self.casa_check.pack(side="left", padx=(12, 0))
         self.export_btn = ttk.Button(bar, text="Export CSV…",
                                      command=self.export_csv)
         self.export_btn.pack(side="right")
@@ -140,6 +151,16 @@ class QuantPanel(ttk.Frame):
         self.view.transmission = bool(on)
         self.trans_var.set(bool(on))
         self._show_sample()
+
+    def set_casa_numbers(self, on):
+        """Take the percentages from CasaXPS's quantification files (the
+        default, where a folder had them) or recompute them from the fits."""
+        self.view.casa_numbers = bool(on)
+        self.casa_var.set(bool(on))
+        self.refresh()
+
+    def _casa_toggled(self):
+        self.set_casa_numbers(self.casa_var.get())
 
     def _transmission_toggled(self):
         self.view.transmission = bool(self.trans_var.get())
@@ -182,7 +203,10 @@ class QuantPanel(ttk.Frame):
             app.docs, app._display, lambda p: reportspec.doc_key(p),
             app.casa_quant, ticked=lambda r: id(r) in app.checked,
             rsf_table=rsf_table, rsf_library=rsf_key,
-            prefer_csv=bool(app.csv_curves_var.get()))
+            prefer_csv=bool(app.csv_curves_var.get()),
+            casa_numbers=self.view.casa_numbers)
+        self.casa_check.configure(
+            state="normal" if app.casa_quant else "disabled")
         # a sample with no fit of its own (CasaXPS's own export only) is
         # already shown in the "CasaXPS quant" tab -- not duplicated here
         self.samples = [s for s in results.samples if s.levels]
@@ -243,7 +267,7 @@ class QuantPanel(ttk.Frame):
             eff = quantview.effective(s, shown, self.view)
             changed = quantview.changed(s, shown, self.view)
             self.tree.configure(show="tree headings")
-            self._set_columns(resultspages.COMPOSITION_HEADER)
+            self._set_columns(resultspages.composition_header(eff))
             self._fill(resultspages.composition_cells(eff),
                        ticks=(eff.include, changed))
         self._set_notes(s.notes)

@@ -590,6 +590,20 @@ def _right_align(deck, shape, first):
                 p.alignment = deck.ALIGN.RIGHT
 
 
+def _table_slides(deck, s, finish, title, header, rows, weights):
+    """One or more table slides (``RESULT_ROWS`` a slide) for ``rows``."""
+    for i in range(0, len(rows), RESULT_ROWS):
+        chunk = rows[i:i + RESULT_ROWS]
+        slide = deck.content_slide(
+            f"Quantification – {s.label}: {title}"
+            + (" (continued)" if i else ""),
+            None if i else s.label)
+        shape = deck.table(slide, MARGIN, TABLE_TOP, BODY_W, weights,
+                           header, chunk, size=11, row_h=0.32)
+        _right_align(deck, shape, len(header) - 1)
+        finish(slide)
+
+
 def _casaxps_slides(deck, s):
     """One or more table slides per CasaXPS-exported table of a sample
     (``s.casaxps``, see ``casaquant.py``): the numbers are CasaXPS's own,
@@ -642,8 +656,10 @@ def _results_slides(deck, results, skip=()):
     notes = results.notes_for(samples)
     said = results.method + ("\n\n" + "\n".join(notes) if notes else "")
 
+    cur = [foot]                   # the footnote of the sample being laid out
+
     def finish(slide, extra=None):
-        lines = [foot] if extra is None else [foot, extra]
+        lines = [cur[0]] if extra is None else [cur[0], extra]
         deck.text(slide, MARGIN, 6.55, BODY_W, 0.35 if extra is None else 0.55,
                   lines, size=10, color=GREY, space_after=0)
         slide.notes_slide.notes_text_frame.text = said
@@ -655,18 +671,18 @@ def _results_slides(deck, results, skip=()):
         if s.casaxps:
             _casaxps_slides(deck, s)
             continue
+        cur[0] = resultspages.CASA_FOOT if s.numbers == "casaxps" else foot
         if not s.is_profile:
             rows = resultspages.composition_cells(s.levels[0])
-            survey_note = (resultspages.SURVEY_FOOTNOTE
-                          if resultspages.has_survey_rows(s.levels[0])
-                          else None)
+            cur[0] = resultspages.CASA_FOOT if s.numbers == "casaxps" \
+                else foot
             cpng = resultspages.composition_png(s.levels[0], size=FIGURE_SIZE,
                                                 dpi=150)
             if cpng:
                 slide = deck.content_slide(f"Quantification \u2013 {s.label}",
                                            s.label)
                 _fit_picture(deck, slide, cpng)
-                finish(slide, survey_note)
+                finish(slide)
             for i in range(0, len(rows), RESULT_ROWS):
                 chunk = rows[i:i + RESULT_ROWS]
                 suffix = ": composition table" if cpng else ""
@@ -677,7 +693,8 @@ def _results_slides(deck, results, skip=()):
                 shape = deck.table(
                     slide, MARGIN, TABLE_TOP, BODY_W,
                     [3.8, 2.8, 1.5, 3.0, 2.4, 1.6, 1.5, 1.4],
-                    resultspages.COMPOSITION_HEADER, [c for _k, c in chunk],
+                    resultspages.composition_header(s.levels[0]),
+                    [c for _k, c in chunk],
                     size=11, row_h=0.32)
                 right(shape, 2)
                 for ri, (kind, _c) in enumerate(chunk, 1):
@@ -687,7 +704,10 @@ def _results_slides(deck, results, skip=()):
                                 for r in p.runs:
                                     r.font.size = deck.Pt(10)
                                     r.font.color.rgb = deck.rgb(GREY)
-                finish(slide, survey_note)
+                finish(slide)
+            if s.dparam:
+                _table_slides(deck, s, finish, *resultspages.dparam_table(
+                    s.dparam))
             continue
         slide = deck.content_slide(
             f"Quantification \u2013 {s.label}: depth profile", s.label)

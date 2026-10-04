@@ -619,8 +619,9 @@ class TestPage(unittest.TestCase):
         # ~22 KB once base64-encoded into the page -- plus viewer.js's own
         # new RSF-fallback/preferred-line code. +1_000: the rare-element
         # ranking penalty in V.candidates (mirrors xpslines._plausibility).
-        # +4_000: the CasaXPS-curves switch and the zoom limit (viewer code)
-        self.assertLess(len(page), 150_000 + raw)     # far below plain JSON
+        # +4_000: the CasaXPS-curves switch and the zoom limit (viewer code);
+        # +3_000: CasaXPS's own quantification numbers and the survey total
+        self.assertLess(len(page), 153_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR
@@ -696,6 +697,67 @@ class TestFits(unittest.TestCase):
         # and the curves are on the data's scale, not per second
         self.assertAlmostEqual(cur["env"][top_env - cur["i0"]], y[top_y],
                                delta=y[top_y] * 0.15)
+
+    def casa(self, **samples):
+        import casaquant
+        cq = casaquant.CasaQuant(folder="")
+        for name, data in samples.items():
+            cq.samples[name] = casaquant.SampleQuant(
+                survey=[{"element": e, "pct": v}
+                        for e, v in data.get("survey", ())],
+                regions=[{"name": n, "position": pos, "at_pct": v}
+                         for n, pos, v in data.get("regions", ())])
+        return cq
+
+    def test_fit_rows_carry_casaxps_own_percentages(self):
+        cq = self.casa(S=dict(regions=[("Ti 2p", None, 12.5),
+                                       ("Ti 2p", None, 7.5)]))
+        p = hb.build_payload([doc("fit.vms", [fitted_region()])],
+                             casa_quant=cq)
+        row = p["samples"][0]["regions"][0]["fit"]["rows"][0]
+        self.assertAlmostEqual(row["casa_pct"], 20.0)
+        self.assertTrue(p["casa_numbers"])
+        self.assertTrue(any("CasaXPS's own" in n for n in p["build_notes"]))
+
+    def test_a_region_the_file_does_not_list_says_so(self):
+        cq = self.casa(S=dict(regions=[("C 1s", None, 50.0)]))
+        p = hb.build_payload([doc("fit.vms", [fitted_region()])],
+                             casa_quant=cq)
+        row = p["samples"][0]["regions"][0]["fit"]["rows"][0]
+        self.assertNotIn("casa_pct", row)
+        self.assertIn("no CasaXPS quantification", row["casa_why"])
+
+    def test_no_casaxps_rows_means_no_casa_numbers(self):
+        p = hb.build_payload([doc("fit.vms", [fitted_region()])])
+        self.assertNotIn("casa_numbers", p)
+        row = p["samples"][0]["regions"][0]["fit"]["rows"][0]
+        self.assertNotIn("casa_pct", row)
+
+    def test_the_survey_rows_come_from_the_survey_file(self):
+        sv = fitted_region()
+        sv.name = "Survey"
+        sv.fit.regions[0].name = "Ti 2p"
+        cq = self.casa(S=dict(survey=[("Ti 2p", 33.0)],
+                              regions=[("Ti 2p", None, 20.0)]))
+        p = hb.build_payload([doc("fit.vms", [fitted_region(), sv])],
+                             casa_quant=cq)
+        by = {r["name"]: r for r in p["samples"][0]["regions"]}
+        self.assertAlmostEqual(by["Ti 2p"]["fit"]["rows"][0]["casa_pct"], 20.0)
+        self.assertEqual(by["Survey"]["fit"]["rows"][0]["source"], "survey")
+        self.assertAlmostEqual(by["Survey"]["fit"]["rows"][0]["casa_pct"], 33.0)
+
+    def test_regions_not_ticked_in_the_tree_start_unticked(self):
+        a, b = fitted_region(), fitted_region()
+        b.name = "Ti 2p b"
+        p = hb.build_payload([doc("fit.vms", [a, b])],
+                             ticked=lambda r: r is a)
+        ids = {r["name"]: r["id"] for r in p["samples"][0]["regions"]}
+        self.assertEqual(p["quant_include"], {f"{ids['Ti 2p b']}:0": False})
+
+    def test_nothing_ticked_leaves_every_row_to_the_page(self):
+        p = hb.build_payload([doc("fit.vms", [fitted_region()])],
+                             ticked=lambda r: False)
+        self.assertNotIn("quant_include", p)
 
     def test_regions_without_a_fit_have_no_fit_key(self):
         d = doc("a.vms", [region("C 1s"), fitted_region()])

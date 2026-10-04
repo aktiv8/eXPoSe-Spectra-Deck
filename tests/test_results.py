@@ -15,6 +15,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
+import casamatch  # noqa: E402
 import casaquant  # noqa: E402
 import quant  # noqa: E402
 import reportspec as rs  # noqa: E402
@@ -352,55 +353,6 @@ class TestNumbers(unittest.TestCase):
         self.assertEqual([x["at_pct"] for x in lv.res],
                          [x["at_pct"] for x in direct])
 
-    def test_a_survey_row_is_marked_in_the_table(self):
-        lv = level(None, [row_src("Cl 2p", 1.0, 10.0, "survey"),
-                          row_src("C 1s", 0.25, 100.0, "high-res")])
-        self.assertTrue(rp.has_survey_rows(lv))
-        names = [c[0] for k, c in rp.composition_cells(lv) if k == "region"]
-        self.assertEqual(names, ["Cl 2p †", "C 1s"])
-
-    def test_no_marker_without_a_survey_row(self):
-        lv = level(None, [row_src("C 1s", 0.25, 100.0, "high-res")])
-        self.assertFalse(rp.has_survey_rows(lv))
-        names = [c[0] for k, c in rp.composition_cells(lv) if k == "region"]
-        self.assertEqual(names, ["C 1s"])
-
-    def test_a_survey_only_element_gets_a_mixing_note(self):
-        s = sample("S", [level(None, [row_src("Cl 2p", 1.0, 10.0, "survey"),
-                                      row_src("C 1s", 0.25, 100.0,
-                                              "high-res")])])
-        rp._source_note(s)
-        self.assertEqual(len(s.notes), 1)
-        self.assertIn("Cl", s.notes[0])
-        self.assertIn("survey scan", s.notes[0])
-        self.assertIn("S", s.notes[0])
-
-    def test_no_mixing_note_when_everything_is_one_source(self):
-        s = sample("S", [level(None, [row_src("Cl 2p", 1.0, 10.0, "survey"),
-                                      row_src("F 1s", 0.5, 20.0, "survey")])])
-        rp._source_note(s)
-        self.assertEqual(s.notes, [])
-        s2 = sample("S", [level(None, [row_src("C 1s", 0.25, 100.0,
-                                               "high-res"),
-                                       row_src("O 1s", 1.0, 50.0,
-                                               "high-res")])])
-        rp._source_note(s2)
-        self.assertEqual(s2.notes, [])
-
-    def test_no_mixing_note_when_the_survey_row_is_not_counted(self):
-        # the dedicated scan wins the dedup; the losing survey duplicate of
-        # the same region must not itself trigger a mixing note
-        lv = rp.Level(None)
-        lv.entries = [{"spectrum": "Survey", "row": row_src(
-                          "C 1s", 0.25, 10.0, "survey")},
-                      {"spectrum": "C 1s", "row": row_src(
-                          "C 1s", 0.25, 100.0, "high-res")}]
-        s = sample("S", [lv])
-        rp._settle(lv, "S", s.notes)
-        rp._source_note(s)
-        self.assertEqual([n for n in s.notes if "survey scan" in n], [])
-
-
 class TestDepthProfile(unittest.TestCase):
     def profile(self, **kw):
         return sample("Film", [three_element_level(i, ti=100 - 20 * i, **kw(i))
@@ -640,33 +592,63 @@ class TestHandChoices(unittest.TestCase):
 @unittest.skipUnless(HAVE_NP, "numpy not installed")
 class TestCasaxpsOverride(unittest.TestCase):
     """CasaXPS's own exported quantification (Quant_survey.txt etc., see
-    casaquant.py) is preferred over a fit for any sample it names."""
+    casaquant.py) supplies the numbers for the fit regions of a sample it
+    names (``casamatch``); a sample it names that has no fit is shown as
+    exported."""
 
     def docs(self):
         from test_metasummary import Doc
         from test_quant import linear_region
-        return [Doc([linear_region()], "fits.vms")]     # sample "S"
+        return [Doc([linear_region()], "fits.vms")]     # sample "S", Ti 2p
 
-    def test_a_named_sample_gets_no_fit_derived_level(self):
-        cq = casa_quant_of(S=dict(survey=[("O 1s", 1.82), ("C 1s", 27.46)]))
+    def test_a_named_sample_takes_its_numbers_from_the_file(self):
+        cq = casa_quant_of(S=dict(regions=[("Ti 2p", None, 12.5),
+                                           ("Ti 2p", None, 7.5)]))
         res = rp.collect(self.docs(), casa_quant=cq)
         self.assertEqual(len(res.samples), 1)
         s = res.samples[0]
-        self.assertEqual(s.label, "S")
-        self.assertEqual(s.levels, [])
-        self.assertIsNotNone(s.casaxps)
-        self.assertEqual(s.casaxps.survey,
-                         [{"element": "O 1s", "pct": 1.82},
-                          {"element": "C 1s", "pct": 27.46}])
-        self.assertIn(rp.CASAXPS_NOTE, s.notes)
+        self.assertEqual((s.label, s.kind, s.numbers), ("S", "regions",
+                                                         "casaxps"))
+        row = s.levels[0].entries[0]["row"]
+        self.assertAlmostEqual(row["casa_pct"], 20.0)
+        self.assertAlmostEqual(s.levels[0].res[0]["at_pct"], 100.0)
+        self.assertTrue(any("Quant_regions.txt" in n for n in s.notes))
 
-    def test_an_unnamed_sample_still_gets_its_fit(self):
+    def test_a_region_without_a_file_row_is_left_out_with_a_note(self):
+        cq = casa_quant_of(S=dict(regions=[("C 1s", None, 50.0)]))
+        res = rp.collect(self.docs(), casa_quant=cq)
+        s = res.samples[0]
+        lv = s.levels[0]
+        self.assertEqual(lv.include, [True])
+        self.assertIsNone(lv.res[0]["at_pct"])
+        self.assertEqual(lv.res[0]["why"], casamatch.WHY_NONE)
+        self.assertTrue(any("left out of the total" in n for n in s.notes))
+
+    def test_a_file_with_only_survey_rows_leaves_the_regions_recomputed(self):
+        cq = casa_quant_of(S=dict(survey=[("O 1s", 1.82), ("C 1s", 27.46)]))
+        res = rp.collect(self.docs(), casa_quant=cq)
+        s = res.samples[0]
+        self.assertEqual(s.numbers, "fits")
+        self.assertTrue(s.levels)
+        self.assertIsNone(s.casaxps)
+        self.assertAlmostEqual(s.levels[0].res[0]["at_pct"], 100.0)
+        self.assertTrue(any("Quant_regions.txt has no rows" in n
+                            for n in s.notes))
+
+    def test_recompute_from_fits_ignores_the_files(self):
+        cq = casa_quant_of(S=dict(regions=[("C 1s", None, 50.0)]))
+        res = rp.collect(self.docs(), casa_quant=cq, casa_numbers=False)
+        s = res.samples[0]
+        self.assertEqual(s.numbers, "fits")
+        self.assertNotIn("casa_why", s.levels[0].entries[0]["row"])
+
+    def test_a_sample_the_files_do_not_name_is_recomputed_with_a_note(self):
         cq = casa_quant_of(**{"Someone else": dict(survey=[("O 1s", 1.0)])})
         res = rp.collect(self.docs(), casa_quant=cq)
         labels = {s.label: s for s in res.samples}
-        self.assertIn("S", labels)
+        self.assertEqual(labels["S"].numbers, "fits")
         self.assertTrue(labels["S"].levels)
-        self.assertIsNone(labels["S"].casaxps)
+        self.assertTrue(any("no entry for S" in n for n in labels["S"].notes))
         self.assertIn("Someone else", labels)
         self.assertEqual(labels["Someone else"].levels, [])
         self.assertIsNotNone(labels["Someone else"].casaxps)
@@ -680,16 +662,16 @@ class TestCasaxpsOverride(unittest.TestCase):
         from test_quant import linear_region
         r = linear_region()
         r.sample = "Sample Name: S"
-        cq = casa_quant_of(S=dict(survey=[("O 1s", 1.82)]))
+        cq = casa_quant_of(S=dict(regions=[("Ti 2p", None, 20.0)]))
         res = rp.collect([Doc([r], "fits.vms")], casa_quant=cq)
         self.assertEqual(len(res.samples), 1)
-        self.assertEqual(res.samples[0].label, "S")
-        self.assertIsNotNone(res.samples[0].casaxps)
+        self.assertEqual(res.samples[0].numbers, "casaxps")
 
     def test_no_casa_quant_behaves_as_before(self):
         res = rp.collect(self.docs())
         self.assertEqual(len(res.samples), 1)
         self.assertIsNone(res.samples[0].casaxps)
+        self.assertEqual(res.samples[0].numbers, "fits")
 
     def test_children_include_casaxps_only_samples(self):
         cq = casa_quant_of(**{"Extra": dict(survey=[("O 1s", 1.0)])})
@@ -698,21 +680,37 @@ class TestCasaxpsOverride(unittest.TestCase):
         self.assertIn("casaxps:Extra", keys)
         self.assertEqual(keys["casaxps:Extra"], "Extra")
 
-    def test_an_unticked_casaxps_sample_is_left_out(self):
-        """CasaXPS's own export ("PtCl2 Area 2" in a real experiment) must
-        not appear in the report unless its sample is ticked in the tree,
-        even though the sidecar text file names it regardless."""
+    def test_an_unticked_sample_is_left_out(self):
+        """A sample the sidecar files name must not appear in the report
+        unless it is ticked in the tree."""
         cq = casa_quant_of(S=dict(survey=[("O 1s", 1.82)]))
         res = rp.collect(self.docs(), casa_quant=cq, ticked=lambda r: False)
         self.assertFalse(res)
         self.assertEqual(res.children(), [])
 
-    def test_a_ticked_casaxps_sample_is_kept(self):
-        cq = casa_quant_of(S=dict(survey=[("O 1s", 1.82)]))
+    def test_a_ticked_sample_is_kept(self):
+        cq = casa_quant_of(S=dict(regions=[("Ti 2p", None, 20.0)]))
         res = rp.collect(self.docs(), casa_quant=cq, ticked=lambda r: True)
         self.assertEqual(len(res.samples), 1)
         self.assertEqual(res.samples[0].label, "S")
-        self.assertIsNotNone(res.samples[0].casaxps)
+        self.assertTrue(res.samples[0].levels)
+
+
+class TestSurveyIsItsOwnTotal(unittest.TestCase):
+    """A survey scan and the high-resolution regions are never one total."""
+
+    def test_the_survey_gets_its_own_sample(self):
+        from test_metasummary import Doc
+        from test_quant import linear_region
+        hi, sv = linear_region(), linear_region()
+        sv.name = "Survey"                       # reads as a survey scan
+        res = rp.collect([Doc([hi, sv], "fits.vms")])
+        kinds = [(s.label, s.kind) for s in res.samples]
+        self.assertEqual(kinds, [("S", "regions"), ("S (survey)", "survey")])
+        self.assertEqual(len(res.samples[0].levels[0].entries), 1)
+        self.assertEqual(len(res.samples[1].levels[0].entries), 1)
+        for s in res.samples:
+            self.assertAlmostEqual(s.levels[0].res[0]["at_pct"], 100.0)
 
 
 class TestSpecAndInventory(unittest.TestCase):

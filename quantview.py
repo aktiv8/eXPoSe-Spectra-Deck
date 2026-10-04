@@ -49,6 +49,8 @@ class ViewState:
         self.level = {}                 # sample key -> level index; None = the
                                         # depth profile
         self.profile_mode = "element"
+        self.casa_numbers = True        # CasaXPS's own numbers where its
+                                        # quantification files have them
 
     def ticked(self, key, default):
         return self.include.get(key, default)

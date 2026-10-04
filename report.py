@@ -295,6 +295,21 @@ def _casaxps_story(head, cq, look, st):
     return story
 
 
+def _dparam_story(s, look, st):
+    """The D-parameter table CasaXPS exported for a sample, under its
+    composition (nothing when it has none)."""
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, Spacer
+    import resultspages
+
+    if not s.dparam:
+        return []
+    title, header, rows, _w = resultspages.dparam_table(s.dparam)
+    t = _grid(header, rows, [60, 30], look, right_from=1)
+    t.hAlign = "LEFT"
+    return [Spacer(1, 2 * mm), Paragraph(title, st["label"]), t]
+
+
 def results_story(results, skip=(), look=None, sid="results"):
     """The Quantification section: how the numbers are made, then for each
     sample its composition (chart and table, one level) or its depth profile
@@ -327,14 +342,12 @@ def results_story(results, skip=(), look=None, sid="results"):
                 block.append(Image(io.BytesIO(cpng), width=170 * mm,
                                    height=170 * mm * 3.0 / 7.0,
                                    hAlign="LEFT"))
-            block.append(_grid(resultspages.COMPOSITION_HEADER,
+            block.append(_grid(resultspages.composition_header(s.levels[0]),
                                [c for _k, c in rows],
                                [34, 24, 16, 28, 24, 18, 18, 18], look,
                                right_from=2, kinds=[k for k, _c in rows]))
             story += block
-            if resultspages.has_survey_rows(s.levels[0]):
-                story.append(Paragraph(
-                    xml_escape(resultspages.SURVEY_FOOTNOTE), st["small"]))
+            story += _dparam_story(s, look, st)
             continue
         png = resultspages.profile_png(s, size=(7.0, 3.0), dpi=200)
         block = [head]

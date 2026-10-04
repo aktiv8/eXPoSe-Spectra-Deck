@@ -167,7 +167,9 @@ def _curves_of(cv):
 def normalise(rows, include=None, transmission=False, rsf_table=None,
              rsf_library="scofield"):
     """Atomic percent of each row: (area / RSF) over the sum of the included
-    rows. ``include`` is an optional list of booleans (default: all);
+    rows. A row that ``casamatch`` tagged takes CasaXPS's own number
+    (``casa_pct``) in place of area / RSF, or is left out with its
+    ``casa_why``. ``include`` is an optional list of booleans (default: all);
     ``transmission`` divides the transmission function out where the row has
     one. Returns one dict per row: ``corrected``, ``at_pct`` (None when the row
     is left out), ``why`` (the reason, "" when it counts), and ``rsf_source``/
@@ -217,6 +219,15 @@ def normalise(rows, include=None, transmission=False, rsf_table=None,
         own_rsf = row.get("rsf")
         if include is not None and not include[i]:
             res["why"] = "not included"
+        elif row.get("casa_why"):
+            res["why"] = row["casa_why"]    # no CasaXPS number: never mixed
+        elif row.get("casa_pct") is not None:
+            # CasaXPS's own %At (``casamatch``), renormalised below over what
+            # counts; its transmission / mean-free-path terms are already in
+            if row["casa_pct"] > 0:
+                res["corrected"] = row["casa_pct"]
+            else:
+                res["why"] = "no area"
         elif own_rsf and own_rsf > 0:
             if area is None or area <= 0:
                 res["why"] = "no area"

@@ -34,6 +34,7 @@ import zlib
 
 import annotations as an
 import appinfo
+import casamatch
 import casaquant
 import holder
 import quant
@@ -383,6 +384,33 @@ def _page_rows(rows, budget):
     return out, dropped
 
 
+def _tag_casa(entry, cq, label, notes):
+    """Tag the fit rows of one page sample with CasaXPS's own percentages
+    (``casamatch``): the survey rows from the survey file, every other row
+    from the regions file. Both row sets of a region (``rows`` and
+    ``csv_rows``) get the same tags. Returns True when any row was tagged;
+    ``notes`` collects what the matching has to say."""
+    hi, sv, tied = [], [], []
+    for reg in entry["regions"]:
+        fit = reg.get("fit")
+        if not fit:
+            continue
+        for i, row in enumerate(fit["rows"]):
+            alt = fit.get("csv_rows")
+            tied.append((row, alt[i] if alt else None))
+            (sv if row.get("source") == "survey" else hi).append(
+                {"spectrum": reg["name"], "row": row})
+    notes.extend(casamatch.tag_regions(hi, cq.regions, label))
+    notes.extend(casamatch.tag_survey(sv, cq.survey))
+    tagged = False
+    for row, alt in tied:
+        for k in ("casa_pct", "casa_rows", "casa_why"):
+            if alt is not None and k in row:
+                alt[k] = row[k]
+        tagged = tagged or "casa_pct" in row or "casa_why" in row
+    return tagged
+
+
 # -- element identification ----------------------------------------------------------
 def element_table(lines):
     """The line table for the page's candidate lookup (what ``xpslines`` uses):
@@ -441,7 +469,8 @@ def _meta(md):
 def build_payload(docs, display=None, details=None, methods_text="",
                   calibration="", figures=(), calib=None, generated=None,
                   cameras=True, snapmaps=True, lines=None, casa_quant=None,
-                  rsf_entries=None, prefer_csv=True, quant_overrides=None):
+                  rsf_entries=None, prefer_csv=True, quant_overrides=None,
+                  ticked=None):
     """The data of the browser as a JSON-able dict.
 
     ``figures`` is ``[{"name", "caption", "pages": [png bytes]}]``; ``calib``
@@ -469,7 +498,17 @@ def build_payload(docs, display=None, details=None, methods_text="",
     ticks): the page starts its Quantification and Depth profile tabs with
     those rows ticked or unticked (``quant_include``, keyed by the page's
     own ``<spectrum id>:<fit row>``) instead of its defaults; the user can
-    still change them there. A key naming no region here is ignored."""
+    still change them there. A key naming no region here is ignored.
+    ``ticked`` (a region predicate, the desktop tree's ticks) starts the
+    Quantification tab with the fit rows of regions that are not ticked
+    unticked (when anything is ticked at all), so the page counts what the
+    report counts. A sample the CasaXPS quantification files name
+    (``casa_quant``) has each fit row tagged with CasaXPS's own percentage
+    (``casa_pct``, or ``casa_why`` when the file has none for that region: see
+    ``casamatch``) and the page, which keeps a survey scan and the
+    high-resolution regions as two totals, shares those out over the rows
+    ticked there; ``casa_numbers`` in the payload is True when any row has one
+    and the page offers "CasaXPS's own numbers" to turn them off."""
     details = details or {}
     element_lines = xpslines.load_lines() if lines is None else lines
     rsf_entries = rsf_lib.load_rsf() if rsf_entries is None else rsf_entries
@@ -480,6 +519,9 @@ def build_payload(docs, display=None, details=None, methods_text="",
     hand, seen_keys = [], {}      # [(page region dict, fit row, tick)]
     label_map = {}                       # (id(parser), original sample) -> label
     casa_names = set(casa_quant.samples) if casa_quant else set()
+    cq_of, casa_notes, casa_tagged = {}, [], []
+    any_ticked = ticked is not None and any(
+        ticked(r) for p in docs for r in p.regions)
     for fi, p in enumerate(docs):
         ann = getattr(p, "annotations", None)
         fid = getattr(p, "file_id", "")
@@ -508,6 +550,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
                     cq = casa_quant.samples.get(
                         casaquant.strip_sample_prefix(label))
                     if cq is not None:
+                        cq_of[id(entry)] = (cq, label)
                         entry["casaxps"] = {
                             "survey": list(cq.survey),
                             "regions": list(cq.regions),
@@ -541,12 +584,15 @@ def build_payload(docs, display=None, details=None, methods_text="",
                    if getattr(d, "fit", None) else None)
             if fit:
                 reg["fit"] = fit
-                if quant_overrides:
-                    skey = f"{reportspec.doc_key(p)}/{r.sample}"
+                if quant_overrides or any_ticked:
+                    skey = (f"{reportspec.doc_key(p)}/{r.sample}"
+                            + ("#survey" if r.is_survey else ""))
                     for ri, frow in enumerate(fit["rows"]):
                         base = (skey, d.etch_level, d.name, frow["region"])
                         occ = seen_keys[base] = seen_keys.get(base, -1) + 1
-                        tick = quant_overrides.get(base + (occ,))
+                        tick = (quant_overrides or {}).get(base + (occ,))
+                        if tick is None and any_ticked and not ticked(r):
+                            tick = False
                         if tick is not None:
                             hand.append((reg, ri, bool(tick)))
                 fit_dropped += bool(fit.pop("dropped"))
@@ -557,6 +603,10 @@ def build_payload(docs, display=None, details=None, methods_text="",
             if snapmaps and r.extra.get("cube") is not None:
                 map_src.append((p, r, d, reg))
             n_regions += 1
+        for k in order:
+            tied = cq_of.get(id(by_sample[k]))
+            if tied is not None and _tag_casa(by_sample[k], *tied, casa_notes):
+                casa_tagged.append(by_sample[k])
         samples += [by_sample[k] for k in order]
     if not n_regions:
         raise ViewerError("There are no spectra with data to put in the "
@@ -578,7 +628,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
                      f"spectr{'um' if fit_dropped == 1 else 'a'} to keep the "
                      "file small; their fit tables are still there.")
     casaxps_samples = [s.get("name") or "" for s in samples
-                      if "casaxps" in s]
+                      if "casaxps" in s and s not in casa_tagged]
     if casaxps_samples:
         notes.append(
             "Quantification for "
@@ -587,6 +637,17 @@ def build_payload(docs, display=None, details=None, methods_text="",
             + " is CasaXPS's own exported result (Quant_survey.txt / "
               "Quant_regions.txt / Quant_Dparam.txt), not recomputed from "
               "an embedded fit.")
+    if casa_tagged:
+        names = [s.get("name") or "" for s in casa_tagged]
+        notes.append(
+            "Atomic percent for "
+            + (names[0] if len(names) == 1 else f"{len(names)} samples")
+            + " is CasaXPS's own (Quant_regions.txt for the high-resolution "
+              "regions, Quant_survey.txt for the survey), shared out over the "
+              "regions ticked in the Quantification tab; the survey and the "
+              "regions are separate totals. Tick \"CasaXPS's own numbers\" "
+              "off to recompute them from the fits.")
+        notes.extend(dict.fromkeys(casa_notes))
     for i, s in enumerate(samples):
         s["id"] = f"s{i}"
         for j, r in enumerate(s["regions"]):
@@ -622,6 +683,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
                     "bg": {"light": light["plot_bg"], "dark": dark["plot_bg"]}},
         **({"quant_include": quant_include} if quant_include else {}),
         **({"fit_csv": {"default": bool(prefer_csv)}} if fit_csv else {}),
+        **({"casa_numbers": True} if casa_tagged else {}),
     }
 
 

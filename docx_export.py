@@ -349,16 +349,26 @@ def _results_section(d, results, skip=()):
     d.paragraph(results.method, size=8)
     for s in samples:
         d.heading(s.label, level=2)
+        if s.casaxps and not s.levels:
+            for title, header, rows, weights in resultspages.casaxps_tables(
+                    s.casaxps):
+                d.paragraph(title, bold=True, size=9)
+                d.table(header, [list(r) for r in rows], weights)
+            continue
         if not s.is_profile:
             rows = resultspages.composition_cells(s.levels[0])
             cpng = resultspages.composition_png(s.levels[0], size=(6.5, 3.0),
                                                 dpi=200)
             if cpng:
                 d.picture(cpng)
-            d.table(resultspages.COMPOSITION_HEADER, [c for _k, c in rows],
+            d.table(resultspages.composition_header(s.levels[0]),
+                    [c for _k, c in rows],
                    [3.8, 2.8, 1.5, 3.0, 2.4, 1.6, 1.5, 1.4])
-            if resultspages.has_survey_rows(s.levels[0]):
-                d.paragraph(resultspages.SURVEY_FOOTNOTE, size=8)
+            if s.dparam:
+                title, header, rows, weights = resultspages.dparam_table(
+                    s.dparam)
+                d.paragraph(title, bold=True, size=9)
+                d.table(header, [list(r) for r in rows], weights)
         else:
             png = resultspages.profile_png(s, size=(6.5, 3.0), dpi=200)
             if png:

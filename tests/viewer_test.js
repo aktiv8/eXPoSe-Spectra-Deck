@@ -176,6 +176,26 @@ function near(a, b, msg, tol) {
     V.fitSource.csv = false;
   }
 
+  // ---- CasaXPS's own percentages, and a survey that is its own total ----
+  {
+    const rows = [{ region: 'A', rsf: 1, area: 5, casa_pct: 20 }, { region: 'B', rsf: 1, area: 5, casa_pct: 60 },
+                  { region: 'C', rsf: 1, area: 5, casa_why: 'no CasaXPS quantification found for this region' }];
+    V.quantSource.casa = true;
+    let r = V.quantNormalise(rows, [true, true, true]);
+    eq([r[0].at, r[1].at, r[2].at], [25, 75, null], 'CasaXPS numbers are shared out over the counted rows');
+    eq(r[2].why, 'no CasaXPS quantification found for this region', 'a region the file lacks is left out and says so');
+    r = V.quantNormalise(rows, [true, false, true]);
+    eq(r[0].at, 100, 'unticking a region renormalises the rest');
+    V.quantSource.casa = false;
+    r = V.quantNormalise(rows, [true, true, true]);
+    check(Math.abs(r[0].at - 100 / 3) < 1e-9 && r[2].why === '', 'recomputing from the fits ignores the CasaXPS tags');
+    V.quantSource.casa = true;
+    const reg = { level: null, etch: null, fit: { rows: [{ region: 'C 1s', source: 'survey', components: [] },
+                                                          { region: 'C 1s', source: 'high-res', components: [] }] } };
+    const g = V.quantGroups([{ id: 's0r0', name: 'S', sample: { id: 's0', name: 'PtCl2' }, reg: reg }]);
+    eq(g.map((x) => x.sample + '|' + x.kind), ['PtCl2 (survey)|survey', 'PtCl2|regions'], 'a survey is its own group');
+  }
+
   // ---- zoom stays inside the data ----
   {
     eq(V.clampView(525, 535, 518, 547), [525, 535], 'a zoom inside the data is kept');

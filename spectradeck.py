@@ -3625,6 +3625,7 @@ class Workspace:
             "csv_curves": bool(self.csv_curves_var.get()),
             "quant_rsf": self.quant_panel.rsf_choice(),
             "quant_transmission": bool(self.quant_panel.view.transmission),
+            "quant_casa": bool(self.quant_panel.view.casa_numbers),
             "quant_include": self.quant_panel.view.to_json(),
             "ident_show": {k: bool(v.get())
                           for k, v in self.ident_vars.items()},
@@ -3685,6 +3686,8 @@ class Workspace:
         if "quant_transmission" in st:
             self.quant_panel.set_transmission(
                 bool(st["quant_transmission"]))
+        if isinstance(st.get("quant_casa"), bool):
+            self.quant_panel.set_casa_numbers(st["quant_casa"])
         view = self.quant_panel.view
         if "quant_include" in st:            # after refresh(): files are loaded
             before = view.to_json()
@@ -3843,7 +3846,8 @@ class Workspace:
                 self.docs, self._display_for_export, self._report_details(),
                 self.methods_text(), self.calibration_statement(), [], None,
                 cameras=False, snapmaps=False, casa_quant=self.casa_quant,
-                quant_overrides=dict(self.quant_panel.view.include))
+                quant_overrides=dict(self.quant_panel.view.include),
+                ticked=lambda r: id(r) in self.checked)
         except htmlbrowser.ViewerError:
             return None
         for f, p in zip(payload["files"], self.docs):
@@ -4288,7 +4292,8 @@ class Workspace:
               id(self.casa_quant),
               len(self.casa_quant.samples) if self.casa_quant else 0,
               frozenset(self.checked), rsf_option,
-              bool(self.csv_curves_var.get()), frozenset(hand.items()))
+              bool(self.csv_curves_var.get()), frozenset(hand.items()),
+              self.quant_panel.view.casa_numbers)
         if self._results_memo is None or self._results_memo[0] != key:
             rsf_table = self.rsf_entries() if rsf_option != "off" else None
             self._results_memo = (key, resultspages.collect(
@@ -4297,7 +4302,8 @@ class Workspace:
                 ticked=lambda r: id(r) in self.checked,
                 rsf_table=rsf_table, rsf_library=rsf_option,
                 prefer_csv=bool(self.csv_curves_var.get()),
-                overrides=hand))
+                overrides=hand,
+                casa_numbers=self.quant_panel.view.casa_numbers))
         return self._results_memo[1]
 
     def quant_hand_count(self):
@@ -4361,7 +4367,8 @@ class Workspace:
             self.docs, self._display_for_export, self._report_details(),
             self.methods_text(), self.calibration_statement(), figures,
             self.calib, casa_quant=self.casa_quant,
-            quant_overrides=dict(self.quant_panel.view.include))
+            quant_overrides=dict(self.quant_panel.view.include),
+            ticked=lambda r: id(r) in self.checked)
 
     def export_html_browser(self):
         if not self._report_ready():

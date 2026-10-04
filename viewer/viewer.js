@@ -342,12 +342,24 @@
     var groups = [], by = {};
     specs.forEach(function (s) {
       V.fitRows(s.reg).forEach(function (row, ri) {
-        var lv = s.reg.level === undefined ? null : s.reg.level, k = s.sample.id + '|' + lv;
-        if (!by[k]) { by[k] = { sample: s.sample.name || '', sid: s.sample.id, level: lv, etch: s.reg.etch, entries: [] }; groups.push(by[k]); }
+        /* a survey scan is its own total, never pooled with the high-resolution regions */
+        var lv = s.reg.level === undefined ? null : s.reg.level, sv = row.source === 'survey',
+            k = s.sample.id + (sv ? '#survey' : '') + '|' + lv;
+        if (!by[k]) {
+          by[k] = { sample: (s.sample.name || '') + (sv ? ' (survey)' : ''), sid: s.sample.id + (sv ? '#survey' : ''),
+                    kind: sv ? 'survey' : 'regions', level: lv, etch: s.reg.etch, entries: [] };
+          groups.push(by[k]);
+        }
         by[k].entries.push({ key: s.id + ':' + ri, spectrum: s.name, row: row, spec: s });
       });
     });
     return groups;
+  };
+  /* CasaXPS's own percentages (casa_pct / casa_why on a fit row, see casamatch.py) are used
+     where the page carries them; V.quantSource.casa false recomputes everything from the fits */
+  V.quantSource = { casa: true };
+  V.rowHasCasa = function (row) {
+    return V.quantSource.casa && (!!row.casa_why || (row.casa_pct !== undefined && row.casa_pct !== null));
   };
   /* Tiered exactly like quant.normalise: a row's own recorded RSF first;
      then each component's own RSF summed (area_i/rsf_i -- a KherveFitting
@@ -365,6 +377,11 @@
       var res = { corrected: null, at: null, why: '', rsfSource: null, rsfAnode: null, rsfValue: null,
                  imfpNm: null, kePowerFactor: null };
       if (include && include[i] === false) { res.why = 'not included'; return res; }
+      if (V.quantSource.casa && row.casa_why) { res.why = row.casa_why; return res; }   /* no CasaXPS number: never mixed */
+      if (V.quantSource.casa && row.casa_pct !== undefined && row.casa_pct !== null) {
+        if (row.casa_pct > 0) res.corrected = row.casa_pct; else res.why = 'no area';
+        return res;
+      }
       if (row.rsf && row.rsf > 0) {
         if (area === null || area === undefined || !(area > 0)) res.why = 'no area';
         else res.corrected = area / row.rsf;
@@ -930,7 +947,7 @@
             holderHot: null, tab: 'plot', filter: '', camIdx: 0, mapById: {}, camById: {},
             fit: { components: true, envelope: true, background: true, residual: false, hidden: {},
                   colour: {} },   // state name -> colour, kept across every panel on the page
-            q: { include: {}, transmission: false, level: {}, rsfLibrary: '' },
+            q: { include: {}, seeded: {}, transmission: false, level: {}, rsfLibrary: '' },
             d: { sample: null, mode: 'element', axis: null, last: null },
             ident: { on: false, win: 2, auto: false, secondary: false, auger: false,
                     clicked: null, extra: {} },
@@ -1813,19 +1830,35 @@
   function renderQuant() {
     var box = clear($('tab-quant'));
     var casaxpsSamples = S.data.samples.filter(function (sm) { return !!sm.casaxps; });
-    var casaxpsIds = {};
-    casaxpsSamples.forEach(function (sm) { casaxpsIds[sm.id] = true; });
-    var all = V.quantGroups(S.specs).filter(function (g) { return !casaxpsIds[g.sid]; });
+    var all = V.quantGroups(S.specs);
     if (!all.length && !casaxpsSamples.length) return;
-    var q = S.q;
+    var q = S.q, withFit = {};
+    all.forEach(function (g) { withFit[g.sid.split('#')[0]] = true; });
     if (all.length) renderFitQuant(box, all, q);
-    casaxpsSamples.forEach(function (sm) { renderCasaxpsQuant(box, sm); });
+    casaxpsSamples.forEach(function (sm) { renderCasaxpsQuant(box, sm, !!withFit[sm.id]); });
   }
   function renderFitQuant(box, all, q) {
     var hasT = all.some(function (g) { return g.entries.some(function (e) { return e.row.area_t !== null && e.row.area_t !== undefined; }); });
     var rsfTable = q.rsfLibrary ? (S.data.rsf || []) : null;
-    box.appendChild(h('p', { class: 'muted small', text: 'Atomic % = (region area ÷ RSF) as a share of the ticked regions of the same sample. Areas and RSFs are ' +
-      'CasaXPS\'s own, read from the fitted VAMAS file; nothing here is refitted. A region without an RSF is left out and says so.' }));
+    var casaOn = !!S.data.casa_numbers && V.quantSource.casa;
+    box.appendChild(h('p', { class: 'muted small', text: casaOn
+      ? 'Atomic % are CasaXPS\'s own (Quant_regions.txt for the high-resolution regions, Quant_survey.txt for the survey scan), shared out ' +
+        'over the ticked regions of the same sample. The survey and the regions are separate totals. A region the files have no row for is left out and says so.'
+      : 'Atomic % = (region area ÷ RSF) as a share of the ticked regions of the same sample. Areas and RSFs are ' +
+        'CasaXPS\'s own, read from the fitted VAMAS file; nothing here is refitted. A region without an RSF is left out and says so. ' +
+        'A survey scan is its own total, never pooled with the high-resolution regions.' }));
+    var ccb = null;
+    if (S.data.casa_numbers) {
+      ccb = h('input', { type: 'checkbox', id: 'q-casa' });
+      ccb.checked = V.quantSource.casa;
+      ccb.addEventListener('change', function () {
+        V.quantSource.casa = ccb.checked;
+        /* the page's own default ticks (a non-standard line unticked) belong to the recomputed numbers only */
+        Object.keys(q.seeded).forEach(function (k) { delete q.include[k]; });
+        q.seeded = {};
+        renderQuant(); renderDepth();
+      });
+    }
     var tcb = h('input', { type: 'checkbox', id: 'q-trans' });
     tcb.checked = q.transmission && hasT; tcb.disabled = !hasT;
     tcb.addEventListener('change', function () { q.transmission = tcb.checked; renderQuant(); });
@@ -1840,6 +1873,7 @@
     var dl = h('button', { type: 'button', text: 'Download quantification.csv' });
     dl.addEventListener('click', function () { saveText('quantification.csv', V.quantCsv(all, q.include, q.transmission && hasT, rsfTable, q.rsfLibrary)); });
     box.appendChild(h('div', { class: 'controls' },
+      ccb ? h('label', { class: 'field', title: 'Use the percentages CasaXPS exported (Quant_regions.txt / Quant_survey.txt); untick to recompute them from the fits' }, ccb, ' CasaXPS\'s own numbers') : null,
       h('label', { class: 'field', title: hasT ? 'Divide the spectrometer transmission function out of each region area' : 'These files carry no transmission function' }, tcb, ' Divide out the transmission function'),
       h('label', { class: 'field', title: 'A region with no recorded RSF gets one from this reference library instead — marked as a substitute, never shown as though it were the file’s own' }, 'RSF fallback ', rsel),
       dl));
@@ -1848,8 +1882,10 @@
     bySample.forEach(function (gs) {
       var sid = gs[0].sid, cur = q.level[sid];
       var g = gs.filter(function (x) { return String(x.level) === String(cur); })[0] || gs[0];
-      var seed = V.preferredDefaults(g.entries, q.include);
-      Object.keys(seed).forEach(function (key) { if (!(key in q.include)) q.include[key] = seed[key]; });
+      /* with CasaXPS's own numbers the ticks are the user's choice (CasaXPS counted Pt 4d and Pt 4f both) */
+      var gCasa = g.entries.some(function (e) { return V.rowHasCasa(e.row); });
+      var seed = gCasa ? {} : V.preferredDefaults(g.entries, q.include);
+      Object.keys(seed).forEach(function (key) { if (!(key in q.include)) { q.include[key] = seed[key]; q.seeded[key] = true; } });
       box.appendChild(h('h2', { text: g.sample || '(unnamed)' }));
       if (gs.length > 1) {
         var sel = h('select', { 'aria-label': 'Depth level' });
@@ -1869,9 +1905,9 @@
         var row = e.row, x = res[i], off = q.include[e.key] === false;
         var cb = h('input', { type: 'checkbox', 'aria-label': 'Include ' + row.region });
         cb.checked = !off;
-        cb.addEventListener('change', function () { q.include[e.key] = cb.checked; renderQuant(); });
+        cb.addEventListener('change', function () { q.include[e.key] = cb.checked; delete q.seeded[e.key]; renderQuant(); });
         var area = q.transmission && hasT && row.area_t !== null && row.area_t !== undefined ? row.area_t : row.area;
-        var name = row.region + (e.spectrum !== row.region ? '  (' + e.spectrum + ')' : '') + (row.source === 'survey' ? ' †' : '');
+        var name = row.region + (e.spectrum !== row.region ? '  (' + e.spectrum + ')' : '');
         var rsfCell = x.rsfSource && x.rsfSource !== 'component'
           ? sig6(x.rsfValue) + ' (' + (V.RSF_LIBRARY_SHORT[x.rsfSource] || x.rsfSource) + ', ' + x.rsfAnode + ' Kα)'
           : (row.rsf ? String(+row.rsf.toPrecision(4)) : '');
@@ -1879,7 +1915,7 @@
           h('td', null, cb), h('td', { text: name }), h('td', { text: row.background }),
           h('td', { class: 'num', text: rsfCell }),
           h('td', { class: 'num', text: area === null || area === undefined ? '' : Math.round(area).toLocaleString('en-US') + (row.basis === 'components' ? ' *' : '') }),
-          h('td', { class: 'num', text: x.corrected === null ? '' : Math.round(x.corrected).toLocaleString('en-US') }),
+          h('td', { class: 'num', text: x.corrected === null ? '' : (V.rowHasCasa(row) ? x.corrected.toFixed(2) : Math.round(x.corrected).toLocaleString('en-US')) }),
           h('td', { class: 'num', text: x.at === null ? (x.why && x.why !== 'not included' ? x.why : '') : x.at.toFixed(1) })));
         if (x.at !== null) {
           V.quantStates(row, x.at).forEach(function (st) {
@@ -1889,7 +1925,7 @@
         }
       });
       var head = h('tr', null, h('th'), h('th', { text: 'Region' }), h('th', { text: 'Background' }), h('th', { class: 'num', text: 'RSF' }),
-        h('th', { class: 'num', text: 'Area (counts/s·eV)' }), h('th', { class: 'num', text: 'Area ÷ RSF' }), h('th', { class: 'num', text: 'at %' }));
+        h('th', { class: 'num', text: 'Area (counts/s·eV)' }), h('th', { class: 'num', text: gCasa ? 'CasaXPS %At' : 'Area ÷ RSF' }), h('th', { class: 'num', text: 'at %' }));
       box.appendChild(h('div', { class: 'scroll' }, h('table', { class: 'grid quant' }, h('thead', null, head), tb)));
       if (g.entries.some(function (e) { return e.row.basis === 'components'; })) {
         box.appendChild(h('p', { class: 'muted small', text: '* the sum of the fitted components, because the background of that region is not reproduced here.' }));
@@ -1899,8 +1935,8 @@
       if (Object.keys(seed).length) {
         box.appendChild(h('p', { class: 'muted small', text: 'A non-standard line of the same element (e.g. a 4d region where 4f is also fitted) is unticked by default — the standard line for quantification; re-tick it if you want both counted.' }));
       }
-      if (g.entries.some(function (e) { return e.row.source === 'survey'; })) {
-        box.appendChild(h('p', { class: 'muted small', text: '† survey-scan quantification, not a dedicated high-resolution scan — typically less precise than the rest of this total.' }));
+      if (g.kind === 'survey') {
+        box.appendChild(h('p', { class: 'muted small', text: 'The survey scan is quantified on its own; it is never added to the high-resolution total.' }));
       }
       if (!q.rsfLibrary && res.some(function (x) { return x.why === 'no RSF'; })) {
         box.appendChild(h('p', { class: 'muted small', text: 'A region here has no recorded sensitivity factor and is left out of the total — try the RSF fallback dropdown above.' }));
@@ -1932,11 +1968,14 @@
      independent flat tables, shown exactly as CasaXPS wrote them -- no fit,
      no recomputed atomic percent (see casaquant.py for why they are not
      nested one inside another). */
-  function renderCasaxpsQuant(box, sm) {
+  function renderCasaxpsQuant(box, sm, hasFit) {
     var cq = sm.casaxps, base = V.safeName(sm.name || 'sample');
-    box.appendChild(h('h2', { text: sm.name || '(unnamed)' }));
-    box.appendChild(h('p', { class: 'muted small', text: 'Quantification for this sample is CasaXPS\'s own exported result ' +
-      '(Quant_survey.txt / Quant_regions.txt / Quant_Dparam.txt), not recomputed from an embedded fit.' }));
+    box.appendChild(h('h2', { text: (sm.name || '(unnamed)') + (hasFit ? ' — CasaXPS tables as exported' : '') }));
+    box.appendChild(h('p', { class: 'muted small', text: hasFit
+      ? 'The tables CasaXPS exported for this sample (Quant_survey.txt / Quant_regions.txt / Quant_Dparam.txt), as written. ' +
+        'The percentages above are drawn from them for the regions ticked there.'
+      : 'Quantification for this sample is CasaXPS\'s own exported result ' +
+        '(Quant_survey.txt / Quant_regions.txt / Quant_Dparam.txt), not recomputed from an embedded fit.' }));
     casaxpsTable(box, 'Survey (% concentration)', V.casaxpsSurveyRows(cq),
       (cq.survey || []).map(function (r) { return [r.element, fmtPct(r.pct)]; }),
       base + '_survey.csv');
@@ -2681,6 +2720,7 @@
     buildTree();
     buildTabs();
     V.seedInclude(S.q.include, data.quant_include);
+    V.quantSource.casa = !!data.casa_numbers;
     V.fitSource.csv = !!(data.fit_csv && data.fit_csv.default);
     $('fit-csv').checked = V.fitSource.csv;
     $('fit-csv-field').hidden = !data.fit_csv;

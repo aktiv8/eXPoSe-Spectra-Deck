@@ -37,6 +37,7 @@ import os
 import re
 from dataclasses import dataclass, field
 
+import casamatch
 import casaquant
 import quant
 import reportspec
@@ -49,8 +50,19 @@ METHOD = ("Atomic percent is each fitted region's area divided by its "
           "with the RSFs and fits recorded by CasaXPS; no transmission "
           "correction is applied.")
 
+METHOD_CASA = (METHOD + " Where CasaXPS's own quantification files "
+               "(Quant_regions.txt, Quant_survey.txt) cover a sample, its "
+               "percentages are used instead, shared out over the regions "
+               "counted, and the sample says so; a survey scan is always "
+               "its own total.")
+CASA_FOOT = ("Atomic % = CasaXPS's own quantification (Quant_regions.txt / "
+             "Quant_survey.txt), shared out over the regions counted; "
+             "nothing recomputed.")
+
 COMPOSITION_HEADER = ("Region", "Background", "RSF", "Area (counts/s·eV)",
                       "Area / RSF", "at %", "Fit RMS", "Reduced χ²")
+CASA_HEADER = tuple("CasaXPS %At" if h == "Area / RSF" else h
+                    for h in COMPOSITION_HEADER)
 PROFILE_AXES = (("depth", "Depth (nm)"), ("etch", "Etch time (s)"),
                 ("fluence", "Ion fluence (ions/cm²)"), ("level", "Level"))
 
@@ -95,8 +107,19 @@ class Sample:
     levels: list = field(default_factory=list)
     notes: list = field(default_factory=list)     # what a reader should know
     casaxps: object = None    # casaquant.SampleQuant: CasaXPS's own export,
-                              # preferred over the levels above when present
-                              # (see collect(); levels is then empty)
+                              # shown as exported for a sample that has no
+                              # fit to tie it to (see collect(); levels is
+                              # then empty)
+    kind: str = "regions"     # "regions": the ticked high-resolution regions;
+                              # "survey": the survey scan, always its own
+                              # total; "casaxps": the files as exported
+    numbers: str = "fits"     # where the at % come from: "fits" (recomputed
+                              # from the fits) or "casaxps" (CasaXPS's own
+                              # quantification files, ``casamatch``)
+    casa_name: str = ""       # the name the CasaXPS files know the sample by
+    dparam: list = field(default_factory=list)   # [{"name","fwhm"}]: the
+                              # sample's D-parameter rows from CasaXPS's file
+                              # (not a composition: shown beside it)
     rsf_table: list | None = None    # quant.normalise's RSF-fallback args,
     rsf_library: str = "scofield"    # carried so profile_series() can reuse
                                      # them when it re-normalises fresh
@@ -144,7 +167,7 @@ CASAXPS_NOTE = ("Quantification for this sample is CasaXPS's own exported "
 
 def collect(docs, display=None, key_of=None, casa_quant=None, ticked=None,
            rsf_table=None, rsf_library="scofield", prefer_csv=False,
-           overrides=None):
+           overrides=None, casa_numbers=True):
     """Read the CasaXPS fits of the loaded files (``display`` maps a region to
     the copy that is drawn, with the user's names and binding-energy shift).
 
@@ -166,14 +189,25 @@ def collect(docs, display=None, key_of=None, casa_quant=None, ticked=None,
     CSV match (``casacsv.py``) from CasaXPS's own exported background and
     curves rather than the reconstruction; a sample note says so.
 
-    ``casa_quant`` (a ``casaquant.CasaQuant``, see that module) is preferred
-    over a fit for any sample it names: no fit-derived level is built for
-    that sample at all, and its ``Sample.casaxps`` carries CasaXPS's own
-    exported numbers instead (three independent flat tables -- see
-    ``casaquant.py`` for why they are not nested one inside another). The
-    match strips a "Sample Name: " prefix from the region's own sample
-    identifier before comparing: a VAMAS file CasaXPS itself exported can
-    carry that same cosmetic prefix in its SAMPLE IDENTIFIER field, while
+    A survey scan and the high-resolution regions are **never one total**: a
+    sample's survey fits form their own ``Sample`` (``kind == "survey"``,
+    labelled "<sample> (survey)"), the ticked high-resolution regions another
+    (``kind == "regions"``), each normalised on its own.
+
+    ``casa_quant`` (a ``casaquant.CasaQuant``, see that module) supplies the
+    numbers: for a sample it names, each fit region's atomic percent is
+    CasaXPS's own (``casamatch``: ``Quant_regions.txt`` for the ticked
+    high-resolution regions, ``Quant_survey.txt`` for the survey), renormalised
+    over the regions counted; a region the file has no row for is left out and
+    says so, never filled with a recomputed value. ``casa_numbers=False`` (the
+    Quantification tab's "recompute from fits") ignores the files and
+    recomputes every region as before. A sample with no entry in the files is
+    recomputed and a note says so. A sample the files name that has no fit at
+    all keeps ``Sample.casaxps``, CasaXPS's tables as exported (three
+    independent flat lists -- see ``casaquant.py`` for why they are not
+    nested). The match strips a "Sample Name: " prefix from the region's own
+    sample identifier before comparing: a VAMAS file CasaXPS itself exported
+    can carry that same cosmetic prefix in its SAMPLE IDENTIFIER field, while
     the quant text files never repeat it in the samples they list.
 
     ``ticked`` (a region predicate, e.g. ``lambda r: id(r) in app.checked``)
@@ -199,6 +233,7 @@ def collect(docs, display=None, key_of=None, casa_quant=None, ticked=None,
                 name = casaquant.strip_sample_prefix(label)
                 if name in casa_names:
                     ticked_casa_names.add(name)
+    fitted_names = set()          # casa sample names that got a fit-derived total
     for p in docs:
         for r in p.regions:
             if ticked is not None and not ticked(r):
@@ -209,17 +244,20 @@ def collect(docs, display=None, key_of=None, casa_quant=None, ticked=None,
             label = (d.sample or r.sample
                     or os.path.basename((p.path or "").rstrip("\\/"))
                     or "sample")
-            if casaquant.strip_sample_prefix(label) in casa_names:
-                continue                # CasaXPS's own export is preferred
             rows = quant.fit_rows(d, prefer_csv=prefer_csv)
             if not rows:
                 continue
-            k = (key_of(p), r.sample)
+            survey = bool(r.is_survey)
+            k = (key_of(p), r.sample, survey)
             if k not in by_sample:
-                by_sample[k] = Sample(f"{k[0]}/{k[1]}", label,
-                                      rsf_table=rsf_table,
-                                      rsf_library=rsf_library)
+                by_sample[k] = Sample(
+                    f"{k[0]}/{k[1]}" + ("#survey" if survey else ""),
+                    label + (" (survey)" if survey else ""),
+                    rsf_table=rsf_table, rsf_library=rsf_library,
+                    kind="survey" if survey else "regions")
+                by_sample[k].casa_name = casaquant.strip_sample_prefix(label)
                 order.append(k)
+            fitted_names.add(by_sample[k].casa_name)
             sample = by_sample[k]
             lv = r.etch_level
             level = next((x for x in sample.levels if x.level == lv), None)
@@ -238,9 +276,10 @@ def collect(docs, display=None, key_of=None, casa_quant=None, ticked=None,
     for k in order:
         sample = by_sample[k]
         sample.levels.sort(key=lambda x: (x.level is None, x.level or 0))
-        settle_sample(sample, overrides, rsf_table, rsf_library)
+        _use_casa_numbers(sample, casa_quant if casa_numbers else None)
+        settle_sample(sample, overrides, rsf_table, rsf_library,
+                      prefer=sample.numbers != "casaxps")
         _element_note(sample)
-        _source_note(sample)
         _rsf_note(sample)
         _rsf_hint_note(sample)
         if sample.label in csv_used:
@@ -254,28 +293,105 @@ def collect(docs, display=None, key_of=None, casa_quant=None, ticked=None,
                 f"{sample.label} is not reproduced exactly, so their areas "
                 "are approximate.")
         out.samples.append(sample)
+    if any(s.numbers == "casaxps" for s in out.samples):
+        out.method = METHOD_CASA
     for name in sorted(casa_names):
-        if name not in ticked_casa_names:
+        if name not in ticked_casa_names or name in fitted_names:
             continue
-        sample = Sample(f"casaxps:{name}", name,
+        sample = Sample(f"casaxps:{name}", name, kind="casaxps",
                         casaxps=casa_quant.samples[name],
                         notes=[CASAXPS_NOTE])
         out.samples.append(sample)
     return out
 
 
+def _num_cell(v, spec=".2f"):
+    return "" if v is None else format(v, spec)
+
+
+def casaxps_tables(cq):
+    """``[(title, header, rows, weights)]`` of CasaXPS's tables as exported
+    (survey, regions, D parameter; the ones that have rows), cells already
+    formatted, for the reports of a sample that has no fit to tie them to."""
+    out = []
+    if cq.survey:
+        out.append(("Survey (% concentration)", ("Element", "%Conc"),
+                    [(r["element"], _num_cell(r["pct"])) for r in cq.survey],
+                    [2.0, 1.0]))
+    if cq.regions:
+        out.append(("Regions (% atomic concentration)",
+                    ("Name", "Position (eV)", "%At Conc"),
+                    [(r["name"], _num_cell(r["position"], "g"),
+                      _num_cell(r["at_pct"])) for r in cq.regions],
+                    [2.4, 1.4, 1.2]))
+    if cq.dparam:
+        out.append(dparam_table(cq.dparam))
+    return out
+
+
+def dparam_table(rows):
+    """``(title, header, rows, weights)`` of an Auger D-parameter list."""
+    return ("D parameter", ("Name", "FWHM (eV)"),
+            [(r["name"], _num_cell(r["fwhm"], "g")) for r in rows],
+            [2.0, 1.0])
+
+
+def _use_casa_numbers(sample, casa_quant):
+    """Tag the fit rows of ``sample`` with CasaXPS's own percentages (see
+    ``casamatch``) when ``casa_quant`` has a table for it, and say what was
+    done. Leaves the sample on recomputed numbers (and says why) when the files
+    do not name it or hold no rows for this kind of scan."""
+    if casa_quant is None:
+        return
+    base = sample.label.removesuffix(" (survey)")
+    sq = casa_quant.samples.get(sample.casa_name)
+    if sq is None:
+        sample.notes.append(
+            f"CasaXPS's quantification files have no entry for {base}: the "
+            "numbers are recomputed from the fits.")
+        return
+    entries = [e for lv in sample.levels for e in lv.entries]
+    if sample.kind == "survey":
+        rows, fname = sq.survey, "Quant_survey.txt"
+        notes = casamatch.tag_survey(entries, rows)
+    else:
+        rows, fname = sq.regions, "Quant_regions.txt"
+        notes = casamatch.tag_regions(entries, rows, base)
+    if not rows:
+        sample.notes.append(
+            f"CasaXPS's {fname} has no rows for {base}: the numbers are "
+            "recomputed from the fits.")
+        return
+    if sample.kind == "regions":
+        sample.dparam = list(sq.dparam)
+    sample.numbers = "casaxps"
+    sample.notes.append(
+        f"Atomic percent for {sample.label} is CasaXPS's own ({fname}), "
+        "shared out over the regions counted here; nothing is recomputed.")
+    sample.notes.extend(notes)
+    lost = sorted({e["row"]["region"] for e in entries
+                   if e["row"].get("casa_why")})
+    if lost:
+        sample.notes.append(
+            f"No CasaXPS quantification was found in {fname} for "
+            + ", ".join(lost) + f" in {base}: left out of the total.")
+
+
 def settle_sample(sample, overrides=None, rsf_table=None,
-                  rsf_library="scofield"):
+                  rsf_library="scofield", prefer=True):
     """Decide what counts at every level of ``sample`` and normalise it: the
-    automatic rules (``_settle``, ``_prefer_lines``), then the user's own
-    ticks (``overrides``, see ``collect``). Fills ``Level.include`` / ``why``
-    / ``res``, ``Sample.by_hand`` and the notes that say what was done."""
+    automatic rules (``_settle``, ``_prefer_lines`` unless ``prefer`` is False:
+    with CasaXPS's own numbers the user's tick is the choice), then the user's
+    own ticks (``overrides``, see ``collect``). Fills ``Level.include`` /
+    ``why`` / ``res``, ``Sample.by_hand`` and the notes that say what was
+    done."""
     left_out, counted = [], []
     for level in sample.levels:
         hand = _hand_lookup(overrides, sample.key, level)
         _settle(level, sample.label, sample.notes, hand)
-        _prefer_lines(level, sample.label, sample.notes, rsf_table,
-                      rsf_library, hand)
+        if prefer:
+            _prefer_lines(level, sample.label, sample.notes, rsf_table,
+                          rsf_library, hand)
         for ei, now in _apply_overrides(level, hand, rsf_table, rsf_library):
             name = _entry_name(level, ei, len(sample.levels) > 1)
             (counted if now else left_out).append(name)
@@ -474,34 +590,6 @@ def _element_note(sample):
                 + ", ".join(names) + "), so its share includes both.")
 
 
-def _source_note(sample):
-    """One note when a level's counted total mixes CasaXPS regions
-    quantified from a survey scan with others from a dedicated
-    high-resolution scan: the elements only available from the survey are
-    named, since a survey's cruder background and coarser point spacing
-    typically make its quantification less precise than a dedicated scan's."""
-    survey_only = set()
-    for level in sample.levels:
-        survey_els, hr_els = set(), set()
-        for e, inc in zip(level.entries, level.include):
-            if not inc:
-                continue
-            el = element_of(e["row"]["region"])
-            if not el:
-                continue
-            dest = survey_els if e["row"].get("source") == "survey" else hr_els
-            dest.add(el)
-        if hr_els:
-            survey_only |= survey_els - hr_els
-    if survey_only:
-        names = sorted(survey_only)
-        verb = "is" if len(names) == 1 else "are"
-        sample.notes.append(
-            f"{', '.join(names)} {verb} quantified only from a survey scan "
-            f"of {sample.label}, not a dedicated high-resolution scan, so "
-            "this total mixes quantification of different precision.")
-
-
 def _rsf_note(sample):
     """One note per region whose atomic percent used a reference-table
     substitute RSF (``quant.normalise``'s ``rsf_source`` -- "component" is
@@ -560,16 +648,6 @@ def _fmt(v, spec):
     return "" if v is None else format(v, spec)
 
 
-SURVEY_FOOTNOTE = ("† survey-scan quantification, not a dedicated "
-                   "high-resolution scan.")
-
-
-def has_survey_rows(level):
-    """True if any region at this level was quantified from a survey scan
-    (marked with "†" in ``composition_cells``; see ``SURVEY_FOOTNOTE``)."""
-    return any(e["row"].get("source") == "survey" for e in level.entries)
-
-
 def _fmt_rms(v):
     """Residual RMS (a fraction of the region's data range) as a percentage,
     or "" when there is no envelope to compare against (a component-less
@@ -596,13 +674,22 @@ def _fmt_rsf(row, x):
     return _fmt(row.get("rsf"), ".4g")
 
 
+def composition_header(level):
+    """The column titles of ``composition_cells(level)``: the "Area / RSF"
+    column holds CasaXPS's own %At when the level's numbers come from its
+    quantification files (``casamatch``)."""
+    from_casa = any("casa_pct" in e["row"] or "casa_why" in e["row"]
+                    for e in level.entries)
+    return CASA_HEADER if from_casa else COMPOSITION_HEADER
+
+
 def composition_cells(level):
     """``[(kind, [cells])]`` for one sample at one level: a "region" row
     (region, background, RSF, area, area / RSF, at %, fit RMS, reduced
     chi-square; the reason instead of the percent when it is left out) with
     a "state" row under it for each chemical state. A region quantified from
-    a survey scan rather than a dedicated high-resolution scan is marked "†"
-    (``SURVEY_FOOTNOTE``). Fit RMS is the residual between the data and the
+    a survey scan is its own sample ("<sample> (survey)"), never a row of the
+    high-resolution total. Fit RMS is the residual between the data and the
     fitted envelope as a percentage of the region's data range; reduced
     chi-square is the same residual weighted by Poisson counting statistics
     (data - envelope)^2 / max(data, 1), summed over the region's points and
@@ -621,12 +708,13 @@ def composition_cells(level):
     for e, x in zip(level.entries, level.res):
         row = e["row"]
         pct = f"{x['at_pct']:.1f}" if x["at_pct"] is not None else x["why"]
-        name = row["region"] + (" †" if row.get("source") == "survey"
-                                else "")
+        name = row["region"]
+        casa = "casa_pct" in row or "casa_why" in row
         rows.append(("region", [name, row.get("background") or "",
                                 _fmt_rsf(row, x),
                                 _fmt(row.get("area"), ".4g"),
-                                _fmt(x["corrected"], ".4g"), pct,
+                                (_fmt(row.get("casa_pct"), ".2f") if casa
+                                 else _fmt(x["corrected"], ".4g")), pct,
                                 _fmt_rms(row.get("rms")),
                                 _fmt_chi2(row.get("chi2_red"))]))
         states = (quant.states(row, x["at_pct"])
@@ -643,34 +731,28 @@ def composition_png(level, size=(7.0, 3.0), dpi=200):
     """The composition of one sample at one level as a bar chart (PNG bytes),
     or None without matplotlib: one bar per region with a usable at %, in the
     same order as ``composition_cells``. Chemical states are not broken out
-    (the table already does that); a survey-derived region keeps its "†"."""
+    (the table already does that)."""
     try:
         from matplotlib.backends.backend_agg import FigureCanvasAgg
         from matplotlib.figure import Figure
     except ImportError:
         return None
     import themes
-    names, values, survey = [], [], []
+    names, values = [], []
     for e, x in zip(level.entries, level.res):
         if x["at_pct"] is None:
             continue
         row = e["row"]
-        names.append(row["region"]
-                     + (" †" if row.get("source") == "survey" else ""))
+        names.append(row["region"])
         values.append(x["at_pct"])
-        survey.append(row.get("source") == "survey")
     if not names:
         return None
     fig = Figure(figsize=size, dpi=dpi)
     FigureCanvasAgg(fig)
     ax = fig.add_axes((0.09, 0.22, 0.88, 0.72))
     cycle = themes.PALETTES["Light"]["cycle"]
-    bars = ax.bar(names, values,
+    ax.bar(names, values,
                   color=[cycle[i % len(cycle)] for i in range(len(names))])
-    for bar, is_survey in zip(bars, survey):
-        if is_survey:
-            bar.set_alpha(0.55)
-            bar.set_hatch("//")
     ax.set_ylabel("Atomic %", fontsize=9)
     ax.set_ylim(bottom=0)
     ax.tick_params(labelsize=8)
