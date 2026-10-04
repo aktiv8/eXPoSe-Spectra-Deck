@@ -48,6 +48,8 @@ RSF_LABELS = {RSF_OFF: "Off (no substitute)", **rsf_lib.LIBRARIES}
 RSF_CHOICES = tuple(RSF_LABELS)
 
 PROFILE_LABEL = "Depth profile"
+NOTES_MIN, NOTES_MAX, NOTES_WIDTH = 3, 10, 52   # lines; characters per line
+CASA_COLUMNS = (0, 4, 5)        # region, CasaXPS %At, at % of composition_cells
 TICK_ON, TICK_OFF = "☑", "☐"          # ballot box with / without check
 
 
@@ -80,7 +82,7 @@ class QuantPanel(ttk.Frame):
         self.rsf_box.pack(side="left")
         self.rsf_box.bind("<<ComboboxSelected>>", lambda e: self.refresh())
 
-        mid = ttk.Frame(self)
+        self.mid = mid = ttk.Frame(self)
         mid.pack(side="top", fill="x", padx=6, pady=(0, 2))
         ttk.Label(mid, text="Show:").pack(side="left")
         self.view_var = tk.StringVar()
@@ -98,7 +100,7 @@ class QuantPanel(ttk.Frame):
         self.mode_box.bind("<<ComboboxSelected>>",
                            lambda e: self._mode_chosen())
 
-        bar = ttk.Frame(self)
+        self.bar = bar = ttk.Frame(self)
         bar.pack(side="top", fill="x", padx=6, pady=(0, 2))
         self.trans_var = tk.BooleanVar(value=False)
         self.trans_check = ttk.Checkbutton(
@@ -134,7 +136,7 @@ class QuantPanel(ttk.Frame):
         self.tree.tag_configure("changed", font=("TkDefaultFont", 9, "bold"))
         self.tree.bind("<Button-1>", self._on_click)
 
-        self.notes = tk.Text(self, height=3, wrap="word", relief="flat",
+        self.notes = tk.Text(self, height=NOTES_MIN, wrap="word", relief="flat",
                              state="disabled")
         self.notes.pack(side="top", fill="x", padx=6, pady=(0, 6))
 
@@ -236,6 +238,7 @@ class QuantPanel(ttk.Frame):
         self._level_of_row = None
         if self.sample is None:
             self._choices = []
+            self._show_row(False)
             self.view_box["values"] = []
             self.view_var.set("")
             self.view_box.configure(state="disabled")
@@ -252,6 +255,7 @@ class QuantPanel(ttk.Frame):
         self.view_box["values"] = [t for t, _i in self._choices]
         self.view_box.configure(
             state="readonly" if len(self._choices) > 1 else "disabled")
+        self._show_row(len(self._choices) > 1)
         self.view_var.set(next(t for t, i in self._choices if i == shown))
         self.mode_box.configure(state="readonly" if shown is None
                                 else "disabled")
@@ -267,10 +271,28 @@ class QuantPanel(ttk.Frame):
             eff = quantview.effective(s, shown, self.view)
             changed = quantview.changed(s, shown, self.view)
             self.tree.configure(show="tree headings")
-            self._set_columns(resultspages.composition_header(eff))
-            self._fill(resultspages.composition_cells(eff),
-                       ticks=(eff.include, changed))
+            header = resultspages.composition_header(eff)
+            cells = resultspages.composition_cells(eff)
+            if header is resultspages.CASA_HEADER:
+                # CasaXPS's own numbers: the region and the two percentages;
+                # background, RSF, area and fit quality are the recomputed
+                # view's business and would push these off the column
+                keep = CASA_COLUMNS
+                header = tuple(header[i] for i in keep)
+                cells = [(k, [c[i] for i in keep]) for k, c in cells]
+            self._set_columns(header)
+            self._fill(cells, ticks=(eff.include, changed))
         self._set_notes(s.notes)
+
+    def _show_row(self, on):
+        """The "Show:" row (depth level / profile, profile mode) is only there
+        when the sample has more than one level to choose between."""
+        shown = bool(self.mid.winfo_manager())
+        if on and not shown:
+            self.mid.pack(side="top", fill="x", padx=6, pady=(0, 2),
+                          before=self.bar)
+        elif not on and shown:
+            self.mid.pack_forget()
 
     # -- ticks ---------------------------------------------------------------
     def _on_click(self, event):
@@ -345,6 +367,8 @@ class QuantPanel(ttk.Frame):
                 self._row_entry[iid] = ei
 
     def _set_notes(self, notes):
+        lines = sum(max(1, -(-len(n) // NOTES_WIDTH)) for n in notes)
+        self.notes.configure(height=max(NOTES_MIN, min(NOTES_MAX, lines)))
         self.notes.configure(state="normal")
         self.notes.delete("1.0", "end")
         self.notes.insert("end", "\n".join(notes))

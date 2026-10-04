@@ -328,6 +328,7 @@ class TestQuantPanelInApp(unittest.TestCase):
         self.assertEqual(values[0], quant_ui.PROFILE_LABEL)
         self.assertEqual(len(values), 3)
         self.assertEqual(panel.view_var.get(), quant_ui.PROFILE_LABEL)
+        self.assertNotEqual(panel.mid.winfo_manager(), "")
         self.assertEqual(str(panel.mode_box.cget("state")), "readonly")
         self.assertFalse(panel._row_entry)         # no ticks on the profile
         panel.view_var.set(values[2])
@@ -382,6 +383,43 @@ class TestQuantPanelInApp(unittest.TestCase):
         self.assertIn("S", labels)
         self.assertNotIn("OtherSample", labels)
         ws.casa_quant = None
+
+
+    def _casa_ws(self):
+        ws = self._ws()
+        ws.checked.add(id(ws.docs[0].regions[0]))
+        ws.casa_quant = casaquant.CasaQuant(folder=self.dir)
+        ws.casa_quant.samples["S"] = casaquant.SampleQuant(
+            regions=[{"name": "Ti 2p", "position": None, "at_pct": 20.0}])
+        ws._render()
+        return ws
+
+    def test_casaxps_numbers_keep_the_narrow_column_to_three_columns(self):
+        ws = self._casa_ws()
+        panel = ws.quant_panel
+        heads = [panel.tree.heading(c)["text"] for c in panel.tree["columns"]]
+        self.assertEqual(heads, ["Region", "CasaXPS %At", "at %"])
+        row = panel.tree.item(panel.tree.get_children()[0], "values")
+        self.assertEqual(list(row), ["Ti 2p", "20.00", "100.0"])
+        panel.set_casa_numbers(False)                    # recomputed: all of it
+        self.assertEqual(len(panel.tree["columns"]),
+                         len(resultspages.COMPOSITION_HEADER))
+        ws.casa_quant = None
+
+    def test_the_show_row_is_only_there_with_something_to_choose(self):
+        ws = self._casa_ws()
+        self.assertEqual(ws.quant_panel.mid.winfo_manager(), "")
+        ws.casa_quant = None
+
+    def test_the_notes_box_grows_with_what_it_says(self):
+        ws = self._ws()
+        panel = ws.quant_panel
+        panel._set_notes(["short"])
+        short = int(panel.notes.cget("height"))
+        panel._set_notes(["a long note " * 20] * 3)
+        self.assertGreater(int(panel.notes.cget("height")), short)
+        self.assertLessEqual(int(panel.notes.cget("height")),
+                             quant_ui.NOTES_MAX)
 
 
 if __name__ == "__main__":
