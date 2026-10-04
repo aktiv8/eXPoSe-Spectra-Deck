@@ -33,6 +33,9 @@ ON, OFF = "☑", "☐"
 COLLAPSE_ABOVE = 6            # a section with more children starts collapsed
 
 
+PICK_WIDTH = 96            # px: a design's name wraps to the preview's width
+
+
 class ReportGeneratorDialog(tk.Toplevel):
     def __init__(self, master, app):
         super().__init__(master)
@@ -200,8 +203,8 @@ class ReportGeneratorDialog(tk.Toplevel):
         nb.add(tab, text="Cover")
         tab.columnconfigure(0, weight=1)
         tab.rowconfigure(1, weight=1)
-        ttk.Label(tab, text="Cover picture").grid(row=0, column=0,
-                                                  sticky="w")
+        ttk.Label(tab, text="Cover picture (a full page in the PDF)").grid(
+            row=0, column=0, sticky="w")
         holder = ttk.Frame(tab)
         holder.grid(row=1, column=0, sticky="nsew", pady=(4, 6))
         holder.rowconfigure(0, weight=1)
@@ -230,8 +233,18 @@ class ReportGeneratorDialog(tk.Toplevel):
         row.grid(row=2, column=0, sticky="ew")
         ttk.Button(row, text="Use my own picture…",
                    command=self._browse_picture).pack(side="left")
+        zone = ttk.Frame(tab)
+        zone.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        ttk.Label(zone, text="Text position").pack(side="left")
+        self.zone = tk.StringVar(value=reportspec.cover_of(self.spec)["zone"])
+        for value, text in (("top", "Top"), ("middle", "Middle"),
+                            ("bottom", "Bottom")):
+            ttk.Radiobutton(zone, text=text, value=value, variable=self.zone,
+                            command=lambda: self.set_cover(
+                                zone=self.zone.get())).pack(
+                side="left", padx=(8, 0))
         acc = ttk.Frame(tab)
-        acc.grid(row=3, column=0, sticky="ew", pady=(8, 0))
+        acc.grid(row=4, column=0, sticky="ew", pady=(8, 0))
         ttk.Label(acc, text="Colour").pack(side="left")
         for name, hexv in covers.ACCENTS:
             b = tk.Button(acc, bg=hexv, activebackground=hexv, width=2,
@@ -242,9 +255,9 @@ class ReportGeneratorDialog(tk.Toplevel):
                    command=self._pick_accent).pack(side="left", padx=(8, 0))
         self.cover_text = ttk.Label(tab, style="Muted.TLabel", wraplength=340,
                                     justify="left")
-        self.cover_text.grid(row=4, column=0, sticky="w", pady=(10, 2))
+        self.cover_text.grid(row=5, column=0, sticky="w", pady=(10, 2))
         ttk.Button(tab, text="Edit details…",
-                   command=self._edit_details).grid(row=5, column=0,
+                   command=self._edit_details).grid(row=6, column=0,
                                                     sticky="w")
         self.refresh_cover()
 
@@ -256,14 +269,15 @@ class ReportGeneratorDialog(tk.Toplevel):
             w.destroy()
         self._thumbs = []
         cover = reportspec.cover_of(self.spec)
-        entries = [(c.id, c.name, {"design": c.id, "accent": cover["accent"]})
+        look = {"accent": cover["accent"], "zone": cover["zone"]}
+        entries = [(c.id, c.name, {"design": c.id, **look})
                    for c in covers.list_covers()]
         if cover["design"] == "image":
             name = os.path.basename(cover["image"]) or "picture"
             entries.append(("image", "Your picture: " + name, cover))
         data = self.app.cover_data()
-        for design, name, spec in entries:
-            png = covers.thumbnail(spec, data)
+        for k, (design, name, spec) in enumerate(entries):
+            png = covers.page_thumbnail(spec, data)
             kw = {}
             if png:
                 img = tk.PhotoImage(data=base64.b64encode(png))
@@ -271,23 +285,26 @@ class ReportGeneratorDialog(tk.Toplevel):
                 kw = {"image": img, "compound": "top"}
             rb = tk.Radiobutton(
                 self.cover_list, text=name, value=design, variable=self.design,
-                indicatoron=False, anchor="w", padx=6, pady=4,
+                indicatoron=False, anchor="n", padx=6, pady=4,
+                wraplength=PICK_WIDTH, justify="center",
                 bg=self.app.palette["bg"], fg=self.app.palette["fg"],
                 selectcolor=self.app.palette["panel"],
                 activebackground=self.app.palette["bg"],
                 command=lambda d=design: self.set_cover(design=d), **kw)
-            rb.pack(fill="x", pady=1)
+            rb.grid(row=k // 3, column=k % 3, padx=2, pady=2, sticky="n")
             rb.bind("<MouseWheel>", lambda e: self.cover_canvas.yview_scroll(
                 -1 * (e.delta // 120), "units"))
 
     def set_cover(self, **changes):
-        """Change the cover (``design``, ``image``, ``accent``); applied to
-        the app at once."""
+        """Change the cover (``design``, ``image``, ``accent``, ``zone``: where
+        the text panel sits on the PDF's full-page cover); applied to the app
+        at once."""
         old = reportspec.cover_of(self.spec)
         self._set(reportspec.with_cover(self.spec, **changes))
         new = reportspec.cover_of(self.spec)
         self.design.set(new["design"])
-        if new["accent"] != old["accent"] or new["image"] != old["image"]:
+        self.zone.set(new["zone"])
+        if any(new[k] != old[k] for k in ("accent", "image", "zone")):
             self.build_cover_list()
         self.refresh_cover()
 

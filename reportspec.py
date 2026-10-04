@@ -92,8 +92,10 @@ OPTIONS = {"sha": ("short", "none"), "dividers": ("auto", "none"),
 DEFAULT_OPTIONS = {"sha": "short", "dividers": "auto", "mosaic": "on",
                   "page": "a4", "rsf": "off"}
 # The cover picture (see ``covers``): a design id, the file for the 'image'
-# design, and the accent colour ('' = the default one).
-DEFAULT_COVER = {"design": "ribbon", "image": "", "accent": ""}
+# design, the accent colour ('' = the default one) and where the text panel
+# sits on the PDF's full-page cover ("top", "middle" or "bottom").
+DEFAULT_COVER = {"design": "ribbon", "image": "", "accent": "",
+                 "zone": covers.DEFAULT_ZONE}
 
 
 def default_spec():
@@ -148,6 +150,9 @@ def sanitise(spec=None):
         if isinstance(image, str) and len(image) <= 1000:
             out["cover"]["image"] = image
         out["cover"]["accent"] = covers.valid_accent(cov.get("accent"))
+        zone = cov.get("zone")
+        if zone in covers.ZONES:
+            out["cover"]["zone"] = zone
     return out
 
 
@@ -246,7 +251,7 @@ def with_children(spec, sid, ids, on):
 
 
 def cover_of(spec):
-    """The cover choice: ``{"design", "image", "accent"}``."""
+    """The cover choice: ``{"design", "image", "accent", "zone"}``."""
     return dict(sanitise(spec)["cover"])
 
 

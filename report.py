@@ -115,9 +115,10 @@ def _doc_class():
 
 
 # -- the flowables of each section -----------------------------------------------
-def title_block(details, logo, art=None, look=None):
+def title_block(details, logo, art=None, look=None, scale=1.0):
     """Flowables of the cover: the cover picture (``covers.Art``), letterhead,
-    an accent bar, the title and the details table."""
+    an accent bar, the title and the details table. ``scale`` enlarges the
+    type (the full-page cover's panel sets it larger)."""
     from reportlab.lib import colors
     from reportlab.lib.units import mm
     from reportlab.lib.utils import ImageReader
@@ -126,6 +127,12 @@ def title_block(details, logo, art=None, look=None):
 
     look = look or pdfstyle.look()
     st = pdfstyle.styles(look)
+    if scale != 1.0:
+        st = dict(st)
+        for key in ("title", "label", "body"):
+            base = st[key]
+            st[key] = base.clone(key + "_cover", fontSize=base.fontSize * scale,
+                                 leading=base.leading * scale)
     story = []
     if art is not None and art.data:
         story += [Image(io.BytesIO(art.data), width=art.width * mm,
@@ -156,7 +163,8 @@ def title_block(details, logo, art=None, look=None):
     if rows:
         tbl = Table([[Paragraph(k, st["label"]),
                       Paragraph(xml_escape(v), st["body"])] for k, v in rows],
-                    colWidths=[35 * mm, 145 * mm], hAlign="LEFT")
+                    colWidths=[(35 + 8 * (scale - 1)) * mm,
+                               (145 - 8 * (scale - 1)) * mm], hAlign="LEFT")
         tbl.setStyle(TableStyle([
             ("VALIGN", (0, 0), (-1, -1), "TOP"),
             ("LINEBELOW", (0, 0), (-1, -1), 0.4,
@@ -564,17 +572,62 @@ def _build_pdf(path, story, details, look, pagesize=None):
     return doc.marks
 
 
+def _cover_part(path, details, logo, look, pagesize, art, zone):
+    """The cover as one full page: the picture (``covers.Art``, drawn to the
+    whole page) edge to edge and, at ``zone`` ("top", "middle" or "bottom"), a
+    clear panel -- white, a little see-through, with a thin accent line on its
+    inner edge -- carrying the cover text (``title_block``: logo, title,
+    customer, reference, operator, date). The text is shrunk to fit the panel,
+    so a long title or many fields never push the cover onto a second page."""
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.utils import ImageReader
+    from reportlab.platypus import KeepInFrame
+
+    W, H = pagesize
+    lo, hi = covers.panel_span(zone)
+    y0, y1 = H * lo, H * hi
+    inset, side = 11 * mm, 15 * mm
+    frame_h = (y1 - y0) - 2 * inset
+
+    def paint(canv, _doc):
+        canv.saveState()
+        canv.drawImage(ImageReader(io.BytesIO(art.data)), 0, 0, W, H)
+        canv.setFillColor(colors.white)
+        canv.setFillAlpha(0.95)
+        canv.rect(0, y0, W, y1 - y0, stroke=0, fill=1)
+        canv.setFillAlpha(1.0)
+        canv.setFillColor(colors.HexColor(look.accent))
+        edge = y0 if zone == "top" else y1 - 1.6 * mm
+        canv.rect(0, edge, W, 1.6 * mm, stroke=0, fill=1)
+        canv.restoreState()
+
+    doc = _doc_class()(path, pagesize=pagesize, leftMargin=side,
+                       rightMargin=side, topMargin=H - y1 + inset,
+                       bottomMargin=y0 + inset,
+                       title=(details.get("title") or "").strip()
+                       or "Experiment report", author=appinfo.NAME)
+    body = KeepInFrame(W - 2 * side, frame_h,
+                       title_block(details, logo, None, look, scale=1.35),
+                       mode="shrink", hAlign="LEFT", vAlign="MIDDLE")
+    doc.build([body], onFirstPage=paint, onLaterPages=paint)
+
+
 def _page_count(mu, path):
     with mu.open(path) as src:
         return src.page_count
 
 
-def _runs(items):
+def _runs(items, full_cover=False):
     """Split the ordered sections into runs of reportlab sections and single
-    ones: [("flow", [items]), ("contents", ...), ("images", ...), ...]."""
+    ones: [("flow", [items]), ("contents", ...), ("images", ...), ...]. With
+    ``full_cover`` the cover is a page of its own (``_cover_part``), never
+    shared with the sections that follow it."""
     runs = []
     for item in items:
-        if item[0] in _FLOW:
+        if item[0] == "cover" and full_cover:
+            runs.append(("cover", [item]))
+        elif item[0] in _FLOW:
             if runs and runs[-1][0] == "flow":
                 runs[-1][1].append(item)
             else:
@@ -741,8 +794,10 @@ def _draw_divider(out, mu, sid, count, look, pagesize):
     return page
 
 
-def _footer(out, mu, title, sections, look, skip_first):
-    """Stamp the title, the section and 'report page x of y' on every page."""
+def _footer(out, mu, title, sections, look, skip_first, skip_pages=()):
+    """Stamp the title, the section and 'report page x of y' on every page
+    (not the first when ``skip_first``, nor those in ``skip_pages``: a
+    full-page cover)."""
     total = out.page_count
     path = pdfstyle.font_file()
     font = None
@@ -766,7 +821,8 @@ def _footer(out, mu, title, sections, look, skip_first):
     muted = pdfstyle.rgb(pdfstyle.MUTED)
     ink = pdfstyle.rgb(look.ink)
     for i, page in enumerate(out, 1):
-        if (i == 1 and skip_first) or sections[i - 1] is None:
+        if (i == 1 and skip_first) or i in skip_pages \
+                or sections[i - 1] is None:
             continue
         y, right = page.rect.height - 16, page.rect.width - FOOTER_MARGIN
         put(page, FOOTER_MARGIN, y, title, muted)
@@ -812,11 +868,13 @@ def build_report(path, details, logo, file_rows, docs, figures,
     mu = _mupdf()
     look = pdfstyle.look(reportspec.cover_of(spec)["accent"])
     pagesize = pdfstyle.page_size(reportspec.option(spec, "page"))[0]
-    art = None
+    art, cover = None, reportspec.cover_of(spec)
     if any(sid == "cover" for sid, _s in items):
-        art = covers.art(reportspec.cover_of(spec), "pdf", cover_data)
+        art = covers.page_art(cover, reportspec.option(spec, "page"),
+                              cover_data)
         if art.note and notes is not None:
             notes.append(art.note)
+    full_cover = art is not None and bool(art.data)
     title = (details.get("title") or "").strip() or "Experiment report"
     audit_first = next((sid for sid, _s in items
                         if sid in ("metadata", "files")), None)
@@ -829,15 +887,19 @@ def build_report(path, details, logo, file_rows, docs, figures,
                               "kind": kind, "sid": sid, "pages": pages,
                               "marks": marks})
 
-        for k, (kind, run) in enumerate(_runs(items)):
+        for k, (kind, run) in enumerate(_runs(items, full_cover)):
             part = os.path.join(tmp, f"part{k}.pdf")
-            if kind == "contents":
+            if kind == "cover":
+                _cover_part(part, details, logo, look, pagesize, art,
+                            cover["zone"])
+                add(k, kind, "cover", _page_count(mu, part), [])
+            elif kind == "contents":
                 parts.append({"path": part, "kind": "contents",
                               "sid": "contents", "pages": 1,
                               "marks": [("contents", None, 1)]})
             elif kind == "flow":
                 story = _flow_story(run, details, logo, file_rows, docs, sha,
-                                    art, look, results, audit_first, glance,
+                                    None, look, results, audit_first, glance,
                                     timing)
                 if story:
                     marks = _build_pdf(part, story, details, look, pagesize)
@@ -928,8 +990,11 @@ def build_report(path, details, logo, file_rows, docs, figures,
                 _link_contents(out, mu, parts, contents, entries, number)
             except Exception:                # noqa: BLE001 - links are extra
                 pass
+        covers_at = {number[("page", s)] for part, s in
+                     zip(parts, _starts(parts)) if part["kind"] == "cover"}
         _footer(out, mu, title, final_sections, look,
-                skip_first=bool(items) and items[0][0] == "cover")
+                skip_first=bool(items) and items[0][0] == "cover",
+                skip_pages=covers_at)
         out.set_metadata({"title": title, "creator": appinfo.NAME})
         total = out.page_count
         out.save(path, garbage=3, deflate=True)

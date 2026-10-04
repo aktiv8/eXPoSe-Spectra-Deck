@@ -268,10 +268,68 @@ class TestWithoutMatplotlib(unittest.TestCase):
         self.assertIn("matplotlib", a.note)
 
 
+@unittest.skipUnless(covers.HAVE_MPL, "matplotlib not installed")
+class TestPageArt(Tmp):
+    DATA = TestBuiltInDesigns.DATA
+
+    def size(self, art):
+        from PIL import Image
+        import io
+        return Image.open(io.BytesIO(art.data)).size
+
+    def test_it_is_drawn_to_the_whole_page(self):
+        for page, (w, h) in covers.PAGE_MM.items():
+            for design in ("ribbon", "band", "minimal", "data", "grid"):
+                art = covers.page_art({"design": design}, page, self.DATA)
+                self.assertTrue(art.data, (page, design))
+                self.assertEqual((art.width, art.height, art.unit),
+                                 (w, h, "mm"))
+                px = self.size(art)
+                self.assertAlmostEqual(px[0] / px[1], w / h, places=2)
+
+    def test_the_zone_moves_the_artwork_off_the_panel(self):
+        top = covers.page_art({"design": "data", "zone": "top"}, "a4",
+                              self.DATA).data
+        bottom = covers.page_art({"design": "data", "zone": "bottom"}, "a4",
+                                 self.DATA).data
+        self.assertNotEqual(top, bottom)
+
+    def test_an_unknown_zone_is_the_default(self):
+        a = covers.page_art({"design": "ribbon", "zone": "sideways"}).data
+        b = covers.page_art({"design": "ribbon"}).data
+        self.assertEqual(a, b)
+
+    def test_no_design_means_no_art(self):
+        self.assertIsNone(covers.page_art({"design": "none"}).data)
+
+    @unittest.skipUnless(covers.HAVE_PIL, "Pillow not installed")
+    def test_a_photograph_is_cropped_to_the_page_not_stretched(self):
+        from PIL import Image
+        path = os.path.join(self.dir, "wide.png")
+        im = Image.new("RGB", (400, 100), "white")
+        im.paste((200, 30, 30), (0, 0, 200, 100))            # left half red
+        im.save(path)
+        art = covers.page_art({"design": "image", "image": path}, "a4")
+        self.assertEqual(art.fmt, "jpeg")
+        self.assertAlmostEqual(self.size(art)[0] / self.size(art)[1],
+                               210.0 / 297.0, places=2)
+
+    @unittest.skipUnless(covers.HAVE_PIL, "Pillow not installed")
+    def test_the_picker_preview_is_a_small_portrait_page(self):
+        from PIL import Image
+        import io
+        png = covers.page_thumbnail({"design": "ribbon", "zone": "bottom"})
+        w, h = Image.open(io.BytesIO(png)).size
+        self.assertLess(w, h)
+        self.assertLessEqual(w, 120)
+        self.assertIsNone(covers.page_thumbnail({"design": "none"}))
+
+
 class TestSpecCover(unittest.TestCase):
     def test_the_default_has_a_cover_and_the_old_sections_have_none(self):
         self.assertEqual(rs.cover_of(rs.default_spec()),
-                         {"design": "ribbon", "image": "", "accent": ""})
+                         {"design": "ribbon", "image": "", "accent": "",
+                          "zone": "bottom"})
         self.assertEqual(rs.cover_of(rs.spec_from_sections(("cover",)))
                          ["design"], "none")
 
@@ -283,7 +341,8 @@ class TestSpecCover(unittest.TestCase):
                                    "accent": "#1f7a8c"}})
         self.assertEqual(rs.cover_of(s), {"design": "file:a.png",
                                           "image": "p.png",
-                                          "accent": "#1F7A8C"})
+                                          "accent": "#1F7A8C",
+                                          "zone": "bottom"})
         self.assertEqual(rs.cover_of(rs.sanitise({"cover": "x"})),
                          rs.DEFAULT_COVER)
         self.assertEqual(rs.cover_of(rs.sanitise({})), rs.DEFAULT_COVER)
@@ -321,29 +380,87 @@ except ImportError:
 @unittest.skipUnless(HAVE_PDF and covers.HAVE_MPL,
                      "reportlab / PyMuPDF / matplotlib not installed")
 class TestPdfCover(Tmp):
-    def build(self, cover, notes=None):
+    TITLE = "T"
+
+    def build(self, cover, notes=None, page="a4", details=None, sections=None):
         import report
         spec = rs.with_all(rs.default_spec(), False)
-        spec = rs.with_cover(rs.with_on(spec, "cover", True), **cover)
+        for sid in sections or ("cover",):
+            spec = rs.with_on(spec, sid, True)
+        spec = rs.with_option(spec, "page", page)
+        spec = rs.with_cover(spec, **cover)
         path = os.path.join(self.dir, "r.pdf")
-        report.build_report(path, {"title": "T", "customer": "ACME"}, "", [],
+        report.build_report(path, details or {"title": self.TITLE,
+                                              "customer": "ACME"}, "", [],
                             [], [], None, spec=spec,
                             cover_data=TestBuiltInDesigns.DATA, notes=notes)
         with mupdf.open(path) as d:
             page = d[0]
-            return {"images": page.get_image_info(),
-                    "customer": page.search_for("ACME")}
+            return {"images": page.get_image_info(), "pages": d.page_count,
+                    "size": (page.rect.width, page.rect.height),
+                    "customer": page.search_for("ACME"),
+                    "title": page.search_for(self.TITLE)}
 
-    def test_the_picture_is_on_the_first_page_above_the_title(self):
+    def test_the_picture_fills_the_whole_page(self):
         got = self.build({"design": "ribbon"})
         self.assertEqual(len(got["images"]), 1)
-        top = got["images"][0]["bbox"]
-        self.assertLess(top[3], got["customer"][0].y0)    # picture above text
-        width_mm = (top[2] - top[0]) / 72 * 25.4
-        self.assertAlmostEqual(width_mm, 180.0, delta=1.0)
+        x0, y0, x1, y1 = got["images"][0]["bbox"]
+        w, h = got["size"]
+        self.assertAlmostEqual(x0, 0, delta=0.5)
+        self.assertAlmostEqual(y0, 0, delta=0.5)
+        self.assertAlmostEqual(x1, w, delta=0.5)
+        self.assertAlmostEqual(y1, h, delta=0.5)
+        self.assertEqual(got["pages"], 1)
 
-    def test_no_picture_without_a_design_and_a_note_when_it_is_missing(self):
-        self.assertEqual(self.build({"design": "none"})["images"], [])
+    def test_the_page_size_follows_the_report_option(self):
+        a4 = self.build({"design": "ribbon"}, page="a4")["size"]
+        letter = self.build({"design": "ribbon"}, page="letter")["size"]
+        self.assertAlmostEqual(a4[0] / 72 * 25.4, 210.0, delta=0.5)
+        self.assertAlmostEqual(letter[0] / 72 * 25.4, 215.9, delta=0.5)
+        self.assertNotAlmostEqual(a4[1], letter[1], delta=1.0)
+
+    def test_the_text_sits_in_the_chosen_zone(self):
+        for zone in covers.ZONES:
+            got = self.build({"design": "ribbon", "zone": zone})
+            h = got["size"][1]
+            lo, hi = covers.panel_span(zone)
+            y = got["customer"][0].y0                       # from the top
+            self.assertGreater(h - y, h * lo, zone)
+            self.assertLess(h - y, h * hi, zone)
+
+    def test_every_design_and_zone_makes_one_page(self):
+        for design in ("ribbon", "band", "minimal", "data", "grid"):
+            for zone in covers.ZONES:
+                got = self.build({"design": design, "zone": zone})
+                self.assertEqual(got["pages"], 1, (design, zone))
+                self.assertTrue(got["customer"], (design, zone))
+
+    def test_a_long_title_and_every_field_still_fit_on_the_cover(self):
+        details = {"title": "A very long experiment title " * 6,
+                   "customer": "ACME", "reference": "REF-12345",
+                   "operator": "Someone Else", "date": "2026-10-04"}
+        got = self.build({"design": "band", "zone": "top"}, details=details)
+        self.assertEqual(got["pages"], 1)
+        self.assertTrue(got["customer"])
+
+    def test_the_cover_is_a_page_of_its_own_and_has_no_footer(self):
+        import report
+        spec = rs.with_all(rs.default_spec(), False)
+        spec = rs.with_on(rs.with_on(spec, "cover", True), "methods", True)
+        spec = rs.with_cover(spec, design="ribbon")
+        path = os.path.join(self.dir, "r2.pdf")
+        report.build_report(path, {"title": "T", "methods": "Some methods."},
+                            "", [], [], [], None, spec=spec)
+        with mupdf.open(path) as d:
+            self.assertEqual(d.page_count, 2)             # cover + methods
+            self.assertNotIn("report page", d[0].get_text())
+            self.assertIn("Some methods.", d[1].get_text())
+            self.assertNotIn("Some methods.", d[0].get_text())
+
+    def test_no_picture_keeps_the_text_cover_and_a_missing_one_says_so(self):
+        got = self.build({"design": "none"})
+        self.assertEqual(got["images"], [])
+        self.assertTrue(got["title"])
         notes = []
         got = self.build({"design": "file:gone.png"}, notes)
         self.assertEqual(got["images"], [])                # still a report
@@ -474,6 +591,17 @@ class TestInTheApp(Tmp):
         names = [w.cget("text") for w in dlg.cover_list.winfo_children()]
         self.assertIn("Your picture: mine.png", names)
         self.assertEqual(dlg.design.get(), "image")
+
+    def test_the_text_position_reaches_the_spec_and_the_previews(self):
+        dlg = self.dialog()
+        before = list(dlg._thumbs)
+        dlg.set_cover(zone="top")
+        self.assertEqual(rs.cover_of(self.ws.report_spec)["zone"], "top")
+        self.assertEqual(dlg.zone.get(), "top")
+        self.assertEqual(len(dlg._thumbs), len(before))      # redrawn
+        dlg.set_cover(zone="sideways")                       # not a position
+        self.assertEqual(rs.cover_of(self.ws.report_spec)["zone"],
+                         covers.DEFAULT_ZONE)
 
     def test_a_preset_keeps_your_cover(self):
         dlg = self.dialog()
