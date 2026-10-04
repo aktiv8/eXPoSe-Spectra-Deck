@@ -356,14 +356,13 @@ def _results_section(d, results, skip=()):
                 d.table(header, [list(r) for r in rows], weights)
             continue
         if not s.is_profile:
-            rows = resultspages.composition_cells(s.levels[0])
+            header, rows, weights = resultspages.composition_table(
+                s.levels[0], [3.8, 2.8, 1.5, 3.0, 2.4, 1.6, 1.5, 1.4])
             cpng = resultspages.composition_png(s.levels[0], size=(6.5, 3.0),
                                                 dpi=200)
             if cpng:
                 d.picture(cpng)
-            d.table(resultspages.composition_header(s.levels[0]),
-                    [c for _k, c in rows],
-                   [3.8, 2.8, 1.5, 3.0, 2.4, 1.6, 1.5, 1.4])
+            d.table(header, [c for _k, c in rows], weights)
             if s.dparam:
                 title, header, rows, weights = resultspages.dparam_table(
                     s.dparam)

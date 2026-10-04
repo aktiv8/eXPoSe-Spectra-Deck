@@ -486,7 +486,7 @@ def draw_fit(ax, x, fit, scale, muted, accent):
     state_colour = fit.get("state_colour")
     if state_colour is None:
         state_colour = {}
-    names = {}
+    names, peak_at = {}, {}
     for cv in fit["curves"]:
         base = ([(b * scale) if b == b else b for b in cv.background]
                 if cv.background is not None else None)
@@ -512,6 +512,11 @@ def draw_fit(ax, x, fit, scale, muted, accent):
                     state_colour[key] = cols[n % len(cols)]
                 if key not in names:
                     names[key] = (state_colour[key], name)
+                    # where the component peaks on this panel: told apart in
+                    # the legend from another that shares its text
+                    top_i = max(range(len(vals)), key=lambda i: (
+                        abs(vals[i]) if vals[i] == vals[i] else -1.0))
+                    peak_at[key] = x[top_i]
                 col = names[key][0]
                 y = [v * scale for v in vals]
                 lo = base if base is not None else [0.0] * len(y)
@@ -529,8 +534,17 @@ def draw_fit(ax, x, fit, scale, muted, accent):
                     color=ax.xaxis.label.get_color(), lw=1.3, zorder=2.6)
     if names and show.get("components"):
         from matplotlib.patches import Patch
-        handles = [Patch(facecolor=c, alpha=0.5, label=n[:22])
-                   for c, n in names.values()]
+        # components that share a display name (real CasaXPS files leave
+        # several named after the region, or "Pt 4f" twice for a doublet)
+        # keep their own colours; the legend adds where each one peaks so
+        # the swatches can be matched to the curves
+        count = {}
+        for _c, n in names.values():
+            count[n] = count.get(n, 0) + 1
+        handles = [Patch(facecolor=c, alpha=0.5,
+                         label=(f"{n[:16]} ({peak_at[k]:.1f})" if count[n] > 1
+                                else n[:22]))
+                   for k, (c, n) in names.items()]
         many = len(handles) > 6           # a long list would cover the data:
         fs = max(6, int(ax.xaxis.label.get_fontsize()) - 2)   # put it below
         if many:

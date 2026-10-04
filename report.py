@@ -334,7 +334,8 @@ def results_story(results, skip=(), look=None, sid="results"):
             story += _casaxps_story(head, s.casaxps, look, st)
             continue
         if not s.is_profile:
-            rows = resultspages.composition_cells(s.levels[0])
+            header, rows, weights = resultspages.composition_table(
+                s.levels[0], [34, 24, 16, 28, 24, 18, 18, 18])
             cpng = resultspages.composition_png(s.levels[0], size=(7.0, 3.0),
                                                 dpi=200)
             block = [head]
@@ -342,9 +343,7 @@ def results_story(results, skip=(), look=None, sid="results"):
                 block.append(Image(io.BytesIO(cpng), width=170 * mm,
                                    height=170 * mm * 3.0 / 7.0,
                                    hAlign="LEFT"))
-            block.append(_grid(resultspages.composition_header(s.levels[0]),
-                               [c for _k, c in rows],
-                               [34, 24, 16, 28, 24, 18, 18, 18], look,
+            block.append(_grid(header, [c for _k, c in rows], weights, look,
                                right_from=2, kinds=[k for k, _c in rows]))
             story += block
             story += _dparam_story(s, look, st)

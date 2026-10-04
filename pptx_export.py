@@ -673,9 +673,8 @@ def _results_slides(deck, results, skip=()):
             continue
         cur[0] = resultspages.CASA_FOOT if s.numbers == "casaxps" else foot
         if not s.is_profile:
-            rows = resultspages.composition_cells(s.levels[0])
-            cur[0] = resultspages.CASA_FOOT if s.numbers == "casaxps" \
-                else foot
+            header, rows, weights = resultspages.composition_table(
+                s.levels[0], [3.8, 2.8, 1.5, 3.0, 2.4, 1.6, 1.5, 1.4])
             cpng = resultspages.composition_png(s.levels[0], size=FIGURE_SIZE,
                                                 dpi=150)
             if cpng:
@@ -691,11 +690,8 @@ def _results_slides(deck, results, skip=()):
                     + (" (continued)" if i else ""),
                     None if (cpng or i) else s.label)
                 shape = deck.table(
-                    slide, MARGIN, TABLE_TOP, BODY_W,
-                    [3.8, 2.8, 1.5, 3.0, 2.4, 1.6, 1.5, 1.4],
-                    resultspages.composition_header(s.levels[0]),
-                    [c for _k, c in chunk],
-                    size=11, row_h=0.32)
+                    slide, MARGIN, TABLE_TOP, BODY_W, weights, header,
+                    [c for _k, c in chunk], size=11, row_h=0.32)
                 right(shape, 2)
                 for ri, (kind, _c) in enumerate(chunk, 1):
                     if kind == "state":

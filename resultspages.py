@@ -683,6 +683,25 @@ def composition_header(level):
     return CASA_HEADER if from_casa else COMPOSITION_HEADER
 
 
+def composition_table(level, weights):
+    """``(header, rows, weights)`` of one level's composition table for a
+    report: ``composition_header`` and ``composition_cells`` with every column
+    that is empty in all rows left out (a survey has no fit RMS or reduced
+    chi-square), the matching column ``weights`` dropped with it and the rest
+    scaled to keep the table's width. The first column (the region) is always
+    kept."""
+    header = list(composition_header(level))
+    rows = composition_cells(level)
+    keep = [i for i in range(len(header))
+            if i == 0 or any(str(cells[i]).strip() for _k, cells in rows)]
+    if len(keep) == len(header):
+        return tuple(header), rows, list(weights)
+    scale = sum(weights) / sum(weights[i] for i in keep)
+    return (tuple(header[i] for i in keep),
+            [(k, [cells[i] for i in keep]) for k, cells in rows],
+            [weights[i] * scale for i in keep])
+
+
 def composition_cells(level):
     """``[(kind, [cells])]`` for one sample at one level: a "region" row
     (region, background, RSF, area, area / RSF, at %, fit RMS, reduced

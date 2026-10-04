@@ -353,6 +353,34 @@ class TestNumbers(unittest.TestCase):
         self.assertEqual([x["at_pct"] for x in lv.res],
                          [x["at_pct"] for x in direct])
 
+class TestCompositionTable(unittest.TestCase):
+    W = [34, 24, 16, 28, 24, 18, 18, 18]
+
+    def test_a_column_empty_all_the_way_down_is_left_out(self):
+        r1, r2 = row("O 1s", 2.9, 100.0), row("C 1s", 1.0, 200.0)
+        for r in (r1, r2):
+            r["rms"] = r["chi2_red"] = None             # a survey fit
+        lv = level(None, [r1, r2])
+        header, rows, weights = rp.composition_table(lv, self.W)
+        self.assertEqual(header, rp.COMPOSITION_HEADER[:6])
+        self.assertTrue(all(len(c) == 6 for _k, c in rows))
+        self.assertEqual(len(weights), 6)
+        self.assertAlmostEqual(sum(weights), sum(self.W))
+
+    def test_a_column_with_any_value_stays(self):
+        r1, r2 = row("O 1s", 2.9, 100.0), row("C 1s", 1.0, 200.0)
+        r2["rms"] = r2["chi2_red"] = None               # only one is empty
+        lv = level(None, [r1, r2])
+        header, rows, weights = rp.composition_table(lv, self.W)
+        self.assertEqual(header, rp.COMPOSITION_HEADER)
+        self.assertEqual(weights, self.W)
+
+    def test_the_region_column_is_always_kept(self):
+        lv = level(None, [row("C 1s", 1.0, 1.0)])
+        header, _rows, _w = rp.composition_table(lv, self.W)
+        self.assertEqual(header[0], "Region")
+
+
 class TestDepthProfile(unittest.TestCase):
     def profile(self, **kw):
         return sample("Film", [three_element_level(i, ti=100 - 20 * i, **kw(i))

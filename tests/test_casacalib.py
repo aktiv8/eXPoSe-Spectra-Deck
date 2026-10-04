@@ -596,7 +596,9 @@ class TestFitLegend(unittest.TestCase):
                                 "show": {"components": True}}, 1.0, "grey",
                        "red")
         texts = [t.get_text() for t in ax.get_legend().get_texts()]
-        self.assertEqual(texts, ["C 1s", "C 1s"])
+        self.assertEqual(len(texts), 2)
+        self.assertEqual(len(set(texts)), 2)    # told apart by where they peak
+        self.assertTrue(all(t.startswith("C 1s (") for t in texts))
         drawn = [tuple(c.get_facecolor()[0]) for c in ax.collections]
         self.assertEqual(len(drawn), 2)
         self.assertNotEqual(drawn[0], drawn[1])
@@ -627,10 +629,42 @@ class TestFitLegend(unittest.TestCase):
                                 "show": {"components": True}}, 1.0, "grey",
                        "red")
         texts = [t.get_text() for t in ax.get_legend().get_texts()]
-        self.assertEqual(texts, ["C 1s", "C 1s"])
+        self.assertEqual(len(texts), 2)
+        self.assertEqual(len(set(texts)), 2)    # told apart by where they peak
+        self.assertTrue(all(t.startswith("C 1s (") for t in texts))
         drawn = [tuple(c.get_facecolor()[0]) for c in ax.collections]
         self.assertEqual(len(drawn), 2)
         self.assertNotEqual(drawn[0], drawn[1])
+
+    def test_the_legend_tells_same_named_components_apart_by_position(self):
+        """A doublet fitted as "Pt 4f" twice keeps both entries (and their
+        colours), each with where it peaks on the panel; a name used once is
+        left alone."""
+        lines = [
+            "CASA region (*Pt 4f*) (*Shirley*) 1020 1035 1 1 (*Pt 4f*) 195.08",
+            "3",
+            "CASA comp (*Pt 4f*) (*GL(30)*) Area 500 0 900 -1 1 MFWHM 1 0 2 "
+            "-1 1 Position 1024 0 0 -1 1 RSF 1 MASS 195.08 INDEX -1 (*Pt 4f*)",
+            "CASA comp (*Pt 4f*) (*GL(30)*) Area 400 0 900 -1 1 MFWHM 1 0 2 "
+            "-1 1 Position 1028 0 0 -1 1 RSF 1 MASS 195.08 INDEX -1 (*Pt 4f*)",
+            "CASA comp (*Pt 4f loss*) (*GL(30)*) Area 50 0 900 -1 1 MFWHM 1 "
+            "0 2 -1 1 Position 1031 0 0 -1 1 RSF 1 MASS 195.08 INDEX -1 "
+            "(*Pt 4f loss*)",
+        ]
+        fit = casafit.parse(lines)
+        be, counts = model_data(fit, HV, 0.27, 25)
+        cvs = casafit.curves(fit, be, counts, HV, 0.27, 25)
+        ax = Figure().add_subplot()
+        plots.draw_fit(ax, be, {"curves": cvs, "colours": ["#aa0000", "#0000aa",
+                                                           "#00aa00"],
+                                "show": {"components": True}}, 1.0, "grey",
+                       "red")
+        texts = [t.get_text() for t in ax.get_legend().get_texts()]
+        self.assertEqual(len(texts), 3)
+        self.assertEqual(texts[2], "Pt 4f loss")
+        self.assertTrue(texts[0].startswith("Pt 4f (") and
+                        texts[1].startswith("Pt 4f ("))
+        self.assertNotEqual(texts[0], texts[1])
 
     def test_residual_rms_is_noted_on_the_panel(self):
         fit = casafit.parse(CASA)
