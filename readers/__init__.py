@@ -7,7 +7,7 @@ import os
 from .base import Region, ImageBlob, TreeNode, SpectrumFile
 from .kratos_experiment import EscapeParser
 from . import (vamas, thermo_avg, thermo_vgd, phi_spe, scienta_txt,
-               kratos_kal, thermo_vgx, khervefitting_kfit)
+               kratos_kal, kratos_dset, thermo_vgx, khervefitting_kfit)
 from .thermo_experiment import (ThermoExperiment, LoadCancelled,
                                 looks_like_experiment, experiment_roots)
 
@@ -36,6 +36,8 @@ READERS = [
      ("*.txt",)),
     ("Kratos Vision (.kal)", kratos_kal.sniff, kratos_kal.KratosKalFile,
      ("*.kal",)),
+    ("Kratos Vision2 (.dset)", kratos_dset.sniff, kratos_dset.KratosDsetFile,
+     ("*.dset",)),
     ("Kratos ESCApe (.experiment)", _sniff_experiment, EscapeParser,
      ("*.experiment",)),
     ("KherveFitting (.kfit)", khervefitting_kfit.sniff,

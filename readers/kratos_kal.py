@@ -74,6 +74,12 @@ class KratosKalFile(SpectrumFile):
                 pending = (key, [val])
                 continue
             cur[key] = val
+        return self._from_objects(objects)
+
+    def _from_objects(self, objects):
+        """Turn the dumped objects (``{field name: value text}``, each with
+        ``_object``) into regions. Shared with the binary ``.dset`` reader,
+        which rebuilds the same text from the Vision2 file itself."""
         if not objects:
             raise ValueError("no 'Object name' entries found")
         first = objects[0]

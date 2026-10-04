@@ -1,0 +1,220 @@
+"""Kratos Vision2 ``.dset`` reader: synthetic files built here, plus (optional)
+every real ``.dset`` / ``.kal`` pair in a folder.
+
+    set XPS_DSET_CORPUS=C:\\path\\to\\folder\\with\\dset\\and\\kal      (any depth)
+    python -m unittest tests.test_kratos_dset
+
+The pair test checks each ``.dset`` against the ``.kal`` DumpDataset made of it:
+the same regions, energies, counts, photon / pass energy, dwell, date,
+metadata and transmission function (the ``.kal`` prints numbers to about six
+significant digits, so dwell and transmission compare to that precision).
+"""
+
+import glob
+import os
+import struct
+import sys
+import tempfile
+import unittest
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT)
+
+from readers import load_file, reader_for  # noqa: E402
+from readers import kratos_dset  # noqa: E402
+
+CORPUS = os.environ.get("XPS_DSET_CORPUS", "")
+
+
+# ----------------------------------------------------------------------
+# a test-only writer (the app never writes .dset)
+# ----------------------------------------------------------------------
+
+def w32(*xs):
+    return b"".join(struct.pack(">I", x) for x in xs)
+
+
+def r_int(i, v):
+    return w32(i, v & 0xFFFFFFFF)
+
+
+def r_dbl(i, x):
+    return w32(i) + struct.pack(">d", x)
+
+
+def r_str(i, s):
+    return w32(i, len(s) + 1, *[ord(c) for c in s], 0)
+
+
+def r_f32(i, xs):
+    return w32(i, len(xs)) + b"".join(struct.pack(">f", x) for x in xs)
+
+
+def r_f64(i, xs):
+    return w32(i, len(xs)) + b"".join(struct.pack(">d", x) for x in xs)
+
+
+def r_box(i, *recs):
+    """A container: three header words, its records, its own closing 0, 0."""
+    return w32(i, 0, 0, 0) + b"".join(recs) + w32(0, 0)
+
+
+def block(ordinal, *recs):
+    body = w32(ordinal, 0, 0) + b"".join(recs) + w32(0, 0)
+    return w32(len(body)) + body
+
+
+def dset(*blocks, header=True):
+    head = kratos_dset.MAGIC + b"\x00" * (kratos_dset.FIRST_BLOCK - 8)
+    return head + b"".join(blocks)
+
+
+def spectrum(ordinal=2, name="Mo 3d", anode=8, extra=()):
+    return block(
+        ordinal,
+        r_int(1, 3), r_int(2, 0),
+        r_dbl(3, 100.0), r_dbl(4, 2.0),
+        r_str(5, "Kinetic Energy"), r_str(6, "eV"),
+        r_dbl(7, 0.5), r_str(9, "counts"),
+        r_f32(12, [10, 11, 12, 13.5]),
+        r_str(37, name), r_dbl(42, 40.0), r_int(99, 3),
+        r_str(151, "19/04/01 15:40:59"),
+        r_int(3049, 0), r_int(3080, anode),
+        r_str(3113, "Mo"), r_str(3114, "3d"),
+        r_dbl(3192, 0.01), r_dbl(3193, 14000.0),
+        *extra,
+        r_box(5587, r_f64(5615, [100.0, 110.0]), r_f64(5616, [1.0, 0.5])),
+    )
+
+
+class Tmp(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.dir.cleanup)
+
+    def write(self, name, data):
+        p = os.path.join(self.dir.name, name)
+        with open(p, "wb") as fh:
+            fh.write(data)
+        return p
+
+
+class TestDset(Tmp):
+    def test_decodes_a_spectrum(self):
+        positions = block(1, r_str(37, "Positions"), r_int(38, 1))
+        f = load_file(self.write("a.dset", dset(positions, spectrum())))
+        self.assertEqual(type(f).__name__, "KratosDsetFile")
+        self.assertEqual(len(f.regions), 1)           # Positions has no data
+        r = f.regions[0]
+        self.assertEqual(r.name, "Mo 3d")
+        self.assertEqual(r.counts, [10.0, 11.0, 12.0, 13.5])   # float32 exact
+        self.assertAlmostEqual(r.photon_energy, 1486.6)
+        self.assertAlmostEqual(r.energy[0], 1486.6 - 100.0)
+        self.assertEqual(r.pass_energy, 40.0)
+        self.assertEqual(r.dwell, 0.5)
+        self.assertEqual(r.date, "2019-04-01 15:40:59")
+        self.assertEqual(r.tf_ke, [100.0, 110.0])         # nested container
+        self.assertEqual(r.tf_values, [1.0, 0.5])
+        self.assertEqual(r.extra["n_scans"], 3)
+        self.assertEqual(r.conditions["Anode voltage (kV)"], "14")
+
+    def test_registry_sniffs_content_not_extension(self):
+        p = self.write("renamed.bin", dset(spectrum()))
+        self.assertEqual(reader_for(p).format_name, "Kratos Vision (.dset)")
+
+    def test_index_only_file_says_so(self):
+        p = self.write("index.dset", dset())
+        with self.assertRaises(ValueError) as cm:
+            load_file(p)
+        self.assertIn("only its index", str(cm.exception))
+
+    def test_truncated_file_is_refused(self):
+        data = dset(spectrum())
+        with self.assertRaises(ValueError) as cm:
+            load_file(self.write("t.dset", data[:-40]))
+        self.assertIn("chain", str(cm.exception))
+
+    def test_unknown_enum_number_is_left_out_not_guessed(self):
+        f = load_file(self.write("u.dset", dset(spectrum(anode=99))))
+        r = f.regions[0]
+        self.assertIsNone(r.photon_energy)                # no invented anode
+        self.assertEqual(r.energy_label, "Kinetic Energy")
+        text = " ".join(f.warnings)
+        self.assertIn("Xray Reference Energy = 99", text)
+
+    def test_unknown_fields_of_every_shape_are_skipped(self):
+        extra = (r_int(4001, 7), r_dbl(4002, 2.5), r_str(4003, "hello"),
+                 r_f32(4004, [1, 2, 3]))
+        f = load_file(self.write("k.dset", dset(spectrum(extra=extra))))
+        r = f.regions[0]
+        self.assertEqual(r.counts, [10.0, 11.0, 12.0, 13.5])
+        self.assertEqual(r.tf_ke, [100.0, 110.0])         # still in step after
+        self.assertFalse(f.warnings)
+
+    def test_a_block_that_cannot_be_decoded_costs_only_that_block(self):
+        bad = block(3, r_str(37, "Bad"), w32(4005, 0xFFFFFFF0, 1, 2))
+        f = load_file(self.write("b.dset", dset(spectrum(), bad)))
+        self.assertEqual(len(f.regions), 1)
+        self.assertTrue(any("not decoded" in w for w in f.warnings))
+
+
+# ----------------------------------------------------------------------
+# real pairs
+# ----------------------------------------------------------------------
+
+def _close(a, b, tol):
+    if a is None or b is None:
+        return a == b
+    return abs(a - b) <= tol * max(abs(b), 1e-30)
+
+
+@unittest.skipUnless(CORPUS and os.path.isdir(CORPUS),
+                     "XPS_DSET_CORPUS not set")
+class TestRealPairs(unittest.TestCase):
+    ATTRS = ("name", "sample", "photon_energy", "pass_energy", "step",
+             "lens_mode", "date", "anode", "aperture", "energy_label",
+             "count_units", "technique")
+
+    def test_each_dset_matches_its_kal(self):
+        pairs = [(d, d[:-5] + ".kal") for d in
+                 glob.glob(os.path.join(CORPUS, "**", "*.dset"),
+                           recursive=True)
+                 if os.path.exists(d[:-5] + ".kal")]
+        self.assertTrue(pairs, "no .dset / .kal pairs found")
+        checked = 0
+        for dpath, kpath in pairs:
+            try:
+                a = load_file(dpath)
+            except ValueError as exc:
+                self.assertIn("only its index", str(exc), dpath)
+                continue
+            b = load_file(kpath)
+            self.assertEqual(len(a.regions), len(b.regions), dpath)
+            for ra, rb in zip(a.regions, b.regions):
+                tag = f"{os.path.basename(dpath)}:{rb.name}"
+                for at in self.ATTRS:
+                    self.assertEqual(getattr(ra, at), getattr(rb, at),
+                                     f"{tag} {at}")
+                self.assertEqual(ra.energy, rb.energy, tag)
+                self.assertEqual(ra.counts, rb.counts, tag)
+                self.assertTrue(_close(ra.dwell, rb.dwell, 1e-5), tag)
+                self.assertEqual(len(ra.tf_ke), len(rb.tf_ke), tag)
+                for x, y in zip(ra.tf_ke + ra.tf_values,
+                                rb.tf_ke + rb.tf_values):
+                    self.assertTrue(_close(x, y, 1e-4), f"{tag} transmission")
+                self.assertEqual(ra.conditions, rb.conditions, tag)
+                self.assertEqual(
+                    {k: v for k, v in ra.extra.items() if k != "fields"},
+                    {k: v for k, v in rb.extra.items() if k != "fields"}, tag)
+                ma = a.region_metadata(ra)
+                mb = b.region_metadata(rb)
+                for k in ("File format", "Source file"):
+                    ma.pop(k, None)
+                    mb.pop(k, None)
+                self.assertEqual(ma, mb, tag)
+                checked += 1
+        print(f"\n{len(pairs)} pairs, {checked} regions identical")
+
+
+if __name__ == "__main__":
+    unittest.main()

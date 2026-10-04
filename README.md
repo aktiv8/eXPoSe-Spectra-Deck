@@ -18,6 +18,7 @@ previewed before it is saved.
 | **PHI / ULVAC-PHI MultiPak** | `.spe` | Intensities are counts per second, as stored. |
 | **Scienta Omicron SES** | `.txt` | Detector/angle columns are summed to one spectrum. |
 | **Kratos Vision** | `.kal` | Includes the transmission function. Files that don't record the X-ray source stay on a kinetic-energy axis (a warning says so). |
+| **Kratos Vision2 dataset** | `.dset` | The binary Vision2 writes, read directly (no DumpDataset step); gives the regions of its `.kal`. A setting whose Kratos constant has not been met yet is left out with a warning, never guessed; a `.dset` that holds only the index says so. |
 | **Kratos ESCApe** | `.experiment` | Undocumented binary container; best-effort reverse engineering. |
 
 Files are recognised by **content**, not only by extension, so renamed files
@@ -644,9 +645,10 @@ in `CLAUDE.md` have the detail):
   former name, `~/.escape_explorer_*.json`, are picked up automatically.)
 * Binding energy is *photon energy − kinetic energy* and is **not
   charge-corrected**, so peaks may be shifted by a few eV on charging samples.
-* The `.experiment`, `.vgd` and `.kal` readers are reverse-engineered. The
+* The `.experiment`, `.vgd`, `.kal` and `.dset` readers are reverse-engineered. The
   `.vgd` and `.kal` readers were checked against the `.avg` / VAMAS exports of
-  the same data (identical energies and counts); cross-check anything critical
+  the same data, the `.dset` reader against the `.kal` DumpDataset made of it
+  (36 pairs, 252 regions: identical) (identical energies and counts); cross-check anything critical
   against the vendor software. The `.VGX` reader takes only names and run
   order from it; camera images were compared pixel for pixel with Avantage's
   own PNG export.

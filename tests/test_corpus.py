@@ -21,7 +21,7 @@ sys.path.insert(0, ROOT)
 from readers import load_file, reader_for, UnsupportedFormat  # noqa: E402
 
 CORPUS = os.environ.get("XPS_CORPUS", "")
-EXTS = (".vms", ".vamas", ".avg", ".avx", ".vgd", ".spe", ".kal",
+EXTS = (".vms", ".vamas", ".avg", ".avx", ".vgd", ".spe", ".kal", ".dset",
         ".experiment", ".txt")
 
 
@@ -48,8 +48,8 @@ class TestCorpus(unittest.TestCase):
                             self.assertEqual(r.n_points, len(r.energy))
                     loaded += 1
                 except ValueError as exc:
-                    if "is empty" in str(exc):
-                        continue                    # aborted acquisition
+                    if "is empty" in str(exc) or "only its index" in str(exc):
+                        continue        # aborted acquisition / .dset index
                     failures.append(f"{path}: {exc!r}")
                 except Exception as exc:            # noqa: BLE001
                     failures.append(f"{path}: {exc!r}")

@@ -291,6 +291,10 @@ FORMATS_ROWS = [
      "run order, camera images and SnapMaps (Chapter 22)."),
     ("PHI / ULVAC-PHI MultiPak", ".spe", "Intensities are counts per second, as stored."),
     ("Scienta Omicron SES", ".txt", "Detector/angle columns are summed to one spectrum."),
+    ("Kratos Vision2 dataset", ".dset",
+     "The binary file Vision2 writes, read directly without the DumpDataset step. Gives the "
+     "same spectra and settings as its .kal. A setting the reader has not met before is left "
+     "out with a warning rather than guessed."),
     ("Kratos Vision", ".kal",
      "Includes the transmission function. Files that do not record the X-ray "
      "source stay on a kinetic-energy axis (a warning says so)."),

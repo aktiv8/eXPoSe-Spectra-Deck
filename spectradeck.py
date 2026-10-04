@@ -24,8 +24,8 @@ The app runs without the optional packages; the affected panes show a notice.
 
 Note on reverse-engineered formats
 ----------------------------------
-``.experiment`` (Kratos ESCApe), ``.vgd`` (Thermo) and ``.kal`` (Kratos Vision)
-are undocumented; their readers are best-effort and were validated against
+``.experiment`` (Kratos ESCApe), ``.vgd`` (Thermo), ``.kal`` and ``.dset``
+(Kratos Vision) are undocumented; their readers are best-effort and were validated against
 exports of the same data. See the README.
 """
 
