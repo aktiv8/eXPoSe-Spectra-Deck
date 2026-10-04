@@ -79,7 +79,7 @@ from readers import (Region, ImageBlob, TreeNode, SpectrumFile, EscapeParser,
                      load_file, reader_for, supported_patterns,
                      UnsupportedFormat, ThermoExperiment, LoadCancelled,
                      looks_like_experiment, experiment_roots)
-from readers import khervefitting_kfit
+from readers import khervefitting_kfit, kratos_dset
 from readers.base import canon_region_name
 import about_ui
 import externalapps
@@ -705,7 +705,8 @@ class Workspace:
         filem.add_command(label="Save plot image…",
                           command=self.save_plot_image)
         filem.add_command(label="Close all files", command=self.close_all)
-        filem.add_command(label="Ask about .avg / .vgd duplicates again",
+        filem.add_command(label="Ask about .avg / .vgd and .kal / .dset "
+                                "duplicates again",
                           command=self._forget_dup_choice)
         filem.add_separator()
         filem.add_command(label="Export ticked spectra → CSV…",
@@ -1871,6 +1872,8 @@ class Workspace:
                     reader_for(p)
                 except (UnsupportedFormat, OSError):
                     continue
+                if kratos_dset.is_index_only(p):
+                    continue            # the experiment's own index, no data
                 paths.append(p)
         if not paths:
             messagebox.showinfo("Open folder",
@@ -1911,31 +1914,43 @@ class Workspace:
                                    "\n\n".join(shown) + more)
 
     def _resolve_duplicate_formats(self, paths):
-        """Drop the redundant copy when a dataset is present as both .avg and
-        .vgd (the data are the same). Asks unless a choice was remembered;
-        returns the paths to load, or None if the user cancelled."""
-        pairs = importplan.find_pairs(paths)
-        if not pairs:
-            return paths
-        pref = self.cfg.get("dup_format")
-        if pref in importplan.CHOICES:
-            return importplan.apply_choice(paths, pairs, pref)
-        dlg = workbook_ui.DuplicateFormatDialog(self.root, self, pairs, "avg")
-        self.root.wait_window(dlg)
-        if dlg.result is None:
-            return None
-        choice, remember = dlg.result
-        if remember and isinstance(choice, str):
-            self.cfg["dup_format"] = choice
-            save_config(self.cfg)
-        return importplan.apply_choice(paths, pairs, choice)
+        """Drop the redundant copy when a dataset is present in two formats
+        with the same data: .avg and .vgd, or .kal and .dset. Asks unless a
+        choice was remembered (one per family); returns the paths to load,
+        or None if the user cancelled."""
+        for family, key, default in self._DUP_FAMILIES:
+            pairs = importplan.find_pairs(paths, family)
+            if not pairs:
+                continue
+            pref = self.cfg.get(key)
+            if pref in importplan.choices(family):
+                paths = importplan.apply_choice(paths, pairs, pref, family)
+                continue
+            dlg = workbook_ui.DuplicateFormatDialog(
+                self.root, self, pairs, default, family)
+            self.root.wait_window(dlg)
+            if dlg.result is None:
+                return None
+            choice, remember = dlg.result
+            if remember and isinstance(choice, str):
+                self.cfg[key] = choice
+                save_config(self.cfg)
+            paths = importplan.apply_choice(paths, pairs, choice, family)
+        return paths
+
+    # (extensions, config key of the remembered choice, recommended copy);
+    # the Vision2 .dset is what the instrument wrote, the .kal a text dump
+    _DUP_FAMILIES = ((importplan.AVG_VGD, "dup_format", "avg"),
+                     (importplan.KAL_DSET, "dup_format_kal", "dset"))
 
     def _forget_dup_choice(self):
-        self.cfg.pop("dup_format", None)
+        for _family, key, _default in self._DUP_FAMILIES:
+            self.cfg.pop(key, None)
         save_config(self.cfg)
         messagebox.showinfo("Duplicate formats",
                             "You will be asked again when a folder holds the "
-                            "same data as .avg and .vgd.")
+                            "same data as .avg and .vgd, or as .kal and "
+                            ".dset.")
 
     def _finish_adding(self):
         """One refresh after a batch of ``_add_file(..., refresh=False)``."""

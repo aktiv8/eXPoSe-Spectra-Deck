@@ -446,10 +446,13 @@ def build_chapters(doc):
         "experiment instead (see Chapter 22)."
     )
     para(doc,
-        "If a selection or folder holds the same dataset as both .avg and .vgd, "
-        "you are asked which to import (.avg is pre-selected). Tick “Remember "
-        "my choice” to stop being asked; File → “Ask about .avg / "
-        ".vgd duplicates again” brings the question back."
+        "If a selection or folder holds the same dataset as both .avg and .vgd "
+        "(Avantage), or as both .dset and .kal (Kratos Vision2 and its "
+        "DumpDataset text), you are asked which to import (.avg and .dset are "
+        "pre-selected). Tick “Remember my choice” to stop being asked about "
+        "that pair of formats; File → “Ask about .avg / .vgd and .kal / .dset "
+        "duplicates again” brings the question back. A folder’s own "
+        "index-only .dset, which holds no spectra, is skipped."
     )
     para(doc,
         "Every node that holds spectra has a tick box — click it, or press "

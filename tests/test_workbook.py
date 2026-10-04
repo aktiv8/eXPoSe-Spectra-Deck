@@ -479,6 +479,33 @@ class TestImportPlan(unittest.TestCase):
         self.assertIn("/d/one.vgd", out)
         self.assertNotIn("/d/TWO.vgd", out)
 
+    KD = ["/k/a.kal", "/k/a.DSET", "/k/b.dset", "/k/c.kal", "/k/c.dset",
+          "/j/a.dset", "/k/x.avg", "/k/x.vgd"]
+
+    def test_kal_dset_family(self):
+        fam = importplan.KAL_DSET
+        pairs = importplan.find_pairs(self.KD, fam)
+        self.assertEqual(pairs, [("/k/a.kal", "/k/a.DSET"),
+                                 ("/k/c.kal", "/k/c.dset")])
+        # the other family is untouched by these and vice versa
+        self.assertEqual(importplan.find_pairs(self.KD),
+                         [("/k/x.avg", "/k/x.vgd")])
+        self.assertEqual(importplan.choices(fam), ("kal", "dset", "both"))
+        out = importplan.apply_choice(self.KD, pairs, "dset", fam)
+        self.assertEqual(out, ["/k/a.DSET", "/k/b.dset", "/k/c.dset",
+                               "/j/a.dset", "/k/x.avg", "/k/x.vgd"])
+        out = importplan.apply_choice(self.KD, pairs, "kal", fam)
+        self.assertNotIn("/k/a.DSET", out)
+        self.assertIn("/k/a.kal", out)
+        out = importplan.apply_choice(
+            self.KD, pairs, {"/k/a.kal": "kal", "/k/c.kal": "dset"}, fam)
+        self.assertIn("/k/a.kal", out)
+        self.assertNotIn("/k/c.kal", out)
+        self.assertEqual(importplan.apply_choice(self.KD, pairs, "both", fam),
+                         self.KD)
+        with self.assertRaises(ValueError):
+            importplan.apply_choice(self.KD, pairs, "avg", fam)   # wrong family
+
     def test_classify_paths(self):
         with tempfile.TemporaryDirectory() as d:
             folder = os.path.join(d, "sub")

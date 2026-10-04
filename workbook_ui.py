@@ -12,6 +12,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import about_ui
 import appinfo
+import importplan
 import panelview
 import plotstyle
 import workbook as wbk
@@ -359,17 +360,25 @@ class FiguresDialog(tk.Toplevel):
 
 
 class DuplicateFormatDialog(tk.Toplevel):
-    """Ask what to import when files exist as both ``.avg`` and ``.vgd``.
+    """Ask what to import when files exist in two formats holding the same
+    data: ``.avg`` and ``.vgd`` (Avantage) or ``.kal`` and ``.dset`` (Kratos
+    Vision2), the ``family`` of two extensions.
 
     After ``wait_window``, ``result`` is ``None`` (cancelled) or
-    ``(choice, remember)`` where ``choice`` is ``"avg"``, ``"vgd"``,
-    ``"both"`` or a ``{avg_path: choice}`` dict."""
+    ``(choice, remember)`` where ``choice`` is one of the two extensions
+    without the dot, ``"both"`` or a ``{first_path: choice}`` dict."""
 
     MAX_LISTED = 200
 
-    def __init__(self, master, app, pairs, default="avg"):
+    def __init__(self, master, app, pairs, default=None,
+                 family=importplan.AVG_VGD):
         super().__init__(master)
         self.app, self.pairs, self.result = app, pairs, None
+        self.family = family
+        first, second = (e.lstrip(".") for e in family)
+        default = default if default in (first, second, "both") else first
+        # "both" cannot seed a per-dataset choice, which is one of the two
+        self.each_default = default if default != "both" else first
         self.title("Same data in two formats")
         self.transient(master)
         self.grab_set()
@@ -379,13 +388,15 @@ class DuplicateFormatDialog(tk.Toplevel):
         ttk.Label(
             body, wraplength=440, justify="left",
             text=(f"{n} dataset{'s are' if n != 1 else ' is'} in this "
-                  f"selection as both .avg and .vgd. The data are the same in "
-                  f"both, so importing both would list everything twice.\n\n"
+                  f"selection as both .{first} and .{second}. The data are "
+                  f"the same in both, so importing both would list "
+                  f"everything twice.\n\n"
                   f"Which would you like to import?")).pack(anchor="w")
-        self.mode = tk.StringVar(value=default if default in
-                                 ("avg", "vgd", "both") else "avg")
-        for value, text in (("avg", "Use the .avg files (recommended)"),
-                            ("vgd", "Use the .vgd files"),
+        self.mode = tk.StringVar(value=default)
+        for value, text in ((first, f"Use the .{first} files"
+                             + (" (recommended)" if default == first else "")),
+                            (second, f"Use the .{second} files"
+                             + (" (recommended)" if default == second else "")),
                             ("both", "Import both"),
                             ("each", "Choose for each dataset")):
             ttk.Radiobutton(body, text=text, value=value, variable=self.mode,
@@ -394,20 +405,21 @@ class DuplicateFormatDialog(tk.Toplevel):
         self.list_frame = ttk.Frame(body)
         self.list_frame.pack(fill="x", padx=(28, 0), pady=(4, 0))
         self.each = {}
-        for avg, _vgd in pairs[:self.MAX_LISTED]:
+        for lead, _other in pairs[:self.MAX_LISTED]:
             row = ttk.Frame(self.list_frame)
             row.pack(fill="x", pady=1)
-            ttk.Label(row, text=os.path.splitext(os.path.basename(avg))[0],
+            ttk.Label(row, text=os.path.splitext(os.path.basename(lead))[0],
                       width=34).pack(side="left")
-            var = tk.StringVar(value="avg")
+            var = tk.StringVar(value=self.each_default)
             cb = ttk.Combobox(row, textvariable=var, width=6,
-                              state="disabled", values=["avg", "vgd", "both"])
+                              state="disabled",
+                              values=[first, second, "both"])
             cb.pack(side="left")
-            self.each[avg] = (var, cb)
+            self.each[lead] = (var, cb)
         if n > self.MAX_LISTED:
             ttk.Label(self.list_frame, style="Muted.TLabel",
-                      text=f"… and {n - self.MAX_LISTED} more (use .avg)"
-                      ).pack(anchor="w")
+                      text=f"… and {n - self.MAX_LISTED} more "
+                           f"(use .{self.each_default})").pack(anchor="w")
         self.remember = tk.BooleanVar(value=False)
         ttk.Checkbutton(body, text="Remember my choice and don't ask again",
                         variable=self.remember).pack(anchor="w", pady=(12, 0))
@@ -431,9 +443,9 @@ class DuplicateFormatDialog(tk.Toplevel):
     def _ok(self):
         mode = self.mode.get()
         if mode == "each":
-            choice = {avg: var.get() for avg, (var, _cb) in self.each.items()}
-            for avg, _vgd in self.pairs[self.MAX_LISTED:]:
-                choice[avg] = "avg"
+            choice = {lead: var.get() for lead, (var, _cb) in self.each.items()}
+            for lead, _other in self.pairs[self.MAX_LISTED:]:
+                choice[lead] = self.each_default
             remember = False          # a per-file choice is not a preference
         else:
             choice, remember = mode, self.remember.get()

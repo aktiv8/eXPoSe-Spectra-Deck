@@ -49,7 +49,7 @@ energy* (not charge-corrected) whenever the photon energy is known.
 | `handover.py` | the hand-over ZIP (report, spectra, figures, metadata, README, checksums) |
 | `htmlbrowser.py`, `viewer/` | the offline HTML data browser (payload builder and the page: template, CSS, JavaScript) |
 | `annotations.py`, `calibration.py`, `xpslines.py`, `assets/xps_lines.json` | your edits (names, notes, metadata, BE shifts, peak markers), calibration maths and the element-line table |
-| `importplan.py` | choosing between `.avg` / `.vgd` copies of the same data |
+| `importplan.py` | choosing between `.avg` / `.vgd` (or `.kal` / `.dset`) copies of the same data |
 | `viewdata.py`, `metasummary.py` | plot-view and metadata-tidying helpers |
 | `themes.py` | design tokens and colour themes |
 | `plotstyle.py`, `plotstyle_ui.py` | the plot style (fonts, lines, ticks, grid, legend, titles, ranges, image size), its presets and its dialog |
@@ -132,9 +132,12 @@ skip it.
    supported format, or *Folder…* to load every recognised file in a folder.
    Each file is a top-level node in the tree. (A folder from a Thermo Avantage
    experiment, or its `.VGX`, opens as **one experiment**: see below.) If a selection or folder holds
-   the same dataset as both `.avg` and `.vgd`, you are asked which to import
-   (`.avg` is pre-selected; *Remember my choice* stops the question, and
-   File → *Ask about .avg / .vgd duplicates again* brings it back).
+   the same dataset as both `.avg` and `.vgd` (Avantage), or as both `.dset` and
+   `.kal` (Kratos Vision2 and its DumpDataset text), you are asked which to
+   import (`.avg` / `.dset` are pre-selected; *Remember my choice* stops the
+   question for that pair of formats, and File → *Ask about .avg / .vgd and
+   .kal / .dset duplicates again* brings it back). A folder's own index-only
+   `.dset` (the experiment-level file with no spectra) is skipped.
 2. Every node that holds spectra has a **tick box** (click it, or press
    **Space**). Ticking a sample, region folder or whole file ticks everything
    under it; a partly-ticked parent shows a bar. **Filter** narrows the tree

@@ -128,6 +128,15 @@ class TestDset(Tmp):
             load_file(p)
         self.assertIn("only its index", str(cm.exception))
 
+    def test_index_only_helper(self):
+        p = self.write("index.dset", dset())
+        self.assertTrue(kratos_dset.is_index_only(p))
+        self.assertFalse(kratos_dset.is_index_only(
+            self.write("full.dset", dset(spectrum()))))
+        self.assertFalse(kratos_dset.is_index_only(
+            self.write("other.bin", b"" * 3000)))
+        self.assertFalse(kratos_dset.is_index_only(p + ".missing"))
+
     def test_truncated_file_is_refused(self):
         data = dset(spectrum())
         with self.assertRaises(ValueError) as cm:

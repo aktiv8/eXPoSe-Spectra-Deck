@@ -145,6 +145,17 @@ def sniff(head: bytes, ext: str) -> bool:
     return head[:len(MAGIC)] == MAGIC
 
 
+def is_index_only(path: str) -> bool:
+    """A ``.dset`` that is just the index (the experiment-level file that
+    sits beside the numbered datasets): nothing to load."""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(len(MAGIC))
+        return head == MAGIC and os.path.getsize(path) <= FIRST_BLOCK
+    except OSError:
+        return False
+
+
 class _Unsynced(ValueError):
     """A block cannot be decoded (unknown id of unknown shape, truncation)."""
 
