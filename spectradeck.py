@@ -95,6 +95,7 @@ import methods
 import timing
 import glance
 import panelview
+import viewzoom
 import workbook as wbk
 import annotations
 import appinfo
@@ -659,6 +660,9 @@ class Workspace:
         self._pick_cb = None        # set while waiting for a click on the plot
         self._axinfo = {}           # axes -> (photon energy, kind, n traces)
         self._zoom_sig = {}         # axes -> what a panel's zoom depends on
+        self._auto_lims = {}        # axes -> (xlim, ylim) as first drawn
+        self._zoom_request = None   # a recalled figure's zoom, for the next draw
+        self._press = None          # (x, y, button) of a press the zoom tool may own
         self._gen_prog = None       # progress dialog while a report/deck builds
         self._pdf_figure_size = (11.7, 8.3)  # landscape figure/image page, in
         self._click_cb = None       # persistent plot-click hook (Identify)
@@ -748,6 +752,8 @@ class Workspace:
         wbm.add_separator()
         wbm.add_command(label="Details and notes…", command=self.edit_details)
         wbm.add_command(label="Figures…", command=self.edit_figures)
+        wbm.add_command(label="Save current view as a figure…",
+                        command=self.save_view_as_figure)
         wbm.add_separator()
         wbm.add_command(label="Report generator…",
                         command=self.report_generator)
@@ -1483,6 +1489,8 @@ class Workspace:
             w = self.canvas.get_tk_widget()
             w.pack(side="top", expand=True, fill="both")
             self.canvas.mpl_connect("button_press_event", self._on_plot_click)
+            self.canvas.mpl_connect("button_release_event",
+                                    self._on_plot_release)
             self.canvas.mpl_connect("motion_notify_event", self._on_motion)
             self.canvas.mpl_connect("figure_leave_event",
                                     lambda e: self.cursor_lbl.config(text=""))
@@ -3179,9 +3187,13 @@ class Workspace:
             self.fig.clear()
             self._axmap = {}
             self._zoom_sig = {}
+            self._auto_lims = {}
             if chunk:
                 self._axmap = self._draw_page(self.fig, chunk, limit,
                                               self.trace_start)
+                self._auto_lims = {ax: (tuple(ax.get_xlim()),
+                                        tuple(ax.get_ylim()))
+                                   for ax in self._axmap}
             else:
                 self.fig.text(0.5, 0.5,
                               "Tick spectra in the tree to plot them here.\n"
@@ -3189,7 +3201,11 @@ class Workspace:
                               "stacked on one panel.",
                               ha="center", va="center",
                               color=self.palette["muted"])
-            self._restore_zoom(zoom)
+            if self._zoom_request is not None:      # a recalled figure's zoom
+                self._apply_zoom(self._axmap, self._zoom_request)
+                self._zoom_request = None
+            else:
+                self._restore_zoom(zoom)
             self.fig.set_facecolor(self.palette["plot_bg"])
             self.canvas.draw()
             if n_groups:
@@ -3535,6 +3551,8 @@ class Workspace:
                          state="disabled" if series else "normal",
                          command=lambda: self.identify_panel(key))
         root.add_separator()
+        root.add_command(label="Save this view as a figure…",
+                         command=self.save_view_as_figure)
         root.add_command(label="Use the page's view",
                          state="normal" if key in self.panel_views
                          else "disabled",
@@ -3545,21 +3563,135 @@ class Workspace:
         finally:
             root.grab_release()
 
+    def _figure_menu(self, event):
+        """Right-click on the plot outside every panel: just the figure
+        command (the panel menu needs a panel)."""
+        if not self._groups():
+            return
+        if getattr(self, "_fmenu", None) is None:
+            self._fmenu = self._menu(self.root)
+        self._fmenu.delete(0, "end")
+        self._fmenu.add_command(label="Save this view as a figure…",
+                                command=self.save_view_as_figure)
+        ev = event.guiEvent
+        try:
+            self._fmenu.tk_popup(ev.x_root, ev.y_root)
+        finally:
+            self._fmenu.grab_release()
+
+    # -- the current view as a saved figure --------------------------------
+    def current_zoom(self):
+        """The zoom of the panels shown, in the form a figure stores
+        (``viewzoom.encode``): only panels whose limits differ from what they
+        were drawn with. Kept out of ``capture_state`` on purpose: a zoom is
+        not an edit, so it must not move ``_signature``."""
+        panels = {}
+        for ax, key in self._axmap.items():
+            auto = self._auto_lims.get(ax)
+            if auto is None:
+                continue
+            try:
+                cur = (tuple(ax.get_xlim()), tuple(ax.get_ylim()))
+            except Exception:
+                continue
+            if viewzoom.is_zoomed(auto, cur):
+                panels[key] = cur
+        return viewzoom.encode(panels, self.scale_var.get())
+
+    def current_figure_state(self):
+        """What a figure saves: the look plus the zoom of what is on screen."""
+        st = self.capture_state()
+        st["zoom"] = self.current_zoom()
+        return st
+
+    def add_figure(self, name):
+        """Append the current view to the workbook's figures; returns it."""
+        fig = {"id": wbk.new_id([f["id"] for f in self.figures], "g"),
+               "name": name, "caption": "",
+               "state": self.current_figure_state()}
+        self.figures.append(fig)
+        self.wb_touch()
+        return fig
+
+    def save_view_as_figure(self):
+        """The right-click / Workbook-menu route to a figure: ask a name, save
+        what is on screen (zoom included) and say where to caption it."""
+        if not self._groups():
+            messagebox.showinfo("Save view as a figure",
+                                "Tick some spectra first.")
+            return
+        name = simpledialog.askstring(
+            "Save view as a figure", "Name of the figure:",
+            initialvalue=f"Figure {len(self.figures) + 1}", parent=self.root)
+        if not name or not name.strip():
+            return
+        fig = self.add_figure(name.strip())
+        self.status.config(text=f"Saved as \"{fig['name']}\": add a caption "
+                                f"under Workbook \u25b8 Figures\u2026")
+
+    def _apply_zoom(self, axmap, request):
+        """Put a saved figure's per-panel limits on the panels just drawn; a
+        panel the figure has no zoom for, or whose data no longer overlap its
+        saved range, keeps its own full range."""
+        for ax, key in axmap.items():
+            z = request.get(key)
+            if not z:
+                continue
+            try:
+                if viewzoom.fits(ax.get_xlim(), z["x"]):
+                    ax.set_xlim(z["x"])
+                if viewzoom.fits(ax.get_ylim(), z["y"]):
+                    ax.set_ylim(z["y"])
+            except Exception:
+                pass
+
+    CLICK_SLOP = 5                  # px: less than this is a click, not a drag
+
+    def _tool_active(self):
+        """The toolbar's zoom or pan tool is switched on (it stays on after a
+        zoom until its button is pressed again)."""
+        return bool(str(getattr(self.toolbar, "mode", "")))
+
     def _on_plot_click(self, event):
-        if (event.button == 3 and event.inaxes is not None
-                and self._click_cb is None and self._pick_cb is None
-                and not str(getattr(self.toolbar, "mode", ""))):
-            self._panel_menu(event)
+        """A mouse press on the plot. With the zoom / pan tool on, a press may
+        start a drag that belongs to the tool, so a click is only recognised
+        when the button is released without having moved
+        (``_on_plot_release``); otherwise it acts at once."""
+        self._press = None
+        if event.button in (1, 3) and self._tool_active():
+            self._press = (event.x, event.y, event.button)
+            return
+        self._click_logic(event)
+
+    def _on_plot_release(self, event):
+        press, self._press = self._press, None
+        if press is None or event.button != press[2]                 or event.x is None or press[0] is None:
+            return
+        if (abs(event.x - press[0]) <= self.CLICK_SLOP
+                and abs(event.y - press[1]) <= self.CLICK_SLOP):
+            self._click_logic(event)
+
+    def _click_logic(self, event):
+        """What a click on the plot does, whether or not the zoom / pan tool
+        is on: right button = the panel menu (or, outside any panel, the
+        figure menu); left button = Identify's pick, a calibration pick, or
+        the 'At cursor' energy."""
+        if event.button == 3:
+            if self._pick_cb is not None:
+                return
+            if event.inaxes is not None:
+                self._panel_menu(event)
+            else:
+                self._figure_menu(event)
+            return
+        if event.button != 1:
             return
         if self._click_cb is not None and event.inaxes is not None:
-            if not str(getattr(self.toolbar, "mode", "")):
-                be = self.displayed_be(event)    # the callback un-shifts
-                if be is not None:
-                    self._click_cb(be, event)
-                return
+            be = self.displayed_be(event)        # the callback un-shifts
+            if be is not None:
+                self._click_cb(be, event)
+            return
         if self._pick_cb is not None and event.inaxes is not None:
-            if str(getattr(self.toolbar, "mode", "")):
-                return
             be = self._binding_at(event)
             if be is not None:
                 cb, self._pick_cb = self._pick_cb, None
@@ -3574,8 +3706,6 @@ class Workspace:
         look = self._look_for(key)
         if look["norm"] != "At cursor" or panelview.is_series(look["view"]):
             return
-        if str(getattr(self.toolbar, "mode", "")):
-            return              # zoom / pan tool is active
         x = float(event.xdata)
         hv = self._axhv.get(event.inaxes)
         if self.scale_var.get() == "Kinetic" and hv:
@@ -3752,6 +3882,10 @@ class Workspace:
             by_file = {self.file_ids.get(id(p)): p.regions for p in self.docs}
             regs, missing = wbk.resolve_refs(st["ticked"], by_file)
             self.checked = {id(r) for r in regs}
+        # a figure saved with a zoom puts it back; one without the key (an older
+        # figure, or the live look) says nothing about it
+        self._zoom_request = viewzoom.sanitise(st.get("zoom"),
+                                               self.scale_var.get())
         self._apply_mpl_theme()
         self._sync_view_controls()
         if render:
@@ -4102,8 +4236,11 @@ class Workspace:
             with matplotlib.rc_context(self._rc(paper)):
                 for pg in range(pages):
                     page = Figure(figsize=size, dpi=dpi)
-                    self._draw_page(page, groups[pg * per:(pg + 1) * per],
-                                    limit, start, pal=PRINT, rect=rect)
+                    axmap = self._draw_page(
+                        page, groups[pg * per:(pg + 1) * per], limit, start,
+                        pal=PRINT, rect=rect)
+                    if self._zoom_request:
+                        self._apply_zoom(axmap, self._zoom_request)
                     if decorate:
                         head = f"Figure {number} — {fig.get('name', '')}"
                         if pg:

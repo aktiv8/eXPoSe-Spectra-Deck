@@ -254,7 +254,9 @@ data (in the workbook) and applied when you plot, export and report.
   shifted energies (VAMAS carries the shift through the source energy, so
   kinetic energies are unchanged), and the report gets a calibration
   statement.
-* **Identify peaks…**: click a survey peak to list candidate element lines,
+* **Identify peaks…** (works with the toolbar's zoom or pan tool switched on:
+  a click is a click, a drag still zooms; right-click opens the panel menu
+  too): click a survey peak to list candidate element lines,
   add the one you want as a marker, or **Auto-label** every peak. Markers
   follow BE shifts and the KE axis. A spin-orbit doublet is named once by
   default (**Ti 2p**, **Au 4f**); tick *Show spin-orbit components* to get
@@ -289,8 +291,12 @@ you can reopen at any time (or double-click / pass on the command line):
   colour scale, axis colour, panels/traces and "At cursor" energies;
 * **Details and notes** — title, customer, reference, operator, date, a free
   text summary and a letterhead logo;
-* **Figures** — any number of named looks with captions (*Add current view…*,
-  then recall, update, rename, reorder or delete them);
+* **Figures** — any number of named looks with captions. The quickest way to
+  make one: **right-click the plot → *Save this view as a figure…*** (also
+  Workbook → *Save current view as a figure…*, or *Add current view…* in the
+  Figures dialog). A figure keeps the **zoom** of every panel you had zoomed,
+  so the report page, slides, Word and the hand-over PNGs show that range;
+  recall, update, rename, reorder or delete them in the dialog;
 * a snapshot of the acquisition metadata and a preview image.
 
 Save with **Ctrl+S**; the title bar shows `*` for unsaved changes and closing

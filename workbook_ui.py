@@ -292,11 +292,7 @@ class FiguresDialog(tk.Toplevel):
                                       initialvalue=f"Figure {n}", parent=self)
         if not name or not name.strip():
             return
-        ids = [f["id"] for f in self.app.figures]
-        self.app.figures.append({"id": wbk.new_id(ids, "g"),
-                                 "name": name.strip(), "caption": "",
-                                 "state": self.app.capture_state()})
-        self.app.wb_touch()
+        self.app.add_figure(name.strip())         # the look and its zoom
         self._fill(select=len(self.app.figures) - 1)
         self.caption.focus_set()
 
@@ -319,7 +315,7 @@ class FiguresDialog(tk.Toplevel):
         if messagebox.askyesno("Update figure",
                                f"Replace the saved look of '{name}' with the "
                                f"current view?", parent=self):
-            self.app.figures[i]["state"] = self.app.capture_state()
+            self.app.figures[i]["state"] = self.app.current_figure_state()
             self.app.wb_touch()
 
     def _rename(self):

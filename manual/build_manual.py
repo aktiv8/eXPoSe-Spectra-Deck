@@ -517,6 +517,26 @@ def build_chapters(doc):
         "samples’ C 1s different views. Panel views are saved in the workbook "
         "and in each saved figure, so reports show them as you set them."
     )
+    h2(doc, "Zooming, and saving what you see as a figure")
+    para(doc,
+        "The magnifier and hand buttons under the plot zoom and pan; the tool "
+        "stays switched on after a zoom until you press its button again. "
+        "With it on, a drag still zooms or pans, but a plain click now works "
+        "as usual: right-click opens the panel menu (so Identify peaks… and "
+        "Nearby lines can be used on the zoomed view) and, with Identify "
+        "open, a left click adds the element line at the clicked energy."
+    )
+    para(doc,
+        "To keep what you are looking at, right-click the plot and choose "
+        "“Save this view as a figure…” (right-click outside the panels, or "
+        "use Workbook → “Save current view as a figure…”, if you prefer the "
+        "menu). Give it a name and it appears in Workbook → Figures…, where "
+        "you can add a caption. A figure remembers the zoom of each panel you "
+        "had zoomed, so the report, the slides, the Word document and the "
+        "hand-over images show that energy range; panels you did not zoom "
+        "keep their full range, and a figure saved before this existed keeps "
+        "whatever zoom is on screen when you recall it."
+    )
     add_figure(doc, "A stack view: several spectra of one core level, offset vertically.",
               image_path=os.path.join(FIGDIR, "fig_stack.png"))
     add_figure(doc, "A Waterfall 3D view of a depth profile.",
