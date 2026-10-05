@@ -985,6 +985,135 @@
     return rows.join('\r\n') + '\r\n';
   };
 
+  /* --------------------------------------------------- Kratos imaging maps */
+  /* A Kratos imaging map is one single-energy image (a one-channel map, see
+     kratosmap.py). These mirror kratosmap.py so the page can blur, compare and
+     list the images; tests compare them with Python on the same maps. The
+     pixels decode with V.decodeMap and rectMask / pixelAt / colourRange /
+     mapCsv above work on them unchanged. */
+  V.imageCounts = function (m, data) {           /* counts as recorded, one per pixel */
+    var out = new Float64Array(m.nx * m.ny), i;
+    for (i = 0; i < out.length; i++) out[i] = data[i] * m.q;
+    return out;
+  };
+  function roundHalfEven(x) {                    /* Python's round(), so the kernel is the same */
+    var f = Math.floor(x), d = x - f;
+    if (d < 0.5) return f;
+    if (d > 0.5) return f + 1;
+    return f % 2 === 0 ? f : f + 1;
+  }
+  function reflect(i, n) {                       /* numpy.pad(mode='reflect') index */
+    if (n === 1) return 0;
+    var period = 2 * (n - 1);
+    i = ((i % period) + period) % period;
+    return i < n ? i : period - i;
+  }
+  /* Gaussian blur by sigma pixels (separable, edges mirrored); the image
+     itself when sigma is not positive (kratosmap.blur) */
+  V.imageBlur = function (img, nx, ny, sigma) {
+    if (!sigma || sigma <= 0) return Float64Array.from(img);
+    var r = Math.max(1, roundHalfEven(3 * sigma)), k = new Float64Array(2 * r + 1), sum = 0, j, x, y;
+    for (j = -r; j <= r; j++) { k[j + r] = Math.exp(-0.5 * Math.pow(j / sigma, 2)); sum += k[j + r]; }
+    for (j = 0; j < k.length; j++) k[j] /= sum;
+    var tmp = new Float64Array(nx * ny), out = new Float64Array(nx * ny), acc;
+    for (y = 0; y < ny; y++) {                   /* along rows (x) */
+      for (x = 0; x < nx; x++) {
+        acc = 0;
+        for (j = -r; j <= r; j++) acc += k[j + r] * img[y * nx + reflect(x + j, nx)];
+        tmp[y * nx + x] = acc;
+      }
+    }
+    for (y = 0; y < ny; y++) {                   /* along columns (y) */
+      for (x = 0; x < nx; x++) {
+        acc = 0;
+        for (j = -r; j <= r; j++) acc += k[j + r] * tmp[reflect(y + j, ny) * nx + x];
+        out[y * nx + x] = acc;
+      }
+    }
+    return out;
+  };
+  /* how sharp an image is: mean squared gradient of the blurred image over the
+     mean squared, so brightness alone does not move it (kratosmap.focus_metric) */
+  V.imageFocus = function (img, nx, ny, sigma) {
+    var b = V.imageBlur(img, nx, ny, sigma === undefined ? 1.5 : sigma), n = nx * ny, m = 0, i, x, y;
+    for (i = 0; i < n; i++) m += b[i];
+    m /= n;
+    if (!(m > 0)) return 0;
+    var acc = 0, gx, gy;
+    for (y = 0; y < ny; y++) {
+      for (x = 0; x < nx; x++) {
+        gx = nx < 2 ? 0 : x === 0 ? b[y * nx + 1] - b[y * nx] : x === nx - 1 ? b[y * nx + x] - b[y * nx + x - 1]
+          : (b[y * nx + x + 1] - b[y * nx + x - 1]) / 2;
+        gy = ny < 2 ? 0 : y === 0 ? b[nx + x] - b[x] : y === ny - 1 ? b[y * nx + x] - b[(y - 1) * nx + x]
+          : (b[(y + 1) * nx + x] - b[(y - 1) * nx + x]) / 2;
+        acc += gx * gx + gy * gy;
+      }
+    }
+    return acc / n / (m * m);
+  };
+  /* mean counts per pixel of each frame's counts over a 0/1 mask (the whole
+     image when null); NaN for a mask of another size or an empty one */
+  V.imageRoiMeans = function (countsList, mask) {
+    return countsList.map(function (a) {
+      var i, s = 0, n = 0;
+      if (mask) {
+        if (mask.length !== a.length) return NaN;
+        for (i = 0; i < a.length; i++) if (mask[i]) { s += a[i]; n++; }
+        return n ? s / n : NaN;
+      }
+      for (i = 0; i < a.length; i++) s += a[i];
+      return a.length ? s / a.length : NaN;
+    });
+  };
+  /* the frames to step through: all, those at the current frame's energy, or
+     at its stage position (X and Y within 1 µm); never an empty list */
+  V.imageSelect = function (frames, cur, how) {
+    var out = frames;
+    if (how === 'energy' && cur.ke !== null && cur.ke !== undefined) {
+      out = frames.filter(function (f) { return f.ke === cur.ke; });
+    } else if (how === 'position' && cur.stage) {
+      out = frames.filter(function (f) {
+        return f.stage && Math.abs(f.stage[0] - cur.stage[0]) < 1e-3 && Math.abs(f.stage[1] - cur.stage[1]) < 1e-3;
+      });
+    }
+    return out.length ? out.slice() : frames.slice();
+  };
+  /* which frames to open on: the same position when the stage height varies by
+     more than 1 µm among them (a focus series), else the same energy, else all */
+  V.imageDefaultFilter = function (frames, cur) {
+    var here = V.imageSelect(frames, cur, 'position');
+    var zs = here.map(function (f) { return f.z_um; }).filter(function (z) { return z !== null && z !== undefined; });
+    if (here.length > 1 && zs.length && Math.max.apply(null, zs) - Math.min.apply(null, zs) > 1.0) return 'position';
+    return V.imageSelect(frames, cur, 'energy').length > 1 ? 'energy' : 'all';
+  };
+  function isoSeconds(t) {                       /* 'YYYY-MM-DDTHH:MM:SS' -> seconds (no time zone) */
+    var m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})/.exec(t || '');
+    return m ? Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]) / 1000 : null;
+  }
+  /* what to plot a measure against: the stage height when it varies by more
+     than 1 µm, else minutes from the first frame, else the frame number */
+  V.imageSeriesAxis = function (frames) {
+    var zs = frames.map(function (f) { return f.z_um; });
+    if (zs.every(function (z) { return z !== null && z !== undefined; }) &&
+        Math.max.apply(null, zs) - Math.min.apply(null, zs) > 1.0) return ['Stage Z (um)', zs.map(Number)];
+    var ts = frames.map(function (f) { return isoSeconds(f.when); });
+    if (ts.every(function (t) { return t !== null; }) && ts[ts.length - 1] !== ts[0]) {
+      return ['Minutes from first', ts.map(function (t) { return (t - ts[0]) / 60; })];
+    }
+    return ['Frame', frames.map(function (f, i) { return i + 1; })];
+  };
+  /* the table of the frames shown (counts as recorded) */
+  V.imageTableCsv = function (frames, means, sharps) {
+    var head = ['frame', 'map', 'position', 'binding_energy_eV', 'kinetic_energy_eV', 'stage_z_um', 'time', 'dwell_s',
+                'mean_counts_per_pixel', 'sharpness'], rows = [head.join(',')];
+    var num = function (v) { return v === null || v === undefined || v !== v ? '' : String(+(+v).toPrecision(9)); };
+    frames.forEach(function (f, i) {
+      rows.push([i + 1, V.csvField(f.name), V.csvField(f.position || ''), num(f.be), num(f.ke), num(f.z_um),
+                 (f.when || '').replace('T', ' '), num(f.dwell), num(means[i]), num(sharps[i])].join(','));
+    });
+    return rows.join('\r\n') + '\r\n';
+  };
+
   G.XPSViewer = V;
   if (typeof module !== 'undefined' && module.exports) module.exports = V;
   if (typeof document === 'undefined') return;
@@ -1001,7 +1130,10 @@
             ident: { on: false, win: 2, auto: false, secondary: false, auger: false, split: false,
                     clicked: null, extra: {} },
             M: { id: null, data: null, energy: null, total: null, win: null, mask: null, count: 0,
-                 scale: 'Viridis', bg: false, overlay: false, alpha: 0.65, loading: false, drag: null } };
+                 scale: 'Viridis', bg: false, overlay: false, alpha: 0.65, loading: false, drag: null },
+            I: { id: null, filter: 'all', scale: 'Viridis', common: false, sigma: 0, plot: 'mean', mask: null, roi: null,
+                 count: 0, drag: null, counts: {}, sharp: {}, loading: false },
+            imgById: {} };
   var $ = function (id) { return document.getElementById(id); };
 
   function h(tag, attrs) {
@@ -1833,7 +1965,7 @@
   /* ---------------------------------------------------------------- tabs */
   var TABS = [['plot', 'Spectra'], ['quant', 'Quantification'], ['depth', 'Depth profile'], ['figures', 'Figures'], ['meta', 'Metadata'],
               ['notes', 'Notes'], ['methods', 'Methods'], ['holder', 'Holder'],
-              ['cameras', 'Camera images'], ['maps', 'SnapMaps']];
+              ['cameras', 'Camera images'], ['maps', 'SnapMaps'], ['imaging', 'Image maps']];
   function availableTabs() {
     var d = S.data;
     return TABS.filter(function (t) {
@@ -1844,6 +1976,7 @@
       if (t[0] === 'holder') return d.holders.length > 0;
       if (t[0] === 'cameras') return (d.cameras || []).length > 0;
       if (t[0] === 'maps') return (d.maps || []).length > 0;
+      if (t[0] === 'imaging') return (d.imaging || []).length > 0;
       if (t[0] === 'methods') return !!d.methods.trim();
       return true;
     });
@@ -1874,6 +2007,7 @@
     else if (S.tab === 'holder') drawHolder();
     else if (S.tab === 'cameras') drawCamera();
     else if (S.tab === 'maps') { if (S.M.id) drawMapView(); else if ((S.data.maps || []).length) openMap(S.data.maps[0].id); }
+    else if (S.tab === 'imaging') { if (S.I.id) drawImaging(); else if ((S.data.imaging || []).length) openImage(S.data.imaging[0].id, true); }
   }
 
   /* ------------------------------------------------------- quantification tab */
@@ -2749,6 +2883,298 @@
     }
   }
 
+  /* ----------------------------------------------------------- image maps */
+  /* Kratos imaging maps: single-energy images, stepped through one at a time.
+     The pixel size is approximate (the file does not record the field of view,
+     see kratosmap.py) and the page says so wherever a µm value shows. The
+     smoothing only changes the picture: means, sharpness and CSVs use the
+     counts as recorded. */
+  var I_FILTERS = [['position', 'Same stage position'], ['energy', 'Same energy'], ['all', 'All maps']];
+  var I_PLOTS = [['mean', 'Mean counts per pixel'], ['sharp', 'Sharpness (focus)']];
+  var I_BARS = [10, 20, 50, 100, 200, 500];
+  function currentImage() { return S.imgById[S.I.id] || null; }
+  function imagesShown() {
+    var all = S.data.imaging || [], cur = currentImage();
+    return cur ? V.imageSelect(all, cur, S.I.filter) : all.slice();
+  }
+  /* decode what is not yet decoded; resolves when every listed image has its counts */
+  function ensureCounts(list) {
+    return Promise.all(list.map(function (m) {
+      if (S.I.counts[m.id]) return null;
+      return V.decodeMap(m).then(function (data) { S.I.counts[m.id] = V.imageCounts(m, data); });
+    }));
+  }
+  function sharpOf(m) {
+    var I = S.I;
+    if (I.sharp[m.id] === undefined) I.sharp[m.id] = V.imageFocus(I.counts[m.id], m.nx, m.ny, 1.5);
+    return I.sharp[m.id];
+  }
+  function blurred(m) {
+    var I = S.I, key = m.id + '|' + I.sigma, c = I.blurCache;
+    if (!c || c.key !== key) I.blurCache = c = { key: key, img: V.imageBlur(I.counts[m.id], m.nx, m.ny, I.sigma) };
+    return c.img;
+  }
+  function renderImaging() {
+    var box = clear($('tab-imaging')), I = S.I, all = S.data.imaging || [];
+    if (!all.length) return;
+    var filt = h('select', { id: 'imgFilter', 'aria-label': 'Which maps to step through' });
+    I_FILTERS.forEach(function (f) { filt.appendChild(h('option', { value: f[0], text: f[1] })); });
+    var scaleSel = h('select', { id: 'imgScale', 'aria-label': 'Colour scale' });
+    Object.keys(V.SCALES).forEach(function (n) { scaleSel.appendChild(h('option', { value: n, text: n })); });
+    var common = h('input', { type: 'checkbox', id: 'imgCommon' });
+    var sig = h('input', { type: 'range', id: 'imgSigma', min: '0', max: '4', step: '0.25', value: String(I.sigma), 'aria-label': 'Smoothing in pixels' });
+    var sigText = h('span', { id: 'imgSigmaText', class: 'muted', text: '0' });
+    var plotSel = h('select', { id: 'imgPlot', 'aria-label': 'What to plot' });
+    I_PLOTS.forEach(function (f) { plotSel.appendChild(h('option', { value: f[0], text: f[1] })); });
+    var whole = h('button', { type: 'button', text: 'Whole image', title: 'Clear the chosen area' });
+    var csvMap = h('button', { type: 'button', text: 'Map CSV' }), csvTab = h('button', { type: 'button', text: 'Table CSV' });
+    box.appendChild(h('div', { class: 'controls' },
+      h('label', { class: 'field' }, 'Show', filt), h('label', { class: 'field' }, 'Colours', scaleSel),
+      h('label', { class: 'field' }, common, 'Same colour range'), h('label', { class: 'field' }, 'Smooth (px)', sig, sigText),
+      h('label', { class: 'field' }, 'Plot', plotSel), whole, csvMap, csvTab));
+    var prev = h('button', { type: 'button', text: '◀', 'aria-label': 'Previous map' }), next = h('button', { type: 'button', text: '▶', 'aria-label': 'Next map' });
+    var slide = h('input', { type: 'range', id: 'imgSlide', min: '0', max: '0', step: '1', value: '0', 'aria-label': 'Map number' });
+    var frameSel = h('select', { id: 'imgFrame', 'aria-label': 'Map' });
+    box.appendChild(h('div', { class: 'controls img-nav' }, prev, slide, next, frameSel));
+    box.appendChild(h('div', { class: 'maps-view' },
+      h('canvas', { id: 'imgCanvas', 'aria-label': 'Imaging map', role: 'img' }),
+      h('canvas', { id: 'imgSeries', 'aria-label': 'Measure against the maps shown', role: 'img' })));
+    box.appendChild(h('p', { class: 'map-read muted', id: 'imgRead' }));
+    box.appendChild(h('p', { class: 'muted small', text: S.data.imaging_note || '' }));
+    box.appendChild(h('p', { class: 'muted small', text: 'Drag a box (or click a pixel) on the image for that area’s mean counts on the right. ' +
+      'Smoothing, colours and the colour range change only the picture; the means, the sharpness and the CSVs are the counts as recorded.' }));
+    box.appendChild(h('details', { class: 'img-meta' }, h('summary', { text: 'Acquisition details of this map' }), h('dl', { id: 'imgMeta' })));
+    filt.addEventListener('change', function () { I.filter = filt.value; reshow(); });
+    scaleSel.addEventListener('change', function () { I.scale = scaleSel.value; drawImaging(); });
+    common.addEventListener('change', function () { I.common = common.checked; drawImaging(); });
+    sig.addEventListener('input', function () { I.sigma = +sig.value; drawImaging(); });
+    plotSel.addEventListener('change', function () { I.plot = plotSel.value; drawImaging(); });
+    whole.addEventListener('click', function () { I.mask = null; I.roi = null; drawImaging(); });
+    prev.addEventListener('click', function () { stepImage(-1); });
+    next.addEventListener('click', function () { stepImage(1); });
+    slide.addEventListener('input', function () { var sh = imagesShown(); if (sh[+slide.value]) openImage(sh[+slide.value].id); });
+    frameSel.addEventListener('change', function () { var sh = imagesShown(); if (sh[frameSel.selectedIndex]) openImage(sh[frameSel.selectedIndex].id); });
+    csvMap.addEventListener('click', function () {
+      var m = currentImage();
+      if (m && I.counts[m.id]) saveText((m.sample + ' ' + m.label).replace(/[^\w.\- ]+/g, '_') + '.csv',
+        '# ' + m.sample + ' ' + m.label + ': counts as recorded; pixel size approximate (not in the file)\r\n' + V.mapCsv(m, I.counts[m.id]));
+    });
+    csvTab.addEventListener('click', function () {
+      var sh = imagesShown();
+      ensureCounts(sh).then(function () {
+        var means = V.imageRoiMeans(sh.map(function (m) { return I.counts[m.id]; }), I.mask);
+        saveText('image maps.csv', V.imageTableCsv(sh, means, sh.map(sharpOf)));
+      });
+    });
+    var mc = $('imgCanvas');
+    mc.addEventListener('mousedown', function (e) { var p = imagePoint(e); if (p) I.drag = { a: p, b: p }; });
+    mc.addEventListener('mousemove', function (e) { imageHover(e); });
+    G.addEventListener('mousemove', function (e) {
+      if (!I.drag) return;
+      var p = imagePoint(e, true);
+      if (p) { I.drag.b = p; drawImageLater(); }
+    });
+    G.addEventListener('mouseup', function () {
+      var d = I.drag, m = currentImage();
+      if (!d) return;
+      I.drag = null;
+      if (m && I.counts[m.id]) {
+        var one = Math.abs(d.b[0] - d.a[0]) < Math.abs(m.dx) / 2 && Math.abs(d.b[1] - d.a[1]) < Math.abs(m.dy) / 2, r;
+        if (one) {
+          var px = V.pixelAt(m, d.a[0], d.a[1]);
+          if (!px) { drawImaging(); return; }
+          var cx = m.x0 + px[0] * m.dx, cy = m.y0 + px[1] * m.dy;
+          r = V.rectMask(m, cx, cy, cx, cy);
+          I.roi = [cx - m.dx / 2, cy - m.dy / 2, cx + m.dx / 2, cy + m.dy / 2];
+        } else {
+          r = V.rectMask(m, d.a[0], d.a[1], d.b[0], d.b[1]);
+          I.roi = [Math.min(d.a[0], d.b[0]), Math.min(d.a[1], d.b[1]), Math.max(d.a[0], d.b[0]), Math.max(d.a[1], d.b[1])];
+        }
+        if (r.count) { I.mask = r.mask; I.count = r.count; } else I.roi = I.mask ? I.roi : null;
+      }
+      drawImaging();
+    });
+  }
+  var imgJob = 0;
+  function drawImageLater() {
+    if (imgJob) return;
+    imgJob = G.requestAnimationFrame(function () { imgJob = 0; drawImaging(); });
+  }
+  /* open an image (and, the first time, on the filter that suits the series) */
+  function openImage(id, first) {
+    var I = S.I, m = S.imgById[id];
+    if (!m) return;
+    if (first) I.filter = V.imageDefaultFilter(S.data.imaging, m);
+    I.id = id; I.loading = true;
+    if (I.mask && I.mask.length !== m.nx * m.ny) { I.mask = null; I.roi = null; }
+    drawImaging();
+    ensureCounts(imagesShown().concat([m])).then(function () {
+      if (I.id !== id) return;
+      I.loading = false;
+      drawImaging();
+    }).catch(function (err) {
+      if (I.id !== id) return;
+      I.loading = false;
+      $('imgRead').textContent = 'This map could not be decoded (' + (err && err.message ? err.message : err) + ').';
+    });
+  }
+  function reshow() {                              /* the filter changed: stay on the current map */
+    var sh = imagesShown(), m = currentImage();
+    if (m) openImage(m.id);
+    else if (sh.length) openImage(sh[0].id);
+  }
+  function stepImage(d) {
+    var sh = imagesShown(), m = currentImage(), i = sh.indexOf(m);
+    if (i < 0) return;
+    i = Math.max(0, Math.min(sh.length - 1, i + d));
+    openImage(sh[i].id);
+  }
+  function imagePoint(e, clampIt) {
+    var cv = $('imgCanvas'), lay = cv._lay;
+    if (!lay || !S.I.counts[S.I.id]) return null;
+    var r = cv.getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+    var inside = x >= lay.L && x <= lay.L + lay.pw && y >= lay.T && y <= lay.T + lay.ph;
+    if (!inside && !clampIt) return null;
+    x = Math.max(lay.L, Math.min(lay.L + lay.pw, x)); y = Math.max(lay.T, Math.min(lay.T + lay.ph, y));
+    return [lay.vx0 + (x - lay.L) / lay.pw * (lay.vx1 - lay.vx0), lay.vy0 + (y - lay.T) / lay.ph * (lay.vy1 - lay.vy0)];
+  }
+  function imageHover(e) {
+    var m = currentImage(), p = imagePoint(e);
+    if (!m || !p || S.I.drag) return;
+    var px = V.pixelAt(m, p[0], p[1]);
+    if (px) $('imgRead').textContent = 'x ' + Math.round(p[0]) + ' µm   y ' + Math.round(p[1]) + ' µm (approx.)    pixel (' + px[0] + ', ' + px[1] +
+      ')    counts ' + V.fmtY(S.I.counts[m.id][px[1] * m.nx + px[0]]);
+  }
+  function syncImageControls(shown, m) {
+    var I = S.I, i = shown.indexOf(m), fs = $('imgFrame');
+    $('imgFilter').value = I.filter; $('imgScale').value = I.scale; $('imgCommon').checked = I.common;
+    $('imgSigma').value = String(I.sigma); $('imgSigmaText').textContent = String(I.sigma); $('imgPlot').value = I.plot;
+    var sl = $('imgSlide');
+    sl.max = String(Math.max(0, shown.length - 1)); sl.value = String(Math.max(0, i)); sl.disabled = shown.length < 2;
+    var key = shown.map(function (f) { return f.id; }).join(',');
+    if (fs._key !== key) {
+      clear(fs);
+      shown.forEach(function (f, k) { fs.appendChild(h('option', { value: f.id, text: (k + 1) + '. ' + f.label })); });
+      fs._key = key;
+    }
+    fs.selectedIndex = Math.max(0, i);
+    var dl = clear($('imgMeta')), meta = m.meta || {};
+    Object.keys(meta).forEach(function (k) {
+      if (meta[k] === '' || meta[k] === null || meta[k] === undefined) return;
+      dl.appendChild(h('dt', { text: k })); dl.appendChild(h('dd', { text: String(meta[k]) }));
+    });
+  }
+  function drawImaging() {
+    var m = currentImage(), mc = $('imgCanvas'), sc = $('imgSeries'), I = S.I;
+    if (!m || !mc) return;
+    var shown = imagesShown();
+    syncImageControls(shown, m);
+    var C = colours(), W = mc.parentNode.clientWidth || 900, half = Math.max(280, (W - 12) / 2);
+    if (G.matchMedia && G.matchMedia('(max-width: 820px)').matches) half = Math.max(280, W);   /* stacked */
+    var ready = shown.every(function (f) { return I.counts[f.id]; });
+    if (!I.counts[m.id]) {
+      [mc, sc].forEach(function (cv) {
+        var ctx = sizeCanvas(cv, half, 200);
+        ctx.fillStyle = C.bg; ctx.fillRect(0, 0, half, 200);
+        ctx.fillStyle = C.muted; ctx.font = '13px system-ui, sans-serif'; ctx.textAlign = 'center';
+        ctx.fillText(I.loading ? 'Decoding the map…' : '', half / 2, 100);
+      });
+      return;
+    }
+    var img = blurred(m), range;
+    if (I.common && ready) {
+      var all = [];
+      shown.forEach(function (f) { var b = V.imageBlur(I.counts[f.id], f.nx, f.ny, I.sigma); for (var k = 0; k < b.length; k++) all.push(b[k]); });
+      range = V.colourRange(all);
+    } else range = V.colourRange(img);
+    var lo = range[0], hi = range[1];
+    var vx0 = m.x0 - m.dx / 2, vx1 = m.x0 + (m.nx - 0.5) * m.dx, vy0 = m.y0 - m.dy / 2, vy1 = m.y0 + (m.ny - 0.5) * m.dy;
+    var L = 52, T = 26, B = 32, R = 64, pw = half - L - R, ph = pw * (vy1 - vy0) / (vx1 - vx0), H = ph + T + B;
+    var ctx = sizeCanvas(mc, half, H), sx = pw / (vx1 - vx0), sy = ph / (vy1 - vy0);
+    var X = function (x) { return L + (x - vx0) * sx; }, Y = function (y) { return T + (y - vy0) * sy; };
+    mc._lay = { L: L, T: T, pw: pw, ph: ph, vx0: vx0, vx1: vx1, vy0: vy0, vy1: vy1 };
+    var off = document.createElement('canvas');
+    off.width = m.nx; off.height = m.ny;
+    var octx = off.getContext('2d'), id = octx.createImageData(m.nx, m.ny), i;
+    for (i = 0; i < img.length; i++) {
+      var c3 = V.scaleColour(I.scale, (img[i] - lo) / (hi - lo));
+      id.data[4 * i] = c3[0]; id.data[4 * i + 1] = c3[1]; id.data[4 * i + 2] = c3[2]; id.data[4 * i + 3] = 255;
+    }
+    octx.putImageData(id, 0, 0);
+    ctx.fillStyle = C.bg; ctx.fillRect(0, 0, half, H);
+    ctx.save(); ctx.beginPath(); ctx.rect(L, T, pw, ph); ctx.clip();
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(off, X(vx0), Y(vy0), (vx1 - vx0) * sx, (vy1 - vy0) * sy);
+    var roi = I.drag ? [Math.min(I.drag.a[0], I.drag.b[0]), Math.min(I.drag.a[1], I.drag.b[1]), Math.max(I.drag.a[0], I.drag.b[0]), Math.max(I.drag.a[1], I.drag.b[1])] : I.roi;
+    if (roi) { ctx.setLineDash([5, 3]); ctx.lineWidth = 1.6; ctx.strokeStyle = C.accent; ctx.strokeRect(X(roi[0]), Y(roi[1]), (roi[2] - roi[0]) * sx, (roi[3] - roi[1]) * sy); ctx.setLineDash([]); }
+    var want = (vx1 - vx0) / 5, bar = I_BARS.reduce(function (a, b) { return Math.abs(b - want) < Math.abs(a - want) ? b : a; }, I_BARS[0]);
+    var bx = X(vx0) + 0.05 * pw, by = T + ph - 0.07 * ph;      /* scale bar, bottom left */
+    ctx.lineWidth = 3; ctx.strokeStyle = '#fff'; ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + bar * sx, by); ctx.stroke();
+    ctx.font = '11px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
+    ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,0.65)'; ctx.strokeText(bar + ' µm (approx.)', bx + bar * sx / 2, by - 4);
+    ctx.fillStyle = '#fff'; ctx.fillText(bar + ' µm (approx.)', bx + bar * sx / 2, by - 4);
+    ctx.restore();
+    ctx.strokeStyle = C.muted; ctx.lineWidth = 1; ctx.strokeRect(L, T, pw, ph);
+    ctx.fillStyle = C.muted; ctx.font = '11px system-ui, sans-serif'; ctx.textBaseline = 'top'; ctx.textAlign = 'center';
+    V.niceTicks(vx0, vx1, 5).forEach(function (t) { ctx.fillText(String(t), X(t), T + ph + 4); });
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    V.niceTicks(vy0, vy1, 5).forEach(function (t) { ctx.fillText(String(t), L - 5, Y(t)); });
+    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.fillStyle = C.fg;
+    ctx.fillText('X (µm, approx.)', L + pw / 2, H - 1);
+    ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+    ctx.fillText(m.label, L, 4);
+    for (var s = 0; s < 64; s++) {                                   /* colour bar */
+      var cc = V.scaleColour(I.scale, 1 - s / 63);
+      ctx.fillStyle = V.rgbToHex(cc); ctx.fillRect(L + pw + 12, T + ph * s / 64, 12, ph / 64 + 1);
+    }
+    ctx.fillStyle = C.muted; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText(V.fmtY(hi), L + pw + 28, T);
+    ctx.textBaseline = 'bottom'; ctx.fillText(V.fmtY(lo), L + pw + 28, T + ph);
+    drawImageSeries(sc, half, H, C, shown, m, ready);
+  }
+  function drawImageSeries(cv, W, H, C, shown, m, ready) {
+    var I = S.I, ctx = sizeCanvas(cv, W, H), L = 62, R = 14, T = 26, B = 36, pw = W - L - R, ph = H - T - B, i;
+    ctx.fillStyle = C.bg; ctx.fillRect(0, 0, W, H);
+    ctx.font = '12px system-ui, sans-serif'; ctx.textAlign = 'center'; ctx.fillStyle = C.fg; ctx.textBaseline = 'top';
+    ctx.fillText(shown.length + ' map' + (shown.length === 1 ? '' : 's') + ' — ' +
+      I_FILTERS.filter(function (f) { return f[0] === I.filter; })[0][1].toLowerCase(), L + pw / 2, 4);
+    if (shown.length < 2) {
+      ctx.fillStyle = C.muted; ctx.textBaseline = 'middle'; ctx.fillText('one map: nothing to compare', W / 2, H / 2);
+      return;
+    }
+    if (!ready) { ctx.fillStyle = C.muted; ctx.textBaseline = 'middle'; ctx.fillText('Decoding the maps…', W / 2, H / 2); return; }
+    var ax = V.imageSeriesAxis(shown), xs = ax[1], ys, ylab;
+    if (I.plot === 'sharp') { ys = shown.map(sharpOf); ylab = 'Sharpness (a.u.)'; }
+    else {
+      ys = V.imageRoiMeans(shown.map(function (f) { return I.counts[f.id]; }), I.mask);
+      ylab = 'Mean counts per pixel, ' + (I.mask ? 'area' : 'whole image');
+    }
+    var xlo = Math.min.apply(null, xs), xhi = Math.max.apply(null, xs), good = ys.filter(function (v) { return v === v; });
+    var ylo = Math.min.apply(null, good), yhi = Math.max.apply(null, good);
+    if (xhi === xlo) { xlo -= 1; xhi += 1; }
+    var padY = (yhi - ylo) * 0.08 || Math.abs(yhi) * 0.1 || 1; ylo -= padY; yhi += padY;
+    var X = function (v) { return L + (v - xlo) / (xhi - xlo) * pw; }, Y = function (v) { return T + ph - (v - ylo) / (yhi - ylo) * ph; };
+    ctx.strokeStyle = C.muted; ctx.lineWidth = 1; ctx.strokeRect(L, T, pw, ph);
+    ctx.fillStyle = C.muted; ctx.font = '11px system-ui, sans-serif'; ctx.textBaseline = 'top'; ctx.textAlign = 'center';
+    V.niceTicks(xlo, xhi, 6).forEach(function (t) { ctx.fillText(String(t), X(t), T + ph + 4); });
+    ctx.textAlign = 'right'; ctx.textBaseline = 'middle';
+    V.niceTicks(ylo, yhi, 5).forEach(function (t) { ctx.fillText(String(t), L - 5, Y(t)); });
+    ctx.textAlign = 'center'; ctx.textBaseline = 'bottom'; ctx.fillStyle = C.fg; ctx.fillText(ax[0], L + pw / 2, H - 1);
+    ctx.save(); ctx.translate(12, T + ph / 2); ctx.rotate(-Math.PI / 2); ctx.textBaseline = 'top'; ctx.fillText(ylab, 0, 0); ctx.restore();
+    var order = xs.map(function (v, k) { return k; });
+    if (ax[0].indexOf('Z') >= 0) order.sort(function (a, b) { return xs[a] - xs[b]; });   /* a focus curve is read along Z */
+    ctx.strokeStyle = C.accent; ctx.lineWidth = 1.6; ctx.beginPath();
+    var started = false;
+    order.forEach(function (k) {
+      if (ys[k] !== ys[k]) return;
+      if (!started) { ctx.moveTo(X(xs[k]), Y(ys[k])); started = true; } else ctx.lineTo(X(xs[k]), Y(ys[k]));
+    });
+    ctx.stroke();
+    ctx.fillStyle = C.accent;
+    for (i = 0; i < xs.length; i++) if (ys[i] === ys[i]) { ctx.beginPath(); ctx.arc(X(xs[i]), Y(ys[i]), 3, 0, 6.283); ctx.fill(); }
+    var cur = shown.indexOf(m);
+    if (cur >= 0 && ys[cur] === ys[cur]) { ctx.strokeStyle = C.fg; ctx.lineWidth = 1.6; ctx.beginPath(); ctx.arc(X(xs[cur]), Y(ys[cur]), 7, 0, 6.283); ctx.stroke(); }
+  }
+
   /* ------------------------------------------------------------ download */
   function downloadCsv() {
     var specs = S.specs.filter(function (s) { return S.ticked.has(s.id); });
@@ -2763,7 +3189,8 @@
     S.specs.forEach(function (s) { S.byId[s.id] = s; });
     (data.maps || []).forEach(function (m) { S.mapById[m.id] = m; });
     (data.cameras || []).forEach(function (c) { S.camById[c.id] = c; });
-    data.cameras = data.cameras || []; data.maps = data.maps || [];
+    data.cameras = data.cameras || []; data.maps = data.maps || []; data.imaging = data.imaging || [];
+    data.imaging.forEach(function (m) { S.imgById[m.id] = m; });
     var d = data.details;
     $('title').textContent = d.title || 'Experiment data browser';
     document.title = $('title').textContent;
@@ -2777,9 +3204,9 @@
     V.fitSource.csv = !!(data.fit_csv && data.fit_csv.default);
     $('fit-csv').checked = V.fitSource.csv;
     $('fit-csv-field').hidden = !data.fit_csv;
-    renderQuant(); renderFigures(); renderNotes(); renderMethods(); renderHolder(); renderMeta(); renderCameras(); renderMaps();
+    renderQuant(); renderFigures(); renderNotes(); renderMethods(); renderHolder(); renderMeta(); renderCameras(); renderMaps(); renderImaging();
     $('boot').hidden = true; $('app').hidden = false;
-    showTab('plot');
+    showTab(!S.specs.length && data.imaging.length ? 'imaging' : 'plot');   /* a file of images only opens on them */
     applyTheme();
 
     $('filter').addEventListener('input', function (e) { S.filter = e.target.value; applyFilter(); });
@@ -2834,7 +3261,7 @@
     if (G.ResizeObserver) {
       new G.ResizeObserver(function () { requestRender(); redrawTab(); }).observe($('panels'));
     } else G.addEventListener('resize', requestRender);
-    G.addEventListener('resize', function () { if (S.tab === 'cameras' || S.tab === 'maps') redrawTab(); });
+    G.addEventListener('resize', function () { if (S.tab === 'cameras' || S.tab === 'maps' || S.tab === 'imaging') redrawTab(); });
     /* start with something on screen: the first sample, all of its spectra */
     if (data.samples.length) {
       var first = data.samples[0];

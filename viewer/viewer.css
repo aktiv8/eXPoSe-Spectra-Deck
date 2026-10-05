@@ -125,7 +125,15 @@ table.grid th { background: var(--panel); color: var(--muted); }
 .maps-view canvas { display: block; width: 100%; background: var(--plot-bg); border: 1px solid var(--border); border-radius: 6px; }
 #mapCanvas { cursor: crosshair; }
 #specCanvas { cursor: col-resize; }
+#imgCanvas { cursor: crosshair; }
 .map-read { min-height: 20px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+.img-nav input[type="range"] { flex: 1 1 200px; min-width: 120px; }
+.img-nav select { max-width: 100%; }
+.img-meta { margin-top: 8px; }
+.img-meta summary { cursor: pointer; color: var(--muted); }
+.img-meta dl { display: grid; grid-template-columns: max-content 1fr; gap: 2px 14px; margin: 8px 0 0; font-size: 13px; }
+.img-meta dt { color: var(--muted); }
+.img-meta dd { margin: 0; overflow-wrap: anywhere; }
 .swatch-bar { display: inline-block; width: 90px; height: 10px; border-radius: 3px; vertical-align: middle; border: 1px solid var(--border); }
 .foot { padding: 10px 20px 24px; }
 .note { margin: 6px 0; }

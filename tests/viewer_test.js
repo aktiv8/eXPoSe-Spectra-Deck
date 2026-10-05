@@ -516,6 +516,54 @@ function near(a, b, msg, tol) {
     check(bad, 'a map of the wrong size is an error');
   }
 
+  // ---- Kratos imaging maps: the page's maths against kratosmap.py on the same maps ----
+  if (fx.imaging) {
+    const im = fx.imaging, d2 = await V.decode(im.payload_b64), maps = d2.imaging;
+    eq(maps.length, im.counts.length, 'image map count');
+    eq(maps[0].n, 1, 'one channel');
+    const counts = [];
+    for (const m of maps) counts.push(V.imageCounts(m, await V.decodeMap(m)));
+    counts.forEach((c, i) => eq(Array.from(c), im.counts[i], 'counts of map ' + i + ' are exactly the recorded ones'));
+    const m0 = maps[0], nx = m0.nx, ny = m0.ny;
+    Object.keys(im.blur).forEach((sg) => {
+      const b = V.imageBlur(counts[0], nx, ny, +sg);
+      let worst = 0;
+      for (let i = 0; i < b.length; i++) worst = Math.max(worst, Math.abs(b[i] - im.blur[sg][i]));
+      check(worst < 1e-9, 'blur sigma ' + sg + ' (worst ' + worst + ')');
+    });
+    Object.keys(im.focus).forEach((sg) => counts.forEach((c, i) => {
+      near(V.imageFocus(c, nx, ny, +sg), im.focus[sg][i], 'sharpness of map ' + i + ' at sigma ' + sg, 1e-9);
+    }));
+    eq(V.imageFocus(new Float64Array(nx * ny), nx, ny), 0, 'sharpness of an empty image');
+    const arr = (a) => a.map((v) => (v === null ? NaN : v));
+    const mean = V.imageRoiMeans(counts, Uint8Array.from(im.mask));
+    mean.forEach((v, i) => near(v, im.roi_means[i], 'area mean of map ' + i, 1e-9));
+    V.imageRoiMeans(counts, null).forEach((v, i) => near(v, im.whole_means[i], 'whole-image mean of map ' + i, 1e-9));
+    check(Number.isNaN(V.imageRoiMeans(counts, new Uint8Array(3))[0]), 'a mask of another size gives NaN');
+    check(Number.isNaN(V.imageRoiMeans(counts, new Uint8Array(nx * ny))[0]), 'an empty mask gives NaN');
+    Object.keys(im.select).forEach((k) => {
+      const [cur, how] = k.split('|');
+      eq(V.imageSelect(maps, maps[+cur], how).map((m) => maps.indexOf(m)), im.select[k], 'frames shown for ' + k);
+    });
+    maps.forEach((m, i) => eq(V.imageDefaultFilter(maps, m), im.default[i], 'default filter of map ' + i));
+    Object.keys(im.axes).forEach((k) => {
+      const a = im.axes[k], got = V.imageSeriesAxis(a.idx.map((i) => maps[i]));
+      eq(got[0], a.label, 'series axis label ' + k);
+      got[1].forEach((v, j) => near(v, a.x[j], 'series axis value ' + k + ' ' + j, 1e-9));
+    });
+    const csv = V.mapCsv(m0, counts[0]).trim().split('\r\n'), want = im.csv.trim().split('\n');
+    eq(csv.length, want.length, 'image CSV rows');
+    eq(csv[0], want[0], 'image CSV header');
+    for (let i = 1; i < want.length; i++) eq(csv[i].split(',').map(Number), want[i].split(',').map(Number), 'image CSV row ' + i);
+    const table = V.imageTableCsv(maps, mean, mean.map((_v, i) => i)).trim().split('\r\n');
+    eq(table.length, maps.length + 1, 'table CSV rows');
+    eq(table[0].split(',').length, 10, 'table CSV columns');
+    eq(table[1].split(',').slice(0, 4), ['1', 'Au 4f', 'P1', '83.91'], 'table CSV first row');
+    let bad = false;
+    try { await V.decodeMap(Object.assign({}, m0, { nx: nx + 1 })); } catch (err) { bad = true; }
+    check(bad, 'an image of the wrong size is an error');
+  }
+
   // ---- hostile text stays text: nothing in the pure half builds HTML ----
   const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer.js'), 'utf8');
   check(src.indexOf('innerHTML') < 0, 'viewer never uses innerHTML');

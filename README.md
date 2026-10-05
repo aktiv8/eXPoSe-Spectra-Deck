@@ -441,6 +441,17 @@ For an Avantage experiment it also holds the **camera images** and **SnapMaps**:
   in twos, then fours, and as a last resort the last maps are left out, and the
   dialog that reports the saved file says so.
 
+For Kratos data it also holds the **imaging maps** (single-energy images) in an
+**Image maps** tab, the same viewer as in the app: step through the maps (◀ ▶,
+the slider or the list), narrow them to the same stage position (a focus series,
+opened on by default when the stage height varies), the same energy or all of
+them, choose the colours, a shared colour range and a smoothing, drag a box (or
+click a pixel) for that area's mean counts, and see that mean, or the image
+sharpness, against stage height, time or frame number. *Map CSV* and *Table CSV*
+download the counts as recorded. The pixel size is approximate (see above) and the
+page says so. A file of images only opens on this tab. The pixels are stored as
+whole counts (exact), compressed: about 50 to 70 KB a map.
+
 ## Plot style
 
 **View → Plot style…** (or the *Style…* button under the plot controls) opens
@@ -648,8 +659,8 @@ It was measured by registering neighbouring images the stage had moved by a
 known distance (about 1.73 µm per pixel, a field of about 0.44 mm, on the
 Kratos Axis these files came from, in medium magnification; two pairs agreed to 0.1 %), and the
 viewer says "approx." wherever a µm value appears. A small rotation (about 4°)
-between the image and the stage axes is not applied. Imaging maps are not yet in
-the PDF, the slides or the data browser.
+between the image and the stage axes is not applied. Imaging maps are in the
+data browser (an **Image maps** tab) but not yet in the PDF or the slides.
 
 ## Depth profiles
 
@@ -670,8 +681,8 @@ in `CLAUDE.md` have the detail):
 
 * a **viewer for the mosaic** in the app or the data browser (today it is in the
   report and the slides);
-* **Kratos imaging maps** in the PDF, the slides and the data browser (today
-  only the desktop viewer opens them);
+* **Kratos imaging maps** in the PDF and the slides (today the desktop viewer and
+  the data browser show them);
 * **clickable entries** in the PDF's contents (the slides have them);
 * opening a saved workbook **without re-reading** the original files, and
   importing / exporting the XPSView `.xpsv` package;

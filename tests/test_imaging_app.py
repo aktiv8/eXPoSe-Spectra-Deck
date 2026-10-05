@@ -236,6 +236,15 @@ class TestImagingApp(unittest.TestCase):
         self.ws._on_select()
         self.assertNotIn("press Enter", self.ws.status.cget("text"))
 
+    def test_the_data_browser_payload_carries_the_image_maps(self):
+        p = self.ws.browser_payload()
+        self.assertEqual(len(p["imaging"]), 4)
+        self.assertEqual(p["samples"], [])             # nothing plottable
+        self.assertEqual([m["z_um"] for m in p["imaging"][:3]],
+                         [900.0, 930.0, 960.0])
+        self.assertEqual(p["imaging"][0]["position"], "Grid on Tape")
+        self.assertIn("approximate", p["imaging_note"])
+
     def test_report_pages_do_not_pick_up_imaging_maps(self):
         self.assertFalse(imagepages.available([self.parser]))
         self.assertEqual(imagepages.items([self.parser]), [])

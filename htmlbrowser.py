@@ -14,7 +14,10 @@ the data. The data are one JSON document, gzip-compressed and base64-encoded
 * the sample-view camera pictures (shrunk to JPEG) with the analysis points and
   SnapMap outlines that fall in each already placed, and
 * every SnapMap as its pixels (16-bit counts in steps of 1/8, deflated) so the
-  page can redraw the map for any energy window and area.
+  page can redraw the map for any energy window and area, and
+* every Kratos imaging map (a single-energy image, see ``kratosmap``) as its
+  pixels (16-bit counts in steps of 1: they are integers, so exact), in the
+  page's own "Image maps" tab.
 
 Display names and binding-energy shifts are applied (``display``), exactly as
 in the app's own exports. No Tk and no matplotlib here.
@@ -37,6 +40,7 @@ import appinfo
 import casamatch
 import casaquant
 import holder
+import kratosmap
 import quant
 import readers.base as rbase
 import reportspec
@@ -57,6 +61,7 @@ CAMERA_QUALITY = 78                      # JPEG quality
 CAMERA_BUDGET = 40 * 1024 * 1024         # pictures beyond this are left out
 MAP_STEP = 0.125                         # counts per step of a stored map value
 MAP_BUDGET = 40 * 1024 * 1024            # compressed SnapMap bytes; see pack_maps
+IMAGING_BUDGET = 40 * 1024 * 1024        # compressed imaging-map bytes; see _imaging_entries
 FIT_DIGITS = 6                          # significant figures of a fit curve
 FIT_BUDGET = 600_000                     # curve values in all; see _fit_block
 
@@ -305,6 +310,58 @@ def _map_entries(src, cam_ids, label_of, notes):
     return out
 
 
+# -- Kratos imaging maps ------------------------------------------------------------
+def is_image_map(r) -> bool:
+    """A region that is one single-energy image (a Kratos stigmatic map):
+    a one-channel cube and no spectrum of its own."""
+    cube = r.extra.get("cube")
+    return cube is not None and cube.n_energy == 1 and not r.decodable
+
+
+def _imaging_entries(src, notes, budget=None):
+    """The page's image-map list. ``src`` is ``[(parser, shown region, file
+    number)]`` of the maps in acquisition order per file. Counts are integers,
+    so 16-bit steps of 1 keep them exact (a brighter map gets the coarser step
+    ``pack_cube`` picks); maps beyond ``budget`` compressed bytes are left out
+    and the notes say so."""
+    if not src:
+        return []
+    budget = IMAGING_BUDGET if budget is None else budget
+    try:
+        import numpy  # noqa: F401
+    except ImportError:
+        notes.append("Image maps were left out: numpy is not installed.")
+        return []
+    out, total, dropped = [], 0, 0
+    for p, r, fi in src:
+        cube = r.extra["cube"]
+        entry, n = pack_cube(cube, cube.energy, 1, step=1.0)
+        if total + n > budget:
+            dropped += 1
+            continue
+        total += n
+        x = r.extra
+        frame = kratosmap.Frame(
+            r, cube, x.get("map_ke"),
+            round(r.photon_energy - x["map_ke"], 4)
+            if r.photon_energy and x.get("map_ke") is not None else None,
+            x.get("stage_z_um"), kratosmap._when(r.date),
+            x.get("position_name", ""))
+        entry.update(
+            id=f"i{len(out)}", name=r.name, sample=r.sample, file=fi,
+            label=kratosmap.describe(frame), ke=x.get("map_ke"), be=frame.be,
+            z_um=x.get("stage_z_um"),
+            when=frame.when.isoformat() if frame.when else "",
+            position=x.get("position_name", ""),
+            stage=([round(cube.stage_x_mm, 4), round(cube.stage_y_mm, 4)]
+                   if cube.stage_x_mm is not None else None),
+            dwell=r.dwell, meta=_meta(p.region_metadata(r)))
+        out.append(entry)
+    if dropped:
+        notes.append(f"{dropped} image map(s) were left out (size limit).")
+    return out
+
+
 # -- CasaXPS fits ------------------------------------------------------------------
 def fit_notes(rows):
     """The caveats of a fit, as the app's plots state them."""
@@ -515,6 +572,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
     rsf_entries = rsf_lib.load_rsf() if rsf_entries is None else rsf_entries
     samples, files, notes = [], [], []
     map_src = []                     # (parser, region, shown region, its dict)
+    image_src = []                   # (parser, shown image-map region, file number)
     n_regions = 0
     fit_budget, fit_dropped, fit_csv = [FIT_BUDGET], 0, 0
     hand, seen_keys = [], {}      # [(page region dict, fit row, tick)]
@@ -530,6 +588,9 @@ def build_payload(docs, display=None, details=None, methods_text="",
                       "format": p.format_name})
         order, by_sample = [], {}
         for pos, r in enumerate(p.regions):
+            if snapmaps and is_image_map(r):
+                image_src.append((p, display(r) if display else r, fi))
+                continue
             if not (r.decodable and r.counts and r.energy):
                 continue
             d = display(r) if display else r
@@ -609,9 +670,9 @@ def build_payload(docs, display=None, details=None, methods_text="",
             if tied is not None and _tag_casa(by_sample[k], *tied, casa_notes):
                 casa_tagged.append(by_sample[k])
         samples += [by_sample[k] for k in order]
-    if not n_regions:
-        raise ViewerError("There are no spectra with data to put in the "
-                          "browser.")
+    if not n_regions and not image_src:
+        raise ViewerError("There are no spectra or image maps with data to put "
+                          "in the browser.")
     if fit_csv:
         notes.append(
             f"{fit_csv} fit region(s) have CasaXPS's own exported curves "
@@ -667,6 +728,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
     cams, cam_ids = (_camera_views(docs, label_of, notes) if cameras
                      else ([], {}))
     maps = _map_entries(map_src, cam_ids, label_of, notes)
+    imaging = _imaging_entries(image_src, notes)
     light, dark = themes.PALETTES["Light"], themes.PALETTES["Dark"]
     return {
         "v": FORMAT_VERSION,
@@ -677,6 +739,8 @@ def build_payload(docs, display=None, details=None, methods_text="",
         "methods": methods_text or "", "calibration": calibration or "",
         "files": files, "samples": samples, "figures": figs,
         "holders": holders, "cameras": cams, "maps": maps,
+        "imaging": imaging,
+        **({"imaging_note": kratosmap.SCALE_NOTE} if imaging else {}),
         "elements": element_table(element_lines),
         "rsf": rsf_table(rsf_entries),
         "build_notes": notes,

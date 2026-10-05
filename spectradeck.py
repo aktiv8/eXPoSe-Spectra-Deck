@@ -4596,7 +4596,8 @@ class Workspace:
             self.status.config(text="")
         extra = "".join(f"\n• {n}" for n in payload.get("build_notes", []))
         kinds = [f"{len(payload[k])} {w}" for k, w in
-                 (("cameras", "camera pictures"), ("maps", "SnapMaps"))
+                 (("cameras", "camera pictures"), ("maps", "SnapMaps"),
+                  ("imaging", "image maps"))
                  if payload.get(k)]
         if messagebox.askyesno(
                 "Data browser saved",

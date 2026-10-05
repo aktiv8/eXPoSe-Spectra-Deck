@@ -541,6 +541,134 @@ class TestCamerasAndMaps(unittest.TestCase):
         self.assertLessEqual(np.abs(got - want).max(), entry["q"] / 2 + 1e-9)
 
 
+def image_map_region(k, name="Au 4f", ke=1402.69, x_mm=10.0, z_um=900.0,
+                     when="2017-09-08 09:00:00", position="P1", nx=14, ny=11,
+                     hv=1486.6):
+    """A Kratos imaging map as the reader makes it: a non-plottable region
+    holding a one-channel cube of integer counts (a bright blob whose width
+    and position depend on ``k``, plus noise)."""
+    import kratosmap
+    rng = np.random.default_rng(100 + k)
+    yy, xx = np.mgrid[0:ny, 0:nx]
+    blob = 40 * np.exp(-((xx - 6.0 - 0.2 * k) ** 2 + (yy - 5.0) ** 2)
+                       / (2 * (1.5 + 0.4 * k) ** 2))
+    vals = np.rint(blob + rng.poisson(4, size=(ny, nx))).astype(float)
+    o = {"# points per line in map": str(nx), "# lines in map": str(ny),
+         "step size x coord": f"{2 / (nx - 1):.6g}",
+         "step size y coord": f"{2 / (ny - 1):.6g}",
+         "Full Scale Deflection X": "0.236 mm",
+         "Full Scale Deflection Y": "0.236 mm",
+         "Map energy/mass": f"{ke} eV",
+         "Stage X Position": f"{x_mm / 1000} m", "Stage Y Position": "0.001 m"}
+    cube = kratosmap.build_cube(o, vals.ravel().tolist())
+    cube.energy = [round(hv - ke, 6)]
+    return Region(
+        name=name, index=k, offset=k, technique="XPS imaging", decodable=False,
+        sample=position, photon_energy=hv, pass_energy=160.0, dwell=120.0,
+        date=when, pos_x=x_mm, pos_y=1.0, energy_label="Binding Energy",
+        extra={"cube": cube, "map_ke": ke, "acq_mode": "Stigmatic map",
+               "position_name": position, "stage_z_um": z_um, "n_scans": 1})
+
+
+def image_series():
+    """Six maps: a focus series at P1 (Z steps), then Au 4f and Cu 2p at P2
+    (same height; two of them at one time, so only the frame number tells them
+    apart): every kind of series the page has to tell apart."""
+    return [
+        image_map_region(0, z_um=900.0, when="2017-09-08 09:00:00"),
+        image_map_region(1, z_um=930.0, when="2017-09-08 09:02:00"),
+        image_map_region(2, z_um=960.0, when="2017-09-08 09:04:00"),
+        image_map_region(3, x_mm=12.0, position="P2", z_um=960.0,
+                         when="2017-09-08 09:10:00"),
+        image_map_region(4, name="Cu 2p", ke=554.69, x_mm=12.0, position="P2",
+                         z_um=960.0, when="2017-09-08 09:10:00"),
+        image_map_region(5, name="Cu 2p", ke=554.69, x_mm=12.0, position="P2",
+                         z_um=960.0, when="2017-09-08 09:30:00")]
+
+
+class TestImagingMaps(unittest.TestCase):
+    def payload(self, regions=None, **kw):
+        d = doc("k.kal", regions or image_series(),
+                instrument={"Instrument": "Kratos (Vision)"})
+        return hb.build_payload([d], **kw)
+
+    def test_every_map_is_an_entry_in_acquisition_order(self):
+        p = self.payload()
+        im = p["imaging"]
+        self.assertEqual([m["id"] for m in im], [f"i{k}" for k in range(6)])
+        self.assertEqual([m["name"] for m in im],
+                         ["Au 4f"] * 4 + ["Cu 2p"] * 2)
+        self.assertEqual([m["position"] for m in im], ["P1"] * 3 + ["P2"] * 3)
+        self.assertEqual(im[0]["label"], "Au 4f  BE 83.91 eV  Z 900 um  09:00")
+        self.assertEqual((im[0]["ke"], im[0]["be"], im[0]["z_um"]),
+                         (1402.69, 83.91, 900.0))
+        self.assertEqual(im[0]["when"], "2017-09-08T09:00:00")
+        self.assertEqual(im[0]["stage"], [10.0, 1.0])
+        self.assertEqual((im[0]["nx"], im[0]["ny"], im[0]["n"]), (14, 11, 1))
+        self.assertIn("approximate", p["imaging_note"])
+        self.assertEqual(p["maps"], [])                 # not SnapMaps
+        self.assertEqual(p["samples"], [])              # no spectrum either
+
+    def test_pixels_round_trip_exactly(self):
+        regs = image_series()
+        p = self.payload(regs)
+        for r, m in zip(regs, p["imaging"]):
+            raw = np.frombuffer(zlib.decompress(base64.b64decode(m["z"])), "<u2")
+            self.assertEqual(m["q"], 1.0)               # integer counts: exact
+            self.assertTrue(np.array_equal(
+                raw.reshape(11, 14) * m["q"],
+                r.extra["cube"].array3d()[:, :, 0]))
+
+    def test_a_page_of_images_only_builds_and_one_with_nothing_does_not(self):
+        p = self.payload()
+        self.assertEqual(p["samples"], [])
+        self.assertIn('id="tab-imaging"', hb.build_html(p))
+        with self.assertRaises(hb.ViewerError):
+            hb.build_payload([doc("e.kal", [])])
+
+    def test_spectra_and_images_share_a_page(self):
+        d = doc("k.kal", [region("C 1s", "S1")] + image_series())
+        p = hb.build_payload([d])
+        self.assertEqual(len(p["samples"]), 1)
+        self.assertEqual(len(p["imaging"]), 6)
+        self.assertEqual(p["samples"][0]["regions"][0]["name"], "C 1s")
+
+    def test_no_images_still_gives_the_key_and_no_note(self):
+        p = hb.build_payload([doc("a.vms", [region("C 1s", "S1")])])
+        self.assertEqual(p["imaging"], [])
+        self.assertNotIn("imaging_note", p)
+
+    def test_the_snapmaps_switch_leaves_them_out(self):
+        d = doc("k.kal", [region("C 1s", "S1")] + image_series())
+        p = hb.build_payload([d], snapmaps=False)
+        self.assertEqual(p["imaging"], [])
+
+    def test_a_size_budget_leaves_the_last_maps_out_and_says_so(self):
+        regs = image_series()
+        cube = regs[0].extra["cube"]
+        one = hb.pack_cube(cube, cube.energy, 1, step=1.0)[1]
+        old = hb.IMAGING_BUDGET
+        self.addCleanup(setattr, hb, "IMAGING_BUDGET", old)
+        hb.IMAGING_BUDGET = int(one * 2.5)
+        p = self.payload(regs)
+        self.assertLess(len(p["imaging"]), 6)
+        self.assertGreaterEqual(len(p["imaging"]), 1)
+        left = 6 - len(p["imaging"])
+        self.assertTrue(any(f"{left} image map(s) were left out" in n
+                            for n in p["build_notes"]))
+
+    def test_display_names_are_applied(self):
+        import copy as _copy
+
+        def display(r):
+            q = _copy.copy(r)
+            q.name, q.sample = "Renamed", "Place"
+            return q
+        p = hb.build_payload([doc("k.kal", image_series())], display)
+        self.assertEqual({m["name"] for m in p["imaging"]}, {"Renamed"})
+        self.assertEqual({m["sample"] for m in p["imaging"]}, {"Place"})
+
+
 class TestEncoding(unittest.TestCase):
     def test_round_trip(self):
         payload = {"a": [1, 2, 3], "t": "café ✓", "n": None}
@@ -622,7 +750,9 @@ class TestPage(unittest.TestCase):
         # +4_000: the CasaXPS-curves switch and the zoom limit (viewer code);
         # +3_000: CasaXPS's own quantification numbers and the survey total
         # +4_000: the spin-orbit merge and the photon-reach rule in V.candidates
-        self.assertLess(len(page), 157_000 + raw)     # far below plain JSON
+        # +30_000: the Image maps tab (Kratos imaging maps: blur, sharpness,
+        # series, canvas drawing and controls) in viewer.js
+        self.assertLess(len(page), 187_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR
@@ -891,6 +1021,45 @@ class TestJavaScript(unittest.TestCase):
                          np.flatnonzero(cube.channels(e[3], e[9])).tolist()],
         }
 
+    def imaging_fixture(self):
+        """The image-map functions of the page against kratosmap.py on the
+        same maps."""
+        import kratosmap
+        regs = image_series()
+        payload = hb.build_payload([doc("k.kal", regs)])
+        fr = kratosmap.frames(regs)
+        nx, ny = 14, 11
+        mask = np.zeros((ny, nx), bool)
+        mask[2:7, 3:9] = True
+        sel = {}
+        for cur in (0, 3, 4):
+            for how in ("all", "energy", "position"):
+                sel[f"{cur}|{how}"] = [
+                    fr.index(f) for f in kratosmap.select(fr, fr[cur], how)]
+        axes = {}
+        for name, idx in (("z", [0, 1, 2]), ("minutes", [3, 5]),
+                          ("frame", [3, 4]), ("all", [0, 1, 2, 3, 4, 5])):
+            label, xs = kratosmap.series_axis([fr[i] for i in idx])
+            axes[name] = {"idx": idx, "label": label,
+                          "x": [float(v) for v in xs]}
+        pix = [kratosmap.pixels(f) for f in fr]
+        sigmas = (0.0, 0.5, 1.5, 2.25, 4.0)
+        return {
+            "payload_b64": hb.encode_payload(payload),
+            "counts": [p.ravel().tolist() for p in pix],
+            "blur": {str(sg): kratosmap.blur(pix[0], sg).ravel().tolist()
+                     for sg in sigmas},
+            "focus": {str(sg): [kratosmap.focus_metric(p, sg) for p in pix]
+                      for sg in (1.5, 0.75)},
+            "mask": mask.ravel().astype(int).tolist(),
+            "roi_means": kratosmap.roi_means(fr, mask),
+            "whole_means": kratosmap.roi_means(fr),
+            "select": sel,
+            "default": [kratosmap.default_filter(fr, f) for f in fr],
+            "axes": axes,
+            "csv": kratosmap.snapmap.to_csv_grid(fr[0].cube, pix[0]),
+        }
+
     def element_fixture(self):
         """Candidate lookups as xpslines gives them, for the page's port."""
         import xpslines
@@ -1029,6 +1198,8 @@ class TestJavaScript(unittest.TestCase):
             }
             if HAVE_NP:
                 fx["map"] = self.map_fixture()
+            if HAVE_NP:
+                fx["imaging"] = self.imaging_fixture()
             fx["elements"] = self.element_fixture()
             fx["casaxps"] = self.casaxps_fixture()
             if HAVE_FIT:
