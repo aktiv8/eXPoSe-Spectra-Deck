@@ -64,9 +64,13 @@ def block(ordinal, *recs):
     return w32(len(body)) + body
 
 
-def dset(*blocks, header=True):
-    head = kratos_dset.MAGIC + b"\x00" * (kratos_dset.FIRST_BLOCK - 8)
-    return head + b"".join(blocks)
+def dset(*blocks, header=True, listed=None):
+    """``listed`` is the object count the index states (word 5); the default
+    is the number of blocks given."""
+    head = bytearray(kratos_dset.MAGIC + b"\x00" * (kratos_dset.FIRST_BLOCK - 8))
+    struct.pack_into(">I", head, kratos_dset.INDEX_COUNT,
+                     len(blocks) if listed is None else listed)
+    return bytes(head) + b"".join(blocks)
 
 
 def spectrum(ordinal=2, name="Mo 3d", anode=8, extra=()):
@@ -143,6 +147,49 @@ class TestDset(Tmp):
             load_file(self.write("t.dset", data[:-40]))
         self.assertIn("chain", str(cm.exception))
 
+    # what follows the last indexed block in a transmission-function file:
+    # not block-shaped (``size, 1024, 25792, 0``), claims more than is there
+    TRAILER = w32(0x43980, 1024, 25792, 0, 1, 3, 2, 0) + b"\x00" * 200
+
+    def test_trailing_section_is_skipped_when_every_indexed_block_was_read(self):
+        a, b = spectrum(2, "Hyb_pe05"), spectrum(3, "Hyb_pe10")
+        plain = load_file(self.write("p.dset", dset(a, b)))
+        f = load_file(self.write("x.dset", dset(a, b) + self.TRAILER))
+        self.assertEqual([r.counts for r in f.regions],
+                         [r.counts for r in plain.regions])
+        self.assertEqual(len(f.regions), 2)
+        self.assertEqual(len(f.warnings), 1)
+        self.assertIn("were not read", f.warnings[0])
+        self.assertIn("all of those objects were loaded", f.warnings[0])
+        self.assertFalse(plain.warnings)
+
+    def test_trailing_section_is_refused_when_indexed_blocks_are_missing(self):
+        # the index lists 3 objects, 2 chain: not an extra section but a loss
+        data = dset(spectrum(2), spectrum(3), listed=3) + self.TRAILER
+        with self.assertRaises(ValueError) as cm:
+            load_file(self.write("m.dset", data))
+        msg = str(cm.exception)
+        self.assertIn("do not chain", msg)
+        self.assertIn("2 of the 3 objects", msg)
+
+    def test_truncated_last_block_is_still_refused_with_its_count(self):
+        # a normal block header with too little behind it is truncation, even
+        # though the earlier blocks are all there
+        data = dset(spectrum(2), spectrum(3))
+        with self.assertRaises(ValueError) as cm:
+            load_file(self.write("t2.dset", data[:-40]))
+        self.assertIn("1 of the 2 objects", str(cm.exception))
+
+    def test_ion_gun_block_with_the_high_numbered_pah_records_decodes(self):
+        gun = block(3, r_str(37, "Etch"), r_int(38, 0),
+                    r_dbl(3230, 4.0), r_int(3251, 0), r_dbl(3278, 0.0),
+                    r_int(0x20200CE0, 1), r_int(0x20200CE7, 0),
+                    r_dbl(0x20500CDB, 0.0), r_dbl(0x20500CDC, 0.0),
+                    r_dbl(0x20500CE3, 0.0))
+        f = load_file(self.write("g.dset", dset(spectrum(), gun)))
+        self.assertEqual(len(f.regions), 1)
+        self.assertFalse(f.warnings)                 # decoded, no unknown enum
+
     def test_unknown_enum_number_is_left_out_not_guessed(self):
         f = load_file(self.write("u.dset", dset(spectrum(anode=99))))
         r = f.regions[0]
@@ -195,7 +242,10 @@ class TestRealPairs(unittest.TestCase):
             try:
                 a = load_file(dpath)
             except ValueError as exc:
-                self.assertIn("only its index", str(exc), dpath)
+                # an index-only file, or one whose chain stops short of the
+                # objects its index lists (07092017_NPL_Trans): refused
+                self.assertTrue("only its index" in str(exc)
+                                or "objects the index lists" in str(exc), dpath)
                 continue
             b = load_file(kpath)
             self.assertEqual(len(a.regions), len(b.regions), dpath)

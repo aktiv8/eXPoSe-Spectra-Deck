@@ -341,6 +341,46 @@ class TestKratosKal(Tmp):
         self.assertEqual(r.tf_ke, [100.0, 110.0])
         self.assertEqual(r.pass_energy, 160.0)
 
+    @staticmethod
+    def _scans(n, reference):
+        """``n`` kinetic-energy scans whose X-ray reference line is
+        ``reference`` ('' leaves the field out)."""
+        out = ["Dataset filename = t.dset"]
+        for i in range(n):
+            out += [f"Object name = pe{i}/{i + 1}",
+                    "   3 Spectrum scan start = 100 eV",
+                    "   4 Spectrum scan step size = 1 eV",
+                    "   5 Abscissa label = Kinetic Energy",
+                    "   7 Dwell time = 1 seconds",
+                    "  12 Ordinate values = {1, 2, 3}"]
+            if reference:
+                out.append(f"3080 Xray Reference Energy = {reference}")
+        return "\n".join(out) + "\n"
+
+    def test_reference_none_is_a_kinetic_scan_not_a_missing_source(self):
+        # Kratos transmission test: the file itself says there is no X-ray
+        # reference, so the kinetic-energy axis is as recorded
+        f = load_file(self.write("n.kal", self._scans(3, "F_REFER_TO_NONE")))
+        self.assertEqual(len(f.regions), 3)
+        self.assertEqual({r.energy_label for r in f.regions}, {"Kinetic Energy"})
+        self.assertEqual(f.warnings, [])
+
+    def test_missing_source_warns_once_for_the_file(self):
+        for ref in ("", "F_REFER_TO_SOMETHING_ELSE"):
+            f = load_file(self.write("m.kal", self._scans(30, ref)))
+            self.assertEqual(len(f.warnings), 1, ref)
+            self.assertIn("X-ray energy unknown for 30 spectra", f.warnings[0])
+            self.assertIn("pe0/1", f.warnings[0])         # names a few
+            self.assertIn("(30 in all)", f.warnings[0])
+        one = load_file(self.write("o.kal", self._scans(1, "")))
+        self.assertIn("for 1 spectrum (pe0/1)", one.warnings[0])
+
+    def test_known_anode_still_gives_binding_energy_and_no_warning(self):
+        f = load_file(self.write("a.kal",
+                                 self._scans(2, "F_REFER_TO_XRAY_MONO_AL")))
+        self.assertEqual({r.energy_label for r in f.regions}, {"Binding Energy"})
+        self.assertEqual(f.warnings, [])
+
 
 class TestRegistry(Tmp):
     def test_content_sniffing_beats_extension(self):

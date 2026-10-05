@@ -83,8 +83,17 @@ class KratosKalFile(SpectrumFile):
         if not objects:
             raise ValueError("no 'Object name' entries found")
         first = objects[0]
+        self._no_hv = []
         for i, o in enumerate(objects):
             self._add_object(i, o)
+        if self._no_hv:                  # one line for the file, not one a region
+            names = self._no_hv
+            shown = ", ".join(names[:4]) + (f" … ({len(names)} in all)"
+                                            if len(names) > 4 else "")
+            self.warnings.append(
+                f"X-ray energy unknown for {len(names)} "
+                f"spectr{'um' if len(names) == 1 else 'a'} ({shown}): "
+                "kinetic-energy axis.")
         anode = self._anode(first)
         self.instrument = {k: v for k, v in {
             "Instrument": "Kratos (Vision)",
@@ -148,9 +157,12 @@ class KratosKalFile(SpectrumFile):
             energy, e_label = [hv - ke for ke in native], "Binding Energy"
         else:
             energy, e_label = native, label
-            if "kinetic" in label.lower():
-                self.warnings.append(
-                    f"{o['_object']}: X-ray energy unknown; kinetic-energy axis.")
+            # "refer to none" is the instrument's own statement that the scan
+            # has no X-ray reference (a transmission test, say), so the
+            # kinetic-energy axis is what was recorded, not something missing
+            if ("kinetic" in label.lower() and "REFER_TO_NONE"
+                    not in o.get("Xray Reference Energy", "").upper()):
+                self._no_hv.append(o["_object"])
         name = guess_region_name(canon_region_name(
             f"{o.get('Chemical symbol or formula', '')} "
             f"{o.get('Transition or charge state', '')}".strip()

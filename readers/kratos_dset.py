@@ -12,8 +12,12 @@ every number below was checked against the ``.kal`` of the same data):
 * everything is **big-endian 32-bit words**; the file starts
   ``00 00 DE 01 00 00 00 02`` and a 0x0B10-byte index (object names with
   duplicated offsets) that this reader does not need;
-* the data blocks follow back to back and chain exactly to the end of the
-  file: ``next = offset + 4 + size``. A block is ``size``, the object's
+* the data blocks follow back to back, ``next = offset + 4 + size``, and
+  normally end exactly at the end of the file; word 5 of the index is their
+  number. A transmission-function run can leave a section of its own after
+  them (two of 18 files seen; its header is not block-shaped): it is skipped,
+  with a note, only when every indexed block was read, so a file whose chain
+  stops early (``NPL_Trans``: 65 of 183) is still refused. A block is ``size``, the object's
   ordinal (the ``/N`` of the ``.kal``'s ``Object name``), ``0``, ``0``, then
   records ``id, value`` with ascending ids, closed by ``0, 0``;
 * **the ids are the numbers the ``.kal`` prints** (``12`` Ordinate values,
@@ -41,6 +45,7 @@ from .kratos_kal import KratosKalFile
 
 MAGIC = b"\x00\x00\xde\x01\x00\x00\x00\x02"
 FIRST_BLOCK = 0x0B10          # all 36 reference files; verified, see _chain
+INDEX_COUNT = 20              # word 5 of the index: how many data blocks there are
 
 # id -> (kal field name, type, unit text)
 #   e enumeration  i int32  d float64  s string
@@ -111,9 +116,17 @@ IDS = {
     3255: ('Z Step size (mm) for auto z', 'd', ''),
     3256: ('Number of steps in auto z', 'i', ''),
     3261: ('This an index to a row in either position tables', 'i', ''),
+    3278: ('NICPU Ion Gun Standby Delay Time', 'd', 'seconds'),
     3282: ('Descriptor for aperture size used in acquisition', 's', ''),
     3283: ('Descriptor for iris position used in acquisition', 's', ''),
     3290: ('Vision Software Version', 's', ''),
+    # ion-gun "PAH" records of an etch block: ids far above the others
+    # (0x2020_0CE0 ...), still ascending inside the block
+    0x20200CE0: ('NICPU Ion Gun PSU PAH Gun Mode', 'i', ''),
+    0x20200CE7: ('NICPU Ion Gun PSU PAH Action On Completion', 'e', ''),
+    0x20500CDB: ('NICPU Ion Gun PSU PAH Wien Voltage', 'd', 'V'),
+    0x20500CDC: ('NICPU Ion Gun PSU PAH Beam Bend Voltage', 'd', 'V'),
+    0x20500CE3: ('NICPU Ion Gun PSU PAH Beam Monitor Current', 'd', 'A'),
     5587: ('Transmission Function Object (ke,t)', 'c', ''),
     5615: ('Transmission Function Kinetic Energy', 'ad', ''),
     5616: ('Transmission Function Value', 'ad', ''),
@@ -123,16 +136,19 @@ IDS = {
 ENUMS = {
     1: {3: 'F_XPS'},
     2: {0: 'F_SPECTRUM'},
-    38: {1: 'F_POSITION', 2: 'F_COUNTER'},
+    38: {0: 'F_ETCH', 1: 'F_POSITION', 2: 'F_COUNTER', 9: 'F_ION_GUN_GAS',
+         10: 'F_DELAY'},
     3016: {1: 'F_SAVE'},
     3017: {1: 'F_SUM'},
-    3045: {0: 'F_HEMISPHERICAL'},
+    3045: {0: 'F_HEMISPHERICAL', 1: 'F_MIRROR_HEMISPHERICAL'},
     3046: {0: 'F_FAT'},
-    3047: {2: 'F_FAT_PASS_ENERGY_20_EV', 3: 'F_FAT_PASS_ENERGY_40_EV',
-           5: 'F_FAT_PASS_ENERGY_160_EV'},
-    3049: {0: 'F_HSA_LENS_HYBRID'},
+    3047: {0: 'F_FAT_PASS_ENERGY_5_EV', 1: 'F_FAT_PASS_ENERGY_10_EV',
+           2: 'F_FAT_PASS_ENERGY_20_EV', 3: 'F_FAT_PASS_ENERGY_40_EV',
+           4: 'F_FAT_PASS_ENERGY_80_EV', 5: 'F_FAT_PASS_ENERGY_160_EV'},
+    3049: {0: 'F_HSA_LENS_HYBRID', 3: 'F_HSA_LENS_ELECTROSTATIC'},
     3070: {3: 'F_NEUTRALISER_MANUAL_SETTINGS'},
-    3080: {8: 'F_REFER_TO_XRAY_MONO_AL'},
+    3080: {2: 'F_REFER_TO_NONE', 8: 'F_REFER_TO_XRAY_MONO_AL'},
+    0x20200CE7: {0: 'F_ION_GUN_STANDBY'},
     3102: {0: 'F_HEMISPHERICAL'},
     3190: {0: 'F_NICPU_XRAY_PSU_FILAMENT_MONO_1'},
     3191: {2: 'F_NICPU_XRAY_ANODE_STD_MONO'},
@@ -161,16 +177,28 @@ class _Unsynced(ValueError):
 
 
 def _chain(d: bytes):
-    """``[(offset, size)]`` of the data blocks, or None when the chain from
-    the first block does not end exactly at the end of the file."""
+    """``([(offset, size)], end)``: the data blocks that chain from the first
+    one, and the offset where the chain stops (``len(d)`` when it ends
+    exactly at the end of the file)."""
     out, pos = [], FIRST_BLOCK
     while pos + 4 <= len(d):
         size = struct.unpack_from(">I", d, pos)[0]
         if size < 16 or size % 4 or pos + 4 + size > len(d):
-            return None
+            break
         out.append((pos, size))
         pos += 4 + size
-    return out if pos == len(d) else None
+    return out, pos
+
+
+def _block_shaped(d: bytes, pos: int) -> bool:
+    """A data block's header is ``size, ordinal, 0, 0``. What stops the chain
+    in a truncated file is such a header with too little behind it; the
+    trailing section of a transmission-function file is not (``size, 1024,
+    25792, 0`` ...)."""
+    if pos + 16 > len(d):
+        return False
+    _size, ordinal, z1, z2 = struct.unpack_from(">4I", d, pos)
+    return ordinal != 0 and z1 == 0 and z2 == 0
 
 
 def _is_text(w, pos, n):
@@ -185,7 +213,8 @@ def _plausible(w, p, after):
     """w[p] can start the next record (or the ``0, 0`` that closes a block)."""
     if p + 1 < len(w) and w[p] == 0 and w[p + 1] == 0:
         return True
-    return p < len(w) and after < w[p] < _MAX_ID
+    # ids ascend; past _MAX_ID only the known high-numbered ones are accepted
+    return p < len(w) and after < w[p] and (w[p] < _MAX_ID or w[p] in IDS)
 
 
 def _guess(w, pos):
@@ -228,11 +257,21 @@ class KratosDsetFile(KratosKalFile):
             raise ValueError(
                 "this Vision2 dataset file holds only its index, no data "
                 "blocks; open the .dset that holds the spectra")
-        chain = _chain(d)
-        if chain is None:
+        chain, end = _chain(d)
+        listed = struct.unpack_from(">I", d, INDEX_COUNT)[0]
+        if end != len(d) and not (
+                chain and len(chain) == listed and not _block_shaped(d, end)):
             raise ValueError(
                 "the .dset data blocks do not chain to the end of the file "
-                "(damaged, truncated or a layout not seen yet)")
+                f"({len(chain)} of the {listed} objects the index lists could "
+                "be read; damaged, truncated or a layout not seen yet)")
+        if end != len(d):
+            # every indexed object is read; what follows is a section of its
+            # own (the processing data of a transmission-function run)
+            self.warnings.append(
+                f"{len(d) - end:,} bytes after the last data block are not "
+                f"part of the {listed} objects the index lists and were not "
+                "read; all of those objects were loaded.")
         self._dataset = os.path.basename(path)
         unknown = {}
         objects = []
