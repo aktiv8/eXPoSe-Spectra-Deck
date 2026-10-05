@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import re
 
+import kratosmap
+
 from .base import (Region, SpectrumFile, analyser_mode_name, canon_region_name,
                    guess_region_name, read_bytes)
 
@@ -83,17 +85,21 @@ class KratosKalFile(SpectrumFile):
         if not objects:
             raise ValueError("no 'Object name' entries found")
         first = objects[0]
-        self._no_hv = []
+        self._no_hv, self._no_hv_maps = [], []
+        self._position = ""              # the last "Sample Position" object
         for i, o in enumerate(objects):
+            if o.get("Stage Position Name"):
+                self._position = o["Stage Position Name"].strip()
             self._add_object(i, o)
-        if self._no_hv:                  # one line for the file, not one a region
-            names = self._no_hv
-            shown = ", ".join(names[:4]) + (f" … ({len(names)} in all)"
-                                            if len(names) > 4 else "")
-            self.warnings.append(
-                f"X-ray energy unknown for {len(names)} "
-                f"spectr{'um' if len(names) == 1 else 'a'} ({shown}): "
-                "kinetic-energy axis.")
+        for names, one, many in ((self._no_hv, "spectrum", "spectra"),
+                                 (self._no_hv_maps, "map", "maps")):
+            if names:                    # one line for the file, not one a region
+                shown = ", ".join(names[:4]) + (f" … ({len(names)} in all)"
+                                                if len(names) > 4 else "")
+                self.warnings.append(
+                    f"X-ray energy unknown for {len(names)} "
+                    f"{one if len(names) == 1 else many} ({shown}): "
+                    "kinetic-energy axis.")
         anode = self._anode(first)
         self.instrument = {k: v for k, v in {
             "Instrument": "Kratos (Vision)",
@@ -140,6 +146,9 @@ class KratosKalFile(SpectrumFile):
         return words + (": " + ", ".join(parts) if parts else "")
 
     def _add_object(self, idx, o):
+        if kratosmap.is_map(o):
+            self._add_map(idx, o)
+            return
         vals = _list(o.get("Ordinate values", ""))
         start = _num(o.get("Spectrum scan start"))
         step = _num(o.get("Spectrum scan step size"))
@@ -179,6 +188,13 @@ class KratosKalFile(SpectrumFile):
                                                           "").title(),
             date=_date(o.get("Date Acquired", "")),
             anode=anode[0] if anode else "")
+        self._decorate(reg, o)
+        reg.extra["fields"] = o
+        self.regions.append(reg)
+
+    def _decorate(self, reg, o):
+        """What a spectrum and a map share: source power, analyser mode,
+        aperture, neutraliser, transmission function, sweeps."""
         # older dumps name the gun current / voltage plainly, newer ones (NICPU
         # electronics) hold them under "NICPU X-ray Gun ..." as '0.012 A' /
         # '12000 V'; without the second pair no power was ever found
@@ -209,5 +225,50 @@ class KratosKalFile(SpectrumFile):
             reg.conditions["Sweeps"] = sw
             if sw.strip().isdigit() and int(sw) > 0:
                 reg.extra["n_scans"] = int(sw)
-        reg.extra["fields"] = o
+
+    def _add_map(self, idx, o):
+        """A stigmatic imaging map: one single-energy image. It has no
+        spectrum, so the region is not plottable (``decodable`` False, like a
+        file with no data) and the pixels ride along as ``extra["cube"]`` (see
+        ``kratosmap``); the viewer opens from the tree, as for a SnapMap."""
+        name = o["_object"]
+        vals = _list(o.get("Ordinate values", ""))
+        try:
+            cube = kratosmap.build_cube(o, vals)
+        except ValueError as exc:
+            self.warnings.append(f"Map {name}: not read ({exc}).")
+            return
+        anode = self._anode(o)
+        hv = anode[1] if anode else None
+        ke = cube.energy[0]
+        if hv:
+            cube.energy = [round(hv - ke, 6)]
+        elif "REFER_TO_NONE" not in o.get("Xray Reference Energy", "").upper():
+            self._no_hv_maps.append(name)
+        lens = (o.get("MHSA Lens Mode", "").replace("F_MHSA_", "")
+                .replace("_MAGN", "_MAGNIFICATION").replace("_", " ")
+                .capitalize())
+        z = _num(o.get("Stage Z Position"))
+        reg = Region(
+            name=canon_region_name(
+                f"{o.get('Chemical symbol or formula', '')} "
+                f"{o.get('Transition or charge state', '')}".strip() or name),
+            index=idx, offset=idx, technique="XPS imaging",
+            energy_label="Binding Energy" if hv else "Kinetic Energy",
+            energy_units="eV", count_units="counts", decodable=False,
+            note=f"Stigmatic image ({cube.nx} x {cube.ny} pixels) at one "
+                 f"energy: open it to see the map. {kratosmap.SCALE_NOTE}",
+            sample=self._position or "Maps",
+            photon_energy=hv, pass_energy=_num(o.get("Pass energy")),
+            dwell=_num(o.get("Dwell time")), lens_mode=lens,
+            date=_date(o.get("Date Acquired", "")),
+            anode=anode[0] if anode else "")
+        self._decorate(reg, o)
+        if cube.stage_x_mm is not None:
+            reg.pos_x, reg.pos_y = cube.stage_x_mm, cube.stage_y_mm
+        reg.extra.update({
+            "cube": cube, "map_ke": ke, "acq_mode": "Stigmatic map",
+            "position_name": self._position,
+            "stage_z_um": kratosmap._six(z * 1e6) if z is not None else None,
+            "fields": {k: v for k, v in o.items() if k != "Ordinate values"}})
         self.regions.append(reg)

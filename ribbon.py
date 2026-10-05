@@ -69,7 +69,7 @@ PAGES = {
          "Source, analyser and detector settings written into NeXus files.",
          True),
         ("SnapMap", "snapmap", "open_snapmap",
-         "View a SnapMap image cube: pick the energy window and regions.",
+         "View a SnapMap image cube (pick the energy window and regions) or a Kratos imaging map series.",
          True),
         ("|",),
         ("Rename", "rename", "rename_selected",

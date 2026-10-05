@@ -95,6 +95,13 @@ def item_key(kind, doc, name):
     return f"{kind}:{reportspec.doc_key(doc)}/{name}"
 
 
+def _is_snapmap(r) -> bool:
+    """A region with a spectrum behind every pixel. A Kratos imaging map is a
+    one-channel cube (an image at one energy) and has no report page yet."""
+    cube = r.extra.get("cube")
+    return cube is not None and cube.n_energy > 1
+
+
 def items(docs, label_of=None):
     """``[(key, label)]`` of every calibrated camera picture and SnapMap site
     the files hold, for the Report generator (cheap: no picture is read)."""
@@ -110,7 +117,7 @@ def items(docs, label_of=None):
                     else "")))
         seen = []
         for r in p.regions:
-            if r.extra.get("cube") is not None and r.sample not in seen:
+            if _is_snapmap(r) and r.sample not in seen:
                 seen.append(r.sample)
                 out.append((item_key("map", p, r.sample),
                             f"SnapMap – {label_of(p, r.sample)}"))
@@ -135,7 +142,7 @@ def plan(docs, label_of=None, display=None, per_sheet=6, columns=3, skip=(),
                      for k, xy in p.sample_positions().items()}
         cubes = {}                                  # sample -> its map regions
         for r in p.regions:
-            if r.extra.get("cube") is not None:
+            if _is_snapmap(r):
                 cubes.setdefault(r.sample, []).append(r)
         first = {label_of(p, s): rs[0].extra["cube"] for s, rs in cubes.items()}
         mine = []
@@ -221,7 +228,7 @@ def available(docs) -> bool:
     for p in docs:
         if any(snapshot.has_calibration(b.calib) for b in p.images):
             return True
-        if any(r.extra.get("cube") is not None for r in p.regions):
+        if any(_is_snapmap(r) for r in p.regions):
             return True
     return False
 

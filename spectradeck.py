@@ -126,6 +126,7 @@ import plotstyle_ui
 import sputter_ui
 import instrument_ui
 import snapmap_ui
+import imaging_ui
 from themes import (ThemeManager, THEME_NAMES, PRINT, mpl_rc, SwatchCache,
                     ramp)
 from plots import (interp_intensity, trace_label, nice_step, dodge,
@@ -783,7 +784,8 @@ class Workspace:
         tm.add_command(label="Instrument settings (NeXus)…",
                        command=self.open_instrument_settings)
         tm.add_command(label="ISS / REELS…", command=self.open_iss_reels)
-        tm.add_command(label="SnapMap viewer…", command=self.open_snapmap)
+        tm.add_command(label="SnapMap / image map viewer…",
+                       command=self.open_snapmap)
         tm.add_command(label="Import KherveFitting peak model…",
                        command=self.import_kfit_peak_library)
         tm.add_command(label="Import CasaXPS CSV export…",
@@ -2412,8 +2414,10 @@ class Workspace:
         iss_ui.IssReelsDialog(self.root, self)
 
     def open_snapmap(self, region=None):
-        """The map viewer for a SnapMap: the given region, else the first
-        selected or ticked spectrum that has pixels behind it."""
+        """The map viewer for a SnapMap (a spectrum at every pixel) or for a
+        Kratos imaging map (one single-energy image: the series viewer): the
+        given region, else the first selected or ticked one that has
+        pixels behind it."""
         if not HAVE_MPL:
             messagebox.showinfo("SnapMap", "matplotlib is required for the "
                                            "map viewer.")
@@ -2423,11 +2427,16 @@ class Workspace:
                            if r.extra.get("cube") is not None), None)
         if region is None:
             messagebox.showinfo(
-                "SnapMap", "Select (or tick) a SnapMap first: these are the "
-                           "rows marked “(SnapMap)” in the file tree.")
+                "SnapMap", "Select (or tick) a SnapMap or an imaging map "
+                           "first: these are the rows marked “(SnapMap)” or "
+                           "“Map” in the file tree.")
             return
         parser = self.region_parser.get(id(region))
-        if parser is not None:
+        if parser is None:
+            return
+        if region.extra["cube"].n_energy == 1:            # a Kratos image
+            imaging_ui.MapSeriesDialog(self.root, self, parser, region)
+        else:
             snapmap_ui.SnapMapDialog(self.root, self, parser, region)
 
     def import_kfit_peak_library(self):
@@ -2902,8 +2911,10 @@ class Workspace:
                 if r.extra.get("cube") is not None]
         if maps:
             menu.add_separator()
-            menu.add_command(label="Open SnapMap…",
-                             command=lambda r=maps[0]: self.open_snapmap(r))
+            menu.add_command(
+                label=("Open image map…" if maps[0].extra["cube"].n_energy == 1
+                       else "Open SnapMap…"),
+                command=lambda r=maps[0]: self.open_snapmap(r))
         target = self._target_of(row)
         if target is not None:
             menu.add_separator()

@@ -152,6 +152,39 @@ def _analyser_paragraph(rows):
     return " ".join(s for s in sentences if s)
 
 
+MAP_MODE = "Stigmatic map"
+
+
+def _map_paragraph(rows):
+    """Kratos imaging maps (single-energy images), which are not spectra: how
+    many, which, and what they used. Only what the files record."""
+    names = metasummary.compact_labels(
+        [str(r.get("Region", "")) for r in rows], limit=8)
+    parts = []
+    text, n = values_text([r.get("Pass energy (eV)") for r in rows], "eV")
+    if text:
+        parts.append(f"{'a pass energy' if n == 1 else 'pass energies'} of {text}")
+    text, n = values_text([r.get("Dwell (s)") for r in rows], "s")
+    if text:
+        parts.append(f"{'an acquisition time' if n == 1 else 'acquisition times'}"
+                     f" of {text} per image")
+    s = f"Stigmatic images ({len(rows)}: {names})"
+    s += f" were recorded with {join_and(parts)}." if parts else " were recorded."
+    lens = _unique(rows, "Lens mode")
+    aper = _unique(rows, "Aperture")
+    mode = _unique(rows, "Analyser mode")
+    bits = []
+    if lens:
+        bits.append(f"lens mode {join_and(lens)}")
+    if aper:
+        bits.append(f"aperture {join_and(aper)}")
+    if mode:
+        bits.append(join_and([m[0].lower() + m[1:] for m in mode]) + " mode")
+    if bits:
+        s += f" The analyser used {join_and(bits)}."
+    return s
+
+
 def _acquisition_sentence(rows):
     """Scan or snapshot, and how many scans were accumulated."""
     parts = []
@@ -292,7 +325,12 @@ def _beam_sentence(rows):
 
 def _data_sentence(rows):
     samples = _unique(rows, "Sample")
-    text = f"The data set comprises {len(rows)} spectra"
+    n_map = sum(1 for r in rows if r.get("Acquisition mode") == MAP_MODE)
+    n_spec = len(rows) - n_map
+    counts = [f"{n_spec} spectra"] if n_spec else []
+    if n_map:
+        counts.append(f"{n_map} image{'s' if n_map != 1 else ''}")
+    text = f"The data set comprises {' and '.join(counts)}"
     if samples:
         shown = ", ".join(samples[:6]) + (
             f" and {len(samples) - 6} more" if len(samples) > 6 else "")
@@ -322,9 +360,13 @@ def generate(rows, calibration="", timing_summary=None):
     if operator:
         intro += f" (operator: {join_and(operator)})"
     paras.append(intro + ". " + _source_sentence(rows))
-    ana = _analyser_paragraph(rows)
+    spectra = [r for r in rows if r.get("Acquisition mode") != MAP_MODE]
+    maps = [r for r in rows if r.get("Acquisition mode") == MAP_MODE]
+    ana = _analyser_paragraph(spectra) if spectra else ""
     if ana:
         paras.append(ana)
+    if maps:
+        paras.append(_map_paragraph(maps))
     extra = [s for s in (
         _state_sentence(rows, "Charge neutraliser", "Charge neutraliser",
                         "Charge neutralisation was used.",

@@ -351,7 +351,28 @@ class SpectrumFile:
     def _be_str(r):
         if r.decodable and r.energy:
             return f"{r.energy[0]:.0f}-{r.energy[-1]:.0f} eV"
+        cube = r.extra.get("cube")
+        if cube is not None and not r.decodable and cube.n_energy == 1:
+            return f"{cube.energy[0]:.1f} eV"               # an imaging map
         return "no data"
+
+    @staticmethod
+    def _tag(r):
+        """The note after a row's name: nothing for a spectrum, "(Map)" for
+        a single-energy image, "[no data]" for a region we could not read."""
+        if r.decodable:
+            return ""
+        cube = r.extra.get("cube")
+        if cube is not None and cube.n_energy == 1:
+            return "  (Map)"
+        return "  [no data]"
+
+    @staticmethod
+    def _pts_str(r):
+        cube = r.extra.get("cube")
+        if cube is not None and not r.decodable and cube.n_energy == 1:
+            return f"{cube.nx}x{cube.ny}"
+        return str(r.n_points)
 
     @staticmethod
     def _pe_str(r):
@@ -386,11 +407,11 @@ class SpectrumFile:
                     and len(groups[sample_name]) == 1):
                 # one spectrum in this sample: a single row, not three levels
                 r = groups[sample_name][0]
-                tag = "" if r.decodable else "  [no data]"
+                tag = self._tag(r)
                 root.children.append(TreeNode(
                     f"{r.name} ({sample_name}){tag}", "EscaSpectrum", r.offset,
                     region=r,
-                    cols=(self._be_str(r), str(r.n_points), self._pe_str(r),
+                    cols=(self._be_str(r), self._pts_str(r), self._pe_str(r),
                           "")))
                 continue
 
@@ -418,10 +439,10 @@ class SpectrumFile:
                     sample_node.children.append(folder)
             else:
                 for r in groups[sample_name]:
-                    tag = "" if r.decodable else "  [no data]"
+                    tag = self._tag(r)
                     sample_node.children.append(TreeNode(
                         f"{r.name}{tag}", "EscaSpectrum", r.offset, region=r,
-                        cols=(self._be_str(r), str(r.n_points),
+                        cols=(self._be_str(r), self._pts_str(r),
                               self._pe_str(r), "")))
             if not flat:
                 root.children.append(sample_node)

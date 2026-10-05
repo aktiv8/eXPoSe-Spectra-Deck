@@ -248,8 +248,15 @@ class TestRealPairs(unittest.TestCase):
                                 or "objects the index lists" in str(exc), dpath)
                 continue
             b = load_file(kpath)
-            self.assertEqual(len(a.regions), len(b.regions), dpath)
-            for ra, rb in zip(a.regions, b.regions):
+            regions_a = a.regions
+            if (len(a.regions) > len(b.regions)
+                    and os.path.getmtime(kpath) < os.path.getmtime(dpath)):
+                # the .kal was exported while the run was still going
+                # (08092017_XP_LEtters: 12 maps at 12:46, 15 in the .dset at
+                # 13:28): what it holds must be the first of the .dset's
+                regions_a = a.regions[:len(b.regions)]
+            self.assertEqual(len(regions_a), len(b.regions), dpath)
+            for ra, rb in zip(regions_a, b.regions):
                 tag = f"{os.path.basename(dpath)}:{rb.name}"
                 for at in self.ATTRS:
                     self.assertEqual(getattr(ra, at), getattr(rb, at),

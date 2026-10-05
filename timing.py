@@ -31,7 +31,7 @@ from __future__ import annotations
 import datetime as _dt
 from dataclasses import dataclass, field
 
-SNAPSHOT_MODES = ("Snapshot", "SnapMap")
+SNAPSHOT_MODES = ("Snapshot", "SnapMap", "Stigmatic map")
 
 
 def parse_ts(text):

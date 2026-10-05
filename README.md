@@ -621,6 +621,34 @@ where the signal comes from:
   (the slider sets how much of the picture shows through).
 * **Save…** writes the picture (PNG), the map values (CSV) or the spectra (CSV).
 
+**Kratos imaging maps** (stigmatic images from a `.kal` or `.dset`, one
+single-energy image per object) are rows marked *(Map)*, with the binding
+energy and the image size; they have no spectrum, so they carry no tick box.
+**Double-click** one (or right-click → *Open image map…*, or Tools → *SnapMap /
+image map viewer…*):
+
+* the image has a µm scale and a scale bar; **◀ ▶**, the slider or the list step
+  through the maps of the file, and *Show* narrows them to the **same stage
+  position** (a focus series, opened on by default when the stage height
+  varies), the **same energy** (a repeated or time series) or all of them;
+* the plot on the right gives the mean counts per pixel of the area you drag
+  on the image (the whole image until you do) against the stage height, the
+  time or the frame number, or the image **sharpness**, which peaks at best
+  focus;
+* *Colours*, *Same colour range for all* and *Smooth (px)* change only the
+  picture; the means, the sharpness and the saved values come from the counts as
+  recorded;
+* **Save…** writes the picture (PNG), this map's pixel values (CSV) or a table
+  of the maps shown (CSV).
+
+**The pixel size is approximate.** The file does not record the field of view.
+It was measured by registering neighbouring images the stage had moved by a
+known distance (about 1.73 µm per pixel, a field of about 0.44 mm, on the
+Kratos Axis these files came from, in medium magnification; two pairs agreed to 0.1 %), and the
+viewer says "approx." wherever a µm value appears. A small rotation (about 4°)
+between the image and the stage axes is not applied. Imaging maps are not yet in
+the PDF, the slides or the data browser.
+
 ## Depth profiles
 
 Sputter depth profiles are detected automatically (from the Kratos file's
@@ -640,6 +668,8 @@ in `CLAUDE.md` have the detail):
 
 * a **viewer for the mosaic** in the app or the data browser (today it is in the
   report and the slides);
+* **Kratos imaging maps** in the PDF, the slides and the data browser (today
+  only the desktop viewer opens them);
 * **clickable entries** in the PDF's contents (the slides have them);
 * opening a saved workbook **without re-reading** the original files, and
   importing / exporting the XPSView `.xpsv` package;
