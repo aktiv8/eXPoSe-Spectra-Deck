@@ -176,6 +176,15 @@ def series_axis(frames_):
     return "Frame", [float(i + 1) for i in range(len(frames_))]
 
 
+BAR_CHOICES = (10, 20, 50, 100, 200, 500)        # µm
+
+
+def scale_bar(width_um):
+    """A round scale-bar length (µm) of about a fifth of ``width_um``."""
+    want = width_um / 5
+    return min(BAR_CHOICES, key=lambda b: abs(b - want))
+
+
 # -- numbers from the pixels -------------------------------------------------------
 def pixels(frame: Frame):
     """``(ny, nx)`` float64 view of a frame's counts."""

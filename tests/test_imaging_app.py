@@ -245,10 +245,39 @@ class TestImagingApp(unittest.TestCase):
         self.assertEqual(p["imaging"][0]["position"], "Grid on Tape")
         self.assertIn("approximate", p["imaging_note"])
 
-    def test_report_pages_do_not_pick_up_imaging_maps(self):
-        self.assertFalse(imagepages.available([self.parser]))
-        self.assertEqual(imagepages.items([self.parser]), [])
-        self.assertEqual(imagepages.plan([self.parser]), [])
+    def test_the_workspace_writes_the_pages_for_the_pdf_and_the_deck(self):
+        from matplotlib.backends.backend_pdf import PdfPages
+        import io
+        buf = io.BytesIO()
+        with PdfPages(buf) as pdf:
+            self.assertEqual(self.ws._report_image_pages(pdf),
+                             ["Image maps"])
+        self.assertTrue(buf.getvalue().startswith(b"%PDF"))
+        slides = self.ws._deck_image_pages()
+        self.assertEqual([s["title"] for s in slides], ["Image maps"])
+        self.assertTrue(slides[0]["png"].startswith(b"\x89PNG"))
+        self.assertIn("approximate", slides[0]["notes"])
+        # a left-out position is not drawn
+        key = imagepages.items([self.parser])[0][0]
+        self.assertEqual([s["title"] for s in self.ws._deck_image_pages(
+            skip={key})], ["Image maps – Elsewhere"])
+
+    def test_report_pages_pick_up_imaging_maps_by_position(self):
+        self.assertTrue(imagepages.available([self.parser]))
+        items = imagepages.items([self.parser])
+        self.assertEqual([lab for _k, lab in items],
+                         ["Image maps – Grid on Tape",
+                          "Image maps – Elsewhere"])
+        self.assertTrue(all(k.startswith("img:") for k, _l in items))
+        pages = imagepages.plan([self.parser])
+        self.assertEqual([(p.kind, p.title, p.n_items) for p in pages],
+                         [("images", "Image maps", 4)])
+        # a position left out has no page
+        left = imagepages.plan([self.parser], skip=[items[0][0]])
+        self.assertEqual([p.title for p in left],
+                         ["Image maps – Elsewhere"])
+        # and the workspace offers them in the Report generator
+        self.assertEqual(self.ws._image_items(), items)
 
 
 if __name__ == "__main__":

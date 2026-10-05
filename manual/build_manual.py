@@ -321,7 +321,7 @@ REPORT_SECTIONS = [
     ("Summary", "A short written overview of the experiment."),
     ("Quantification", "Atomic percent from CasaXPS fits, by sample and by depth level."),
     ("Figures", "One page (slide) per saved figure, drawn with its caption."),
-    ("Camera pictures and SnapMaps", "Sample-view photos, mosaics and element-map pages."),
+    ("Camera pictures, SnapMaps and image maps", "Sample-view photos, mosaics, element-map pages and Kratos image maps."),
     ("Methods", "The automatically written methods paragraph."),
     ("Timing", "After Methods: first start, last finish, time in use, counting time and what was "
      "not counting (moves, settling, sputtering, dead time), plus the counting time of each sample."),

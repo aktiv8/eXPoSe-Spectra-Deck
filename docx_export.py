@@ -406,7 +406,7 @@ def _images_section(d, image_pages):
     pages = image_pages() if image_pages else []
     if not pages:
         return False
-    d.heading("Camera pictures and SnapMaps", level=1)
+    d.heading("Camera pictures, SnapMaps and image maps", level=1)
     for pg in pages:
         d.heading(pg["title"], level=2)
         d.picture(pg["png"])

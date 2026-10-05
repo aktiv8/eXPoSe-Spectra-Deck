@@ -346,7 +346,7 @@ workbook. Sections, in the default results-first order:
   the pages say so. Each sample can be ticked separately.
 * **Figures** — one page set per saved figure (drawn on white with its caption);
   with none saved the current view is used.
-* **Camera pictures and SnapMaps** — see below; each picture and map site can be
+* **Camera pictures, SnapMaps and image maps** — see below; each picture and map site can be
   ticked separately, and overlapping pictures can also be **stitched into a
   mosaic** (*Options* tab).
 * **Timing** (after Methods) — first start, last finish, time in use,
@@ -368,8 +368,8 @@ text and tables, so you can restyle them freely.
 
 A figure slide is a high-resolution picture with an editable caption and speaker notes describing the look and the spectra shown.
 
-**Camera pictures and SnapMaps in the report and slides.** When the loaded
-files have them (an Avantage experiment), the report gets pages after the
+**Camera pictures, SnapMaps and image maps in the report and slides.** When the loaded
+files have them (an Avantage experiment, or Kratos imaging maps), the report gets pages after the
 metadata and the deck gets slides before the figures:
 
 * **Mosaics**: pictures that overlap (say, several points along a row) are
@@ -388,6 +388,11 @@ metadata and the deck gets slides before the figures:
   strongest peak (the window is in the title), with its own colour bar scaled
   from the 1st to the 99th percentile. The colour scale is the one chosen in the
   SnapMap viewer. The speaker notes list the windows.
+* **Image maps** (Kratos stigmatic images): the images of each stage position,
+  in acquisition order, twelve to a page (slide), with the position in each
+  title when a page holds more than one. Each image has its own colour scale
+  and colour bar, and a scale bar marked *approx.* because the file does not
+  record the field of view. A position can be ticked separately.
 
 Names, notes and energy shifts you set are applied. Camera slides are JPEG (the
 deck stays a few MB); the report keeps the pictures at 640 px wide. The

@@ -172,7 +172,7 @@ class TestPicking(unittest.TestCase):
         spec = rs.with_child(rs.default_spec(), "images", items[0][0], False)
         self.assertEqual(rs.skipped(spec, "images"), {items[0][0]})
         self.assertIn("Pictures (2 of 3)", rs.describe(spec, inv)
-                      .replace("Camera pictures and SnapMaps", "Pictures"))
+                      .replace("Camera pictures, SnapMaps and image maps", "Pictures"))
 
 
 @unittest.skipUnless(HAVE, "matplotlib, numpy and Pillow needed")
@@ -240,6 +240,139 @@ class TestDrawing(unittest.TestCase):
         self.assertEqual(len(ax.patches) >= 1, True)
         # S1 is a map site: no second, round marker for it
         self.assertEqual(sum(1 for t in texts if t == "S1"), 1)
+
+
+def imaging_doc(n_maps, positions=("Grid",)):
+    """A loaded Kratos ``.kal`` of ``n_maps`` imaging maps at each position."""
+    from readers import load_file
+    from test_kratosmap import kal_map, kal_position, kal_text
+    objs, k = [], 0
+    for pos in positions:
+        k += 1
+        objs.append(kal_position(pos, k))
+        for j in range(n_maps):
+            k += 1
+            objs.append(kal_map("Au 4f", k, z_m=(900 + 30 * j) / 1e6,
+                                when=f"17/09/08 09:{10 + j:02d}:00"))
+    tmp = tempfile.mkdtemp()
+    path = os.path.join(tmp, "maps.kal")
+    with open(path, "w") as fh:
+        fh.write(kal_text(*objs))
+    d = load_file(path)
+    shutil.rmtree(tmp, True)
+    return d
+
+
+@unittest.skipUnless(HAVE, "matplotlib, numpy and Pillow needed")
+class TestImageMaps(unittest.TestCase):
+    """Kratos imaging maps: pages of single-energy images per stage position."""
+
+    def test_one_position_is_titled_by_name_and_long_series_are_numbered(self):
+        pages = ip.plan([imaging_doc(3)])
+        self.assertEqual([(p.kind, p.title, p.n_items) for p in pages],
+                         [("images", "Image maps – Grid", 3)])
+        pages = ip.plan([imaging_doc(14)])
+        self.assertEqual([(p.title, p.n_items) for p in pages],
+                         [("Image maps – Grid (1 of 2)", ip.IMAGES_PER_PAGE),
+                          ("Image maps – Grid (2 of 2)", 2)])
+
+    def test_positions_share_a_page_and_a_small_one_is_not_split(self):
+        pages = ip.plan([imaging_doc(3, ("A", "B"))])
+        self.assertEqual([(p.title, p.n_items) for p in pages],
+                         [("Image maps", 6)])
+        # 7 + 7 do not fit on one page of 12: the second starts a new page
+        pages = ip.plan([imaging_doc(7, ("A", "B"))])
+        self.assertEqual([(p.title, p.n_items) for p in pages],
+                         [("Image maps (1 of 2)", 7),
+                          ("Image maps (2 of 2)", 7)])
+        # each cell then names its position
+        fig = Figure(figsize=(11.7, 8.3), dpi=50)
+        pages[1].draw(fig)
+        titles = [a.get_title() for a in fig.axes if a.images]
+        self.assertTrue(titles)
+        self.assertTrue(all(t.startswith("B" + chr(10)) for t in titles))
+
+    def test_a_position_left_out_is_not_on_the_page(self):
+        d = imaging_doc(2, ("A", "B"))
+        a = next(k for k, l in ip.items([d]) if l.endswith("A"))
+        pages = ip.plan([d], skip=[a])
+        self.assertEqual([(p.title, p.n_items) for p in pages],
+                         [("Image maps – B", 2)])
+        self.assertEqual(ip.plan([d], skip=[k for k, _l in ip.items([d])]), [])
+
+    def test_names_come_from_the_label_function(self):
+        pages = ip.plan([imaging_doc(1)], label_of=lambda p, s: "Lab " + s)
+        self.assertEqual(pages[0].title, "Image maps – Lab Grid")
+
+    def test_each_image_has_its_own_axes_scale_bar_and_colour_bar(self):
+        page = ip.plan([imaging_doc(3)])[0]
+        fig = Figure(figsize=(11.7, 8.3), dpi=50)
+        page.draw(fig, (0.0, 0.03, 1.0, 0.93))
+        images = [a for a in fig.axes if a.images]
+        self.assertEqual(len(images), 3)
+        self.assertEqual(len(fig.axes), 6)             # image + colour bar each
+        texts = [t.get_text() for t in images[0].texts]
+        self.assertTrue(any("(approx.)" in t for t in texts))
+        self.assertIn("Au 4f", images[0].get_title())
+        pos = [a.get_position() for a in images]
+        full = ip.plan([imaging_doc(12)])[0]
+        fig2 = Figure(figsize=(11.7, 8.3), dpi=50)
+        full.draw(fig2, (0.0, 0.03, 1.0, 0.93))
+        # a part-filled page keeps the cell size of a full one
+        self.assertAlmostEqual(pos[0].width,
+                               [a for a in fig2.axes if a.images][0]
+                               .get_position().width)
+
+    def test_drawing_stays_inside_the_rectangle_and_saves_for_a_slide(self):
+        import pptx_export
+        rect = (0.0, 0.03, 1.0, 0.93)
+        page = ip.plan([imaging_doc(12)])[0]
+        fig = Figure(figsize=(11.7, 8.3), dpi=50)
+        page.draw(fig, rect)
+        for ax in fig.axes:
+            pos = ax.get_position()
+            self.assertGreaterEqual(pos.x0, rect[0] - 1e-9)
+            self.assertLessEqual(pos.x1, rect[2] + 1e-9)
+            self.assertGreaterEqual(pos.y0, rect[1] - 1e-9)
+            self.assertLessEqual(pos.y1, rect[3] + 1e-9)
+        fig = Figure(figsize=pptx_export.FIGURE_SIZE, dpi=50)
+        page.draw(fig, (0.0, 0.0, 1.0, 1.0))
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png")
+        self.assertTrue(buf.getvalue().startswith(b"\x89PNG"))
+
+    def test_notes_say_the_pixel_size_is_approximate(self):
+        note = ip.plan([imaging_doc(2)])[0].notes()
+        self.assertIn("Image maps (2 on this page; Grid)", note)
+        self.assertIn("approximate", note)
+        self.assertEqual(len(note.splitlines()), 3)    # summary + one per image
+
+    def test_the_pdf_has_the_image_pages_with_their_titles(self):
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, True)
+
+        def render_images(pdf):
+            out = []
+            for pg in ip.plan([imaging_doc(7, ("A", "B"))]):
+                fig = Figure(figsize=(11.7, 8.3))
+                pg.draw(fig, (0.0, 0.03, 1.0, 0.93))
+                fig.text(0.03, 0.975, pg.title)
+                pdf.savefig(fig)
+                out.append(pg.title)
+            return out
+
+        path = os.path.join(tmp, "r.pdf")
+        n = report.build_report(path, {"title": "Study"}, "", [], [], [],
+                                lambda *a: 0, ("cover", "images"), render_images)
+        self.assertEqual(n, 3)                          # cover + two image pages
+        try:
+            import pymupdf as mu
+        except ImportError:
+            import fitz as mu
+        with mu.open(path) as d:
+            text = [p.get_text() for p in d]
+        self.assertIn("Image maps (1 of 2)", text[1])
+        self.assertIn("Image maps (2 of 2)", text[2])
 
 
 @unittest.skipUnless(HAVE, "matplotlib, numpy and Pillow needed")

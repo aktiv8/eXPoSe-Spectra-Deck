@@ -41,7 +41,7 @@ SECTION_DEFS = (
     ("summary", "Summary", "Your summary text"),
     ("results", "Quantification", "Atomic percent from the fits"),
     ("figures", "Figures", "The saved figures"),
-    ("images", "Camera pictures and SnapMaps", "Photos and map sites"),
+    ("images", "Camera pictures, SnapMaps and image maps", "Photos, map sites and image maps"),
     ("methods", "Methods", "How the data were acquired"),
     ("timing", "Timing", "When it ran and for how long"),
     ("calibration", "Energy calibration", "Binding-energy statement"),

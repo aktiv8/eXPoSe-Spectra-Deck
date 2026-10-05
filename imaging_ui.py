@@ -33,13 +33,7 @@ from workbook_ui import _finish, keep_in_front
 FILTERS = (("All maps", "all"), ("Same energy", "energy"),
            ("Same stage position", "position"))
 PLOTS = ("Mean counts per pixel", "Sharpness (focus)")
-BAR_CHOICES = (10, 20, 50, 100, 200, 500)        # µm
-
-
-def _scale_bar(width_um):
-    """A round scale-bar length (µm) of about a fifth of ``width_um``."""
-    want = width_um / 5
-    return min(BAR_CHOICES, key=lambda b: abs(b - want))
+_scale_bar = kratosmap.scale_bar
 
 
 class MapSeriesDialog(tk.Toplevel):

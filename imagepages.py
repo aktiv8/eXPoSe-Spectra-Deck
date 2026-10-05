@@ -1,4 +1,5 @@
-"""Camera pictures and SnapMaps as pages, for the PDF report and the slides.
+"""Camera pictures, SnapMaps and Kratos imaging maps as pages, for the PDF
+report and the slides.
 
 Tk-free; matplotlib, numpy and Pillow are imported only when a page is drawn.
 :func:`plan` says which pages there are (cheap, geometry only); each
@@ -11,7 +12,11 @@ drawing:
   outline of any SnapMap taken there and a scale bar;
 * **SnapMap pages**: one per map site: the camera picture taken there (with the
   map's footprint) beside a grid of element maps, each the counts in the window
-  round that element's strongest peak, with its own colour bar.
+  round that element's strongest peak, with its own colour bar;
+* **image-map pages**: the Kratos stigmatic images (``kratosmap``) of one
+  stage position, in acquisition order, up to ``IMAGES_PER_PAGE`` to a page,
+  each with its own colour scale, a scale bar marked approximate (the field of
+  view is not in the file) and a colour bar.
 """
 
 from __future__ import annotations
@@ -20,12 +25,15 @@ import io
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
+import kratosmap
 import mosaic
 import reportspec
 import snapmap
 import snapshot
 
 PICTURE_PX = 640                 # pictures are drawn from a copy this wide at most
+IMAGES_PER_PAGE = 12             # image maps on one page (4 across, 3 down)
+IMAGE_COLUMNS = 4
 
 
 @dataclass
@@ -71,8 +79,16 @@ class Site:
 
 
 @dataclass
+class ImageSet:
+    """The Kratos imaging maps of one stage position (a ``Region.sample``)."""
+    title: str
+    frames: list                 # kratosmap.Frame, in acquisition order
+    key: str = ""
+
+
+@dataclass
 class Page:
-    kind: str                    # "camera" or "maps"
+    kind: str                    # "camera", "mosaic", "maps" or "images"
     title: str
     n_items: int
     _draw: object = field(default=None, repr=False)
@@ -102,9 +118,17 @@ def _is_snapmap(r) -> bool:
     return cube is not None and cube.n_energy > 1
 
 
+def _is_image_map(r) -> bool:
+    """A single-energy image with no spectrum of its own (a Kratos stigmatic
+    map): the test ``htmlbrowser.is_image_map`` makes for the data browser."""
+    cube = r.extra.get("cube")
+    return cube is not None and cube.n_energy == 1 and not r.decodable
+
+
 def items(docs, label_of=None):
-    """``[(key, label)]`` of every calibrated camera picture and SnapMap site
-    the files hold, for the Report generator (cheap: no picture is read)."""
+    """``[(key, label)]`` of every calibrated camera picture, SnapMap site and
+    stage position with Kratos imaging maps the files hold, for the Report
+    generator (cheap: no picture is read)."""
     label_of = label_of or (lambda p, s: s)
     out = []
     for p in docs:
@@ -121,6 +145,12 @@ def items(docs, label_of=None):
                 seen.append(r.sample)
                 out.append((item_key("map", p, r.sample),
                             f"SnapMap – {label_of(p, r.sample)}"))
+        seen = []
+        for r in p.regions:
+            if _is_image_map(r) and r.sample not in seen:
+                seen.append(r.sample)
+                out.append((item_key("img", p, r.sample),
+                            f"Image maps – {label_of(p, r.sample)}"))
     return out
 
 
@@ -136,8 +166,16 @@ def plan(docs, label_of=None, display=None, per_sheet=6, columns=3, skip=(),
     label_of = label_of or (lambda p, s: s)
     display = display or (lambda r: r)
     skip = set(skip)
-    pictures, sites, sets = [], [], []
+    pictures, sites, sets, image_sets = [], [], [], []
     for p in docs:
+        by_sample = {}                              # sample -> its image maps
+        for r in p.regions:
+            if _is_image_map(r):
+                by_sample.setdefault(r.sample, []).append(display(r))
+        mine_sets = [ImageSet(label_of(p, sample), kratosmap.frames(rs),
+                              item_key("img", p, sample))
+                     for sample, rs in by_sample.items()]
+        image_sets.append([s for s in mine_sets if s.key not in skip])
         positions = {label_of(p, k): xy
                      for k, xy in p.sample_positions().items()}
         cubes = {}                                  # sample -> its map regions
@@ -196,6 +234,40 @@ def plan(docs, label_of=None, display=None, per_sheet=6, columns=3, skip=(),
             "maps", f"SnapMap – {site.title}", len(site.maps),
             lambda fig, rect, cmap, s=site: draw_site(fig, rect, s, cmap),
             lambda s=site: _site_notes(s)))
+    for doc_sets in image_sets:
+        chunks = _pack_images(doc_sets)
+        many = len(doc_sets) > 1               # then each cell names its position
+        for n, chunk in enumerate(chunks, 1):
+            title = "Image maps" + (f" – {doc_sets[0].title}" if not many
+                                    else "")
+            title += f" ({n} of {len(chunks)})" if len(chunks) > 1 else ""
+            entries = [(s.title if many else "", f) for s, f in chunk]
+            pages.append(Page(
+                "images", title, len(entries),
+                lambda fig, rect, cmap, e=entries: draw_image_sheet(
+                    fig, rect, e, cmap),
+                lambda e=entries, c=chunk: _image_notes(e, c)))
+    return pages
+
+
+def _pack_images(sets):
+    """``[[(ImageSet, Frame)]]``: a file's image maps, position after
+    position, ``IMAGES_PER_PAGE`` to a page. A position that fits on one page
+    is not split across two; a longer one fills pages and goes on."""
+    pages, cur = [], []
+    for s in sets:
+        items = [(s, f) for f in s.frames]
+        if cur and len(items) <= IMAGES_PER_PAGE and len(cur) + len(
+                items) > IMAGES_PER_PAGE:
+            pages.append(cur)
+            cur = []
+        for it in items:
+            if len(cur) == IMAGES_PER_PAGE:
+                pages.append(cur)
+                cur = []
+            cur.append(it)
+    if cur:
+        pages.append(cur)
     return pages
 
 
@@ -224,11 +296,12 @@ def _mosaic_notes(cluster):
 
 
 def available(docs) -> bool:
-    """True when ``docs`` hold a calibrated camera picture or a SnapMap."""
+    """True when ``docs`` hold a calibrated camera picture, a SnapMap or a
+    Kratos imaging map."""
     for p in docs:
         if any(snapshot.has_calibration(b.calib) for b in p.images):
             return True
-        if any(_is_snapmap(r) for r in p.regions):
+        if any(_is_snapmap(r) or _is_image_map(r) for r in p.regions):
             return True
     return False
 
@@ -269,6 +342,19 @@ def _site_notes(site):
     if site.camera is not None:
         text += f"\nCamera picture: {site.camera.name}."
     return text
+
+
+def _image_notes(entries, chunk):
+    """``entries`` as drawn, ``chunk`` the same as ``(ImageSet, Frame)``."""
+    cube = chunk[0][1].cube
+    where = list(dict.fromkeys(s.title for s, _f in chunk))
+    rows = [f"{head}: {f.label}" if head else f.label for head, f in entries]
+    return (f"Image maps ({len(chunk)} on this page; "
+            f"{', '.join(where)}): {cube.nx} x {cube.ny} pixels of "
+            f"{abs(cube.dx):.2f} µm (approx.), in acquisition order. Each "
+            "image has its own colour scale (1st to 99th percentile of its "
+            f"pixels; counts per pixel). {kratosmap.SCALE_NOTE}\n"
+            + "\n".join(rows))
 
 
 # -- drawing -------------------------------------------------------------------------
@@ -356,3 +442,40 @@ def draw_site(fig, rect, site, cmap=None):
             ax.set_ylabel("Y (µm)", fontsize=6, labelpad=1)
         cb = fig.colorbar(im, ax=ax, fraction=0.05, pad=0.03)
         cb.ax.tick_params(labelsize=5.5, length=2, pad=1)
+
+
+def draw_image_sheet(fig, rect, entries, cmap=None):
+    """Kratos imaging maps, ``entries`` = ``[(heading, Frame)]`` (the heading,
+    the stage position, may be empty), in a grid ``IMAGE_COLUMNS`` wide with
+    ``IMAGES_PER_PAGE`` cells (so a part-filled last page keeps the image size
+    of the others); each has its own colour range, scale bar and colour bar."""
+    import matplotlib
+    import matplotlib.patheffects as pe
+    left, bottom, right, top = rect
+    cmap = cmap or matplotlib.colormaps["viridis"]
+    rows = -(-IMAGES_PER_PAGE // IMAGE_COLUMNS)
+    gs = fig.add_gridspec(rows, IMAGE_COLUMNS, left=left + 0.03,
+                          right=right - 0.02, bottom=bottom + 0.05,
+                          top=top - 0.03, wspace=0.28, hspace=0.30)
+    halo = [pe.withStroke(linewidth=2.0, foreground="#0B1116")]
+    for i, (heading, f) in enumerate(entries):
+        ax = fig.add_subplot(gs[i // IMAGE_COLUMNS, i % IMAGE_COLUMNS])
+        img = kratosmap.pixels(f)
+        vmin, vmax = snapmap.colour_range(img)
+        left_, right_, bottom_, top_ = f.cube.extent()
+        im = ax.imshow(img, extent=(left_, right_, bottom_, top_), cmap=cmap,
+                       vmin=vmin, vmax=vmax, interpolation="nearest")
+        ax.set_axis_off()
+        ax.set_title(f"{heading}\n{f.label}" if heading else f.label,
+                     fontsize=6.5, pad=2)
+        width = abs(right_ - left_)
+        height = abs(bottom_ - top_)
+        bar = kratosmap.scale_bar(width)
+        x1 = min(left_, right_) + 0.05 * width
+        y = max(bottom_, top_) - 0.06 * height
+        ax.plot([x1, x1 + bar], [y, y], color="white", lw=2,
+                solid_capstyle="butt", path_effects=halo)
+        ax.text(x1, y - 0.02 * height, f"{bar} µm (approx.)", color="white",
+                fontsize=5.5, ha="left", va="bottom", path_effects=halo)
+        cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+        cb.ax.tick_params(labelsize=5, length=2, pad=1)
