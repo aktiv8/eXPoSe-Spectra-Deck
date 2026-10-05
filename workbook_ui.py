@@ -29,6 +29,23 @@ def _finish(dialog, app, width, height):
     dialog.geometry(f"{width}x{height}+{x}+{y}")
 
 
+def keep_in_front(dialog, master):
+    """Keep a non-modal window above the main window. A bare ``Toplevel``
+    made inside a click handler can end up behind it (the button release goes
+    to the main window), so the window is owned by ``master`` (an owned window
+    cannot sink behind its owner, as with the other tool windows) and raised
+    now and again once the click has been handled."""
+    def raise_():
+        try:
+            dialog.lift()
+            dialog.focus_force()
+        except tk.TclError:                       # closed in the meantime
+            pass
+    dialog.transient(master)
+    raise_()
+    dialog.after_idle(raise_)
+
+
 class DetailsDialog(tk.Toplevel):
     """Title, customer, reference, operator, date, the free-text summary and
     the letterhead logo of a workbook. ``on_ok(details, logo_path)`` is called

@@ -27,6 +27,11 @@ from readers import load_file  # noqa: E402
 from test_kratosmap import NX, NY, kal_map, kal_position, kal_text  # noqa: E402
 
 
+def imaging_first(node):
+    from spectradeck import regions_under
+    return regions_under(node)[0]
+
+
 def focus_series_file(directory):
     """Three maps at one position with the stage height stepping 30 um, then
     one at another position, as a Kratos focus run would write them."""
@@ -150,6 +155,86 @@ class TestImagingApp(unittest.TestCase):
         texts = [t.get_text() for t in dlg.ax_map.texts]
         self.assertTrue(any("(approx.)" in t for t in texts))
         self.assertEqual(len(dlg.fig.axes), 3)            # image, series, colours
+
+    def test_the_viewers_are_owned_by_the_main_window(self):
+        # an owned window cannot sink behind its owner; stacking order itself
+        # cannot be seen headlessly
+        dlg = self.open_dialog(self.maps[0])
+        self.assertEqual(str(dlg.wm_transient()), str(self.root))
+        import snapmap
+        import snapmap_ui
+        cube = snapmap.build([284.0, 285.0, 286.0], 2, 2, 0.0, 1.0, 0.0, 1.0,
+                             [((x, y), [1, 2, 3]) for x in range(2)
+                              for y in range(2)])
+        r = self.maps[0]
+        sm = snapmap_ui.SnapMapDialog(self.root, self.ws, self.parser,
+                                      type(r)(name="C 1s", index=9, offset=9,
+                                              energy=[286.0, 285.0, 284.0],
+                                              counts=[1.0, 2.0, 3.0],
+                                              decodable=True, sample=r.sample,
+                                              extra={"cube": cube}))
+        self.addCleanup(sm.destroy)
+        self.assertEqual(str(sm.wm_transient()), str(self.root))
+
+    def _row_of(self, region):
+        for iid, (_p, node) in self.ws.node_map.items():
+            if node.region is region:
+                return iid
+        raise AssertionError("row not found")
+
+    def test_enter_opens_a_selected_map_and_is_left_alone_otherwise(self):
+        made = []
+        orig = self.ws.open_snapmap
+        self.ws.open_snapmap = lambda region=None: made.append(region)
+        try:
+            self.ws.tree.selection_set(self._row_of(self.maps[1]))
+            self.ws._on_select()
+            self.assertEqual(self.ws._open_selected_map(), "break")
+            self.assertEqual(len(made), 1)
+            self.ws.tree.selection_set(())
+            self.ws._on_select()
+            self.assertIsNone(self.ws._open_selected_map())
+            self.assertEqual(len(made), 1)
+        finally:
+            self.ws.open_snapmap = orig
+
+    def test_double_click_on_a_sample_row_of_maps_opens_the_first(self):
+        from types import SimpleNamespace
+        made = []
+        orig = self.ws.open_snapmap
+        self.ws.open_snapmap = lambda region=None: made.append(region)
+        try:
+            sample_rows = [iid for iid, (_p, n) in self.ws.node_map.items()
+                           if n.region is None and n.type_name == "sample"]
+            self.assertTrue(sample_rows)
+            tree = self.ws.tree
+            real = tree.identify_row
+            tree.identify_row = lambda y: sample_rows[0]
+            try:
+                out = self.ws._on_tree_double(SimpleNamespace(x=5, y=5))
+            finally:
+                tree.identify_row = real
+            self.assertEqual(out, "break")
+            self.assertEqual(len(made), 1)
+            under = self.ws.node_map[sample_rows[0]][1]
+            self.assertIs(made[0], imaging_first(under))
+            # a row that is not a map keeps its normal double-click behaviour
+            tree.identify_row = lambda y: ""
+            try:
+                self.assertIsNone(self.ws._on_tree_double(
+                    SimpleNamespace(x=5, y=5)))
+            finally:
+                tree.identify_row = real
+        finally:
+            self.ws.open_snapmap = orig
+
+    def test_status_bar_tells_how_to_open_a_selected_map(self):
+        self.ws.tree.selection_set(self._row_of(self.maps[0]))
+        self.ws._on_select()
+        self.assertIn("press Enter to open", self.ws.status.cget("text"))
+        self.ws.tree.selection_set(())
+        self.ws._on_select()
+        self.assertNotIn("press Enter", self.ws.status.cget("text"))
 
     def test_report_pages_do_not_pick_up_imaging_maps(self):
         self.assertFalse(imagepages.available([self.parser]))

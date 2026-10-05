@@ -28,7 +28,7 @@ from tkinter import filedialog, ttk
 import kratosmap
 import snapmap
 import themes
-from workbook_ui import _finish
+from workbook_ui import _finish, keep_in_front
 
 FILTERS = (("All maps", "all"), ("Same energy", "energy"),
            ("Same stage position", "position"))
@@ -120,6 +120,7 @@ class MapSeriesDialog(tk.Toplevel):
         _finish(self, app, 1080, 660)
         self._sync_nav()
         self._rebuild()
+        keep_in_front(self, master)
 
     # -- what is on show -------------------------------------------------------------
     def _select(self, current):

@@ -22,7 +22,7 @@ import smoothing
 import snapmap
 import snapshot
 import themes
-from workbook_ui import _finish
+from workbook_ui import _finish, keep_in_front
 
 
 class SnapMapDialog(tk.Toplevel):
@@ -108,6 +108,7 @@ class SnapMapDialog(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
         _finish(self, app, 1080, 640)
         self._rebuild()
+        keep_in_front(self, master)
 
     # -- what is on show -------------------------------------------------------------
     @staticmethod

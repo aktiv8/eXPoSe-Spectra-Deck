@@ -1209,6 +1209,7 @@ class Workspace:
         self.tree.bind("<space>", self._on_tree_space)
         self.tree.bind("<F2>", lambda e: self.rename_selected())
         self.tree.bind("<Double-Button-1>", self._on_tree_double)
+        self.tree.bind("<Return>", self._open_selected_map)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<<TreeviewOpen>>", lambda e: self._note_open(True))
         self.tree.bind("<<TreeviewClose>>", lambda e: self._note_open(False))
@@ -2559,13 +2560,36 @@ class Workspace:
         if not have:
             self.csv_curves_var.set(False)
 
+    @staticmethod
+    def _is_image_map(r):
+        """A Kratos imaging map: a one-channel cube and no spectrum."""
+        cube = r.extra.get("cube")
+        return cube is not None and cube.n_energy == 1 and not r.decodable
+
     def _on_tree_double(self, event):
-        """Double-click a SnapMap row to open its map."""
+        """Double-click a SnapMap or image-map row to open its map; a sample
+        row that holds only image maps opens the first of them (a row with
+        spectra keeps its normal expand / collapse)."""
         iid = self.tree.identify_row(event.y)
         item = self.node_map.get(iid) if iid else None
-        r = item[1].region if item else None
+        if item is None:
+            return None
+        r = item[1].region
         if r is not None and r.extra.get("cube") is not None:
             self.open_snapmap(r)
+            return "break"
+        if r is None:
+            under = regions_under(item[1])
+            if under and all(self._is_image_map(x) for x in under):
+                self.open_snapmap(under[0])
+                return "break"
+        return None
+
+    def _open_selected_map(self, _event=None):
+        """Enter on a selected row opens its image map or SnapMap (nothing
+        happens for a row without one, so Enter keeps its usual meaning)."""
+        if any(r.extra.get("cube") is not None for r in self.sel_regions):
+            self.open_snapmap()
             return "break"
         return None
 
@@ -2868,6 +2892,7 @@ class Workspace:
             self._follow_camera_image()
         self._update_metadata()
         self._refresh_side()
+        self._update_status()
 
     def _context_menu(self, event):
         row = self.tree.identify_row(event.y)
@@ -5075,6 +5100,9 @@ class Workspace:
         notes = list(dict.fromkeys(self._view_notes))
         if notes and n_spec:
             text += "  ·  " + "; ".join(notes)
+        if any(r.extra.get("cube") is not None
+               for r in getattr(self, "sel_regions", ())):
+            text += "  ·  map selected: double-click or press Enter to open it"
         self.status.config(text=text)
 
     # -- side panels ----------------------------------------------------

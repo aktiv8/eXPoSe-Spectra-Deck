@@ -624,8 +624,10 @@ where the signal comes from:
 **Kratos imaging maps** (stigmatic images from a `.kal` or `.dset`, one
 single-energy image per object) are rows marked *(Map)*, with the binding
 energy and the image size; they have no spectrum, so they carry no tick box.
-**Double-click** one (or right-click → *Open image map…*, or Tools → *SnapMap /
-image map viewer…*):
+**Double-click** one, press **Enter** on a selected one, or double-click a sample
+row that holds only maps (or right-click → *Open image map…*, or Tools →
+*SnapMap / image map viewer…*); the status bar says so while one is selected.
+The viewer is owned by the main window, so it stays in front of it:
 
 * the image has a µm scale and a scale bar; **◀ ▶**, the slider or the list step
   through the maps of the file, and *Show* narrows them to the **same stage
