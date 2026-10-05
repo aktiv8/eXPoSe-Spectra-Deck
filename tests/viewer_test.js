@@ -395,7 +395,7 @@ function near(a, b, msg, tol) {
   if (fx.elements) {
     const ex = fx.elements;
     ex.cases.forEach((c, i) => {
-      const got = V.candidates(c.be, c.win, ex.table, c.hv);
+      const got = V.candidates(c.be, c.win, ex.table, c.hv, c.split);
       eq(got.map((x) => x.label), c.labels, 'candidates ' + i + ' (' + c.be + ' eV)');
       got.forEach((x, k) => near(x.d, c.deltas[k], 'candidate delta ' + i + '.' + k, 1e-9));
     });
@@ -403,10 +403,14 @@ function near(a, b, msg, tol) {
     check(ex.table.lines.some((l) => l[2] === null), 'the fixture has Auger lines');
     near(V.lineBe(['O', 'KLL', null, 510, 1], 1486.6, 1486.6), 976.6, 'Auger binding energy follows hv', 1e-9);
     near(V.lineBe(['O', 'KLL', null, 510, 1], null, 1253.6), 743.6, 'default hv when none is given', 1e-9);
-    eq(V.candidates(700, 1, ex.table, 1486.6), [], 'nothing near 700 eV within 1 eV');
+    eq(V.candidates(700, 1, ex.table, 1486.6, false), [], 'nothing near 700 eV within 1 eV');
+    eq(V.baseLabel('Ti 2p3/2'), 'Ti 2p', 'base label of a component');
+    eq(V.baseLabel('Ti 2p'), 'Ti 2p', 'base label of a pair');
+    eq(V.splitLine('4f7/2'), ['4f', '7/2'], 'split line');
+    eq(V.splitLine('KL1'), ['KL1', ''], 'an Auger line does not split');
     eq(V.lineLabel(['C', '1s', 285, null, 1]), 'C 1s', 'line label');
     (ex.nearby || []).forEach((c, i) => {
-      const got = V.nearbyLines(c.be, c.win, ex.table, c.hv, c.exclude, c.secondary, c.auger);
+      const got = V.nearbyLines(c.be, c.win, ex.table, c.hv, c.exclude, c.secondary, c.auger, 2, c.split);
       eq(got.map((x) => x.label), c.labels, 'nearby ' + i + ' labels');
       eq(got.map((x) => x.tier), c.tiers, 'nearby ' + i + ' tiers');
       got.forEach((x, k) => near(x.be, c.candidate_be[k], 'nearby ' + i + '.' + k + ' be', 1e-9));

@@ -17,8 +17,8 @@ import xpslines as xl  # noqa: E402
 LINES = xl.load_lines()
 
 
-def label(be, window=2.0, hv=None):
-    c = xl.candidates(be, window, LINES, hv)
+def label(be, window=2.0, hv=None, split=False):
+    c = xl.candidates(be, window, LINES, hv, split=split)
     return xl.label_of(c[0][1]) if c else None
 
 
@@ -56,9 +56,13 @@ class TestCandidates(unittest.TestCase):
         self.assertEqual(label(285.2), "C 1s")
         self.assertEqual(label(532.4), "O 1s")
         self.assertEqual(label(399.6), "N 1s")
-        self.assertEqual(label(228.9), "Mo 3d5/2")
-        self.assertEqual(label(161.4), "S 2p3/2")
-        self.assertEqual(label(83.9), "Au 4f7/2")
+        # a doublet is named once by default, by its components on request
+        self.assertEqual(label(228.9), "Mo 3d")
+        self.assertEqual(label(161.4), "S 2p")
+        self.assertEqual(label(83.9), "Au 4f")
+        self.assertEqual(label(228.9, split=True), "Mo 3d5/2")
+        self.assertEqual(label(161.4, split=True), "S 2p3/2")
+        self.assertEqual(label(83.9, split=True), "Au 4f7/2")
 
     def test_nothing_in_the_window(self):
         self.assertIsNone(label(700.0))
@@ -86,7 +90,7 @@ class TestCandidates(unittest.TestCase):
         lost = set()
         for e in LINES:
             if e.get("rank", 1) == 1 and "be" in e:
-                c = xl.candidates(e["be"], 2.0, LINES, 1486.6)
+                c = xl.candidates(e["be"], 2.0, LINES, 1486.6, split=True)
                 if c and c[0][1] is not e:
                     lost.add(xl.label_of(e))
         self.assertLessEqual(lost, allowed)
@@ -96,7 +100,10 @@ class TestCandidates(unittest.TestCase):
         labels = [xl.label_of(e) for _d, e in
                   xl.candidates(533.0, 2.0, LINES, 1486.6)]
         self.assertIn("O 1s", labels)
-        self.assertIn("At 4d3/2", labels)
+        self.assertIn("At 4d", labels)
+        split = [xl.label_of(e) for _d, e in
+                 xl.candidates(533.0, 2.0, LINES, 1486.6, split=True)]
+        self.assertIn("At 4d3/2", split)
 
     def test_auger_lines_follow_the_photon_energy(self):
         # O KL1 (ke=506): an Auger line's binding-energy position is
@@ -193,10 +200,71 @@ class TestPeaks(unittest.TestCase):
         e, y = survey([(285.3, 3000), (532.6, 9000), (74.0, 800),
                        (228.5, 2500)])
         got = dict((lbl, be) for be, lbl in xl.auto_label(e, y, LINES))
-        for lbl, be in (("O 1s", 532.6), ("C 1s", 285.3), ("Al 2p3/2", 74.0),
-                        ("Mo 3d5/2", 228.5)):
+        for lbl, be in (("O 1s", 532.6), ("C 1s", 285.3), ("Al 2p", 74.0),
+                        ("Mo 3d", 228.5)):
             self.assertIn(lbl, got)
             self.assertAlmostEqual(got[lbl], be, delta=0.5)
+        got = dict((lbl, be) for be, lbl in
+                   xl.auto_label(e, y, LINES, split=True))
+        for lbl, be in (("Al 2p3/2", 74.0), ("Mo 3d5/2", 228.5)):
+            self.assertIn(lbl, got)
+            self.assertAlmostEqual(got[lbl], be, delta=0.5)
+
+
+class TestDoublets(unittest.TestCase):
+    def test_split_line_and_base_label(self):
+        self.assertEqual(xl.split_line("2p3/2"), ("2p", "3/2"))
+        self.assertEqual(xl.split_line("4f7/2"), ("4f", "7/2"))
+        self.assertEqual(xl.split_line("3p"), ("3p", ""))
+        self.assertEqual(xl.split_line("KL1"), ("KL1", ""))
+        self.assertEqual(xl.base_label("Ti 2p3/2"), "Ti 2p")
+        self.assertEqual(xl.base_label("Ti 2p"), "Ti 2p")
+        self.assertEqual(xl.base_label("C 1s"), "C 1s")
+
+    def test_a_pair_is_one_candidate_named_by_the_pair(self):
+        c = xl.candidates(454.3, 3.0, LINES, 1486.6)
+        ti = [e for _d, e in c if e["el"] == "Ti"]
+        self.assertEqual([xl.label_of(e) for e in ti], ["Ti 2p"])
+        self.assertEqual(ti[0]["component"], "2p3/2")
+        both = {xl.label_of(e) for _d, e in
+                xl.candidates(457.0, 8.0, LINES, 1486.6, split=True)
+                if e["el"] == "Ti"}
+        self.assertTrue({"Ti 2p3/2", "Ti 2p1/2"} <= both)
+
+    def test_the_weak_component_still_finds_the_pair_ranked_by_the_strong_one(self):
+        # 2p1/2 is a rank-2 line; the pair is rank 1, so a click on the
+        # 460.2 eV peak finds Ti 2p first, as a click on the 2p3/2 does
+        self.assertEqual(label(460.2), "Ti 2p")
+        self.assertEqual(label(460.2, split=True), "Ti 2p1/2")
+        e = next(e for _d, e in xl.candidates(460.2, 1.0, LINES, 1486.6)
+                 if e["el"] == "Ti")
+        self.assertEqual(e["rank"], 1)
+
+    def test_unsplit_entries_and_other_lines_are_untouched(self):
+        got = [xl.label_of(e) for _d, e in
+               xl.candidates(33.4, 0.3, LINES, 1486.6)]
+        self.assertIn("Ti 3p", got)                    # no j in the table
+        self.assertEqual(label(285.0), "C 1s")
+        by_id = {id(e) for e in LINES}
+        for _d, e in xl.candidates(285.0, 2.0, LINES, 1486.6):
+            if e["line"] in ("1s",):
+                self.assertIn(id(e), by_id)               # not a copy
+
+    def test_auto_label_names_a_doublet_once(self):
+        e, y = survey([(454.0, 9000), (460.2, 4500)])
+        names = [lbl for _be, lbl in xl.auto_label(e, y, LINES)]
+        self.assertEqual(names.count("Ti 2p"), 1)
+        split = [lbl for _be, lbl in xl.auto_label(e, y, LINES, split=True)]
+        self.assertEqual(sorted(split), ["Ti 2p1/2", "Ti 2p3/2"])
+
+    def test_nearby_lines_leave_out_the_markers_own_doublet(self):
+        for exclude in ("Ti 2p", "Ti 2p3/2", "Ti 2p1/2"):
+            for split in (False, True):
+                got = xl.nearby_lines(457.0, 8.0, LINES, 1486.6, exclude,
+                                      secondary=True, auger=False,
+                                      max_extra=50, split=split)
+                self.assertFalse([g for g in got if g[1].startswith("Ti 2p")],
+                                 (exclude, split))
 
 
 if __name__ == "__main__":

@@ -70,6 +70,8 @@ class TestIdentifyDialog(unittest.TestCase):
             identify_remove=lambda r, m: None,
             identify_clear=lambda r: None,
             identify_auto=lambda r: 0,
+            ident_split=lambda: False,
+            set_ident_split=lambda on: None,
             predefined_regions=lambda: self.predefined,
             identify_from_casa=self._fake_casa_label)
 
@@ -166,7 +168,26 @@ class TestIdentifyDialog(unittest.TestCase):
         dlg._on_click(102.0)           # SiO2: ~2.6 eV above Si 2p3/2 (99.4)
         labels = [xpslines.label_of(e) for k, _d, e in dlg.rows
                   if k == "line"]
-        self.assertIn("Si 2p3/2", labels)
+        self.assertIn("Si 2p", labels)
+        self.assertNotIn("Si 2p3/2", labels)
+
+    def test_the_spin_orbit_choice_lists_the_components(self):
+        saved = []
+        app = self.fake_app()
+        app.ident_split = lambda: bool(saved and saved[-1])
+        app.set_ident_split = saved.append
+        dlg = workbook_ui.IdentifyDialog(self.root, app, [self.region("Si 2p")])
+        self.addCleanup(dlg.destroy)
+        dlg._on_click(102.0)
+        text = dlg.cand_list.get(0, "end")
+        # the pair is one row; the component that matched is shown beside it
+        self.assertTrue(any(t.startswith("Si 2p ") and "[2p" in t
+                            for t in text), text)
+        dlg.split.set(True)
+        dlg._split_changed()                 # saved, and the list is redone
+        self.assertEqual(saved, [True])
+        text = dlg.cand_list.get(0, "end")
+        self.assertTrue(any(t.startswith("Si 2p3/2") for t in text), text)
 
     def test_core_level_restricts_which_states_are_offered(self):
         dlg = self.dialog(regions=[self.region(name="C 1s")])

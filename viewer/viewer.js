@@ -511,33 +511,82 @@
     return line[2] !== null && line[2] !== undefined ? line[2] : (hv || defaultHv) - line[3];
   };
   V.lineLabel = function (line) { return line[0] + ' ' + line[1]; };
+  /* a spin-orbit component (2p3/2, 3d5/2, 4f7/2) splits into its orbital and j;
+     anything else (1s, 3p, an Auger line) is its own base */
+  V.splitLine = function (line) {
+    var m = /^(\d[spdf])(\d\/2)$/.exec(line || '');
+    return m ? [m[1], m[2]] : [line, ''];
+  };
+  /* "Ti 2p3/2" and "Ti 2p" both mean the doublet "Ti 2p" (xpslines.base_label) */
+  V.baseLabel = function (label) {
+    var s = String(label), k = s.lastIndexOf(' ');
+    return k < 0 ? s : s.slice(0, k) + ' ' + V.splitLine(s.slice(k + 1))[0];
+  };
+  /* a photoelectron line the photon energy cannot excite is not offered
+     (xpslines.reachable); Auger lines follow hv through their kinetic energy */
+  V.reachable = function (line, hv, el) {
+    if (line[2] === null || line[2] === undefined) return true;
+    return line[2] < (hv || el.hv) - (el.reach === undefined ? 5 : el.reach);
+  };
   /* the lines within `win` eV of a binding energy, most plausible first: nearest, a
      secondary line (rank > 1) needs to be about 0.8 eV closer per rank step, common
-     elements get a head start and a rare element's secondary line pays el.rare */
-  V.candidates = function (be, win, el, hv) {
-    var out = [];
+     elements get a head start and a rare element's secondary line pays el.rare. Unless
+     `split`, the two components of a spin-orbit pair are one candidate named by the
+     pair ("Ti 2p"): the nearest component gives the distance, the pair ranks as its
+     stronger component (mirrors xpslines.candidates / _merge_doublets) */
+  V.candidates = function (be, win, el, hv, split) {
+    var found = [], best = {};
+    el.lines.forEach(function (line) {
+      if (line[2] === null || line[2] === undefined) return;
+      var k = line[0] + '|' + V.splitLine(line[1])[0], r = line[4] === null || line[4] === undefined ? 1 : line[4];
+      best[k] = best[k] === undefined ? r : Math.min(best[k], r);
+    });
     el.lines.forEach(function (line, i) {
+      if (!V.reachable(line, hv, el)) return;
       var lb = V.lineBe(line, hv, el.hv), d = lb - be;
       if (Math.abs(d) > win) return;
-      var rank = line[4] === null || line[4] === undefined ? 1 : line[4];
-      var common = el.common.indexOf(line[0]) >= 0;
-      var key = Math.abs(d) + 0.8 * (rank - 1);
-      if (common && rank === 1) key -= el.bonus;
-      else if (!common && rank > 1) key += el.rare || 0;
-      out.push({ d: d, be: lb, line: line, label: V.lineLabel(line), key: key, i: i });
+      found.push({ d: d, be: lb, line: line, label: V.lineLabel(line), i: i,
+                   rank: line[4] === null || line[4] === undefined ? 1 : line[4] });
+    });
+    var out = found;
+    if (!split) {
+      var nearest = {};
+      found.forEach(function (x, n) {
+        if (x.line[2] === null || x.line[2] === undefined) return;
+        var k = x.line[0] + '|' + V.splitLine(x.line[1])[0];
+        if (nearest[k] === undefined || Math.abs(x.d) < Math.abs(found[nearest[k]].d)) nearest[k] = n;
+      });
+      out = [];
+      found.forEach(function (x, n) {
+        if (x.line[2] !== null && x.line[2] !== undefined) {
+          var base = V.splitLine(x.line[1])[0], k = x.line[0] + '|' + base;
+          if (nearest[k] !== n) return;
+          x.rank = best[k];
+          if (base !== x.line[1]) { x.component = x.line[1]; x.label = x.line[0] + ' ' + base; }
+        }
+        out.push(x);
+      });
+    }
+    out.forEach(function (x) {
+      var isCommon = el.common.indexOf(x.line[0]) >= 0;
+      var key = Math.abs(x.d) + 0.8 * (x.rank - 1);
+      if (isCommon && x.rank === 1) key -= el.bonus;
+      else if (!isCommon && x.rank > 1) key += el.rare || 0;
+      x.key = key;
     });
     out.sort(function (a, b) { return a.key - b.key || a.i - b.i; });
     return out;
   };
   /* other candidate lines near `be` besides the primary match `exclude`
-     (its label): mirrors xpslines.nearby_lines exactly. Up to `maxExtra`
-     other photoelectron lines (nearest first) when `secondary` is set, and
-     every Auger line in the window when `auger` is set. */
-  V.nearbyLines = function (be, win, el, hv, exclude, secondary, auger, maxExtra) {
+     (its label; a spin-orbit pair counts as one): mirrors xpslines.nearby_lines
+     exactly. Up to `maxExtra` other photoelectron lines (nearest first) when
+     `secondary` is set, and every Auger line in the window when `auger` is set. */
+  V.nearbyLines = function (be, win, el, hv, exclude, secondary, auger, maxExtra, split) {
     maxExtra = maxExtra === undefined ? 2 : maxExtra;
+    var skip = exclude ? V.baseLabel(exclude) : null;
     var extraSecondary = [], extraAuger = [];
-    V.candidates(be, win, el, hv).forEach(function (c) {
-      if (c.label === exclude) return;
+    V.candidates(be, win, el, hv, split).forEach(function (c) {
+      if (skip !== null && V.baseLabel(c.label) === skip) return;
       var isAuger = c.line[2] === null || c.line[2] === undefined;
       if (isAuger) {
         if (auger) extraAuger.push({ be: c.be, label: c.label, tier: 'auger' });
@@ -949,7 +998,7 @@
                   colour: {} },   // state name -> colour, kept across every panel on the page
             q: { include: {}, seeded: {}, transmission: false, level: {}, rsfLibrary: '' },
             d: { sample: null, mode: 'element', axis: null, last: null },
-            ident: { on: false, win: 2, auto: false, secondary: false, auger: false,
+            ident: { on: false, win: 2, auto: false, secondary: false, auger: false, split: false,
                     clicked: null, extra: {} },
             M: { id: null, data: null, energy: null, total: null, win: null, mask: null, count: 0,
                  scale: 'Viridis', bg: false, overlay: false, alpha: 0.65, loading: false, drag: null } };
@@ -1627,7 +1676,7 @@
         (s.reg.markers || []).forEach(function (m) {
           if (m.kin) return;
           V.nearbyLines(m.be, S.ident.win, S.data.elements, s.reg.hv, m.label,
-                        S.ident.secondary, S.ident.auger, 2).forEach(function (x) {
+                        S.ident.secondary, S.ident.auger, 2, S.ident.split).forEach(function (x) {
             mark(x.be, x.label, false, s.reg.hv, false, false, x.tier);
           });
         });
@@ -1648,12 +1697,16 @@
     if (!I.on) return;
     var win = h('input', { type: 'number', min: '0.1', step: '0.5', value: String(I.win), 'aria-label': 'Window in eV', class: 'idwin' });
     win.addEventListener('change', function () { var v = parseFloat(win.value); I.win = v > 0 ? v : 2; renderIdBox(); });
+    var sp = h('input', { type: 'checkbox', 'aria-label': 'Show spin-orbit components' });
+    sp.checked = !!I.split;
+    sp.addEventListener('change', function () { I.split = sp.checked; renderIdBox(); requestRender(); });
     box.appendChild(h('div', { class: 'controls' }, h('strong', { text: 'Identify peaks' }),
-      h('label', { class: 'field' }, 'Window ± ', win, ' eV')));
+      h('label', { class: 'field' }, 'Window ± ', win, ' eV'),
+      h('label', { class: 'field', title: 'Name a doublet by its components (2p3/2, 2p1/2) instead of once (2p)' }, sp, ' Spin-orbit components')));
     if (!I.clicked) {
       box.appendChild(h('p', { class: 'muted small', text: 'Click a peak on a plot to see which element lines lie near it. Line positions are approximate (chemical shifts of a few eV are normal).' }));
     } else {
-      var c = V.candidates(I.clicked.be, I.win, S.data.elements, I.clicked.hv);
+      var c = V.candidates(I.clicked.be, I.win, S.data.elements, I.clicked.hv, I.split);
       box.appendChild(h('p', { class: 'small', text: 'Peak at ' + I.clicked.be.toFixed(2) + ' eV: ' + (c.length ? c.length + ' candidate line' + (c.length > 1 ? 's' : '') + ' within ± ' + I.win + ' eV (best first). Click one to label the peak.' : 'no line within ± ' + I.win + ' eV.') }));
       var row = h('div', { class: 'chips' });
       c.slice(0, 12).forEach(function (x) {

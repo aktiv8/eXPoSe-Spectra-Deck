@@ -849,6 +849,11 @@ class IdentifyDialog(tk.Toplevel):
         self.window = tk.StringVar(value="3.0")
         ttk.Entry(top, textvariable=self.window, width=7).grid(
             row=1, column=1, sticky="w", pady=(6, 0))
+        self.split = tk.BooleanVar(value=app.ident_split())
+        ttk.Checkbutton(
+            top, text="Show spin-orbit components (2p3/2, 2p1/2)",
+            variable=self.split, command=self._split_changed).grid(
+            row=2, column=0, columnspan=2, sticky="w", pady=(6, 0))
         self.hint = ttk.Label(body, style="Muted.TLabel", wraplength=470,
                               justify="left",
                               text="Click a peak on the plot to see the "
@@ -930,7 +935,8 @@ class IdentifyDialog(tk.Toplevel):
         self.clicked = be
         reg = self._region()
         _shift, hv = self.app.identify_frame(reg)
-        line_cands = self.xl.candidates(be, self._win(), self.lines, hv)
+        line_cands = self.xl.candidates(be, self._win(), self.lines, hv,
+                                        split=self.split.get())
         state_cands = self.cs.state_candidates(be, self._win(), self.states,
                                                core_level=reg.name)
         self.rows = [("line", d, e) for d, e in line_cands] \
@@ -938,9 +944,11 @@ class IdentifyDialog(tk.Toplevel):
         self.cand_list.delete(0, "end")
         for kind, d, e in self.rows:
             if kind == "line":
+                part = f"   [{e['component']}]" if e.get("component") else ""
                 self.cand_list.insert(
                     "end", f"{self.xl.label_of(e):<12} "
-                           f"{self.xl.line_be(e, hv):8.1f} eV   ({d:+.1f})")
+                           f"{self.xl.line_be(e, hv):8.1f} eV   ({d:+.1f})"
+                           f"{part}")
             else:
                 rng = e.get("range")
                 tail = f"   [{rng[0]:.1f}–{rng[1]:.1f}]" if rng else ""
@@ -955,6 +963,13 @@ class IdentifyDialog(tk.Toplevel):
         self.hint.config(text=f"Peak at {be:.2f} eV: "
                               f"{len(line_cands)} candidate line(s){extra} "
                               f"within ±{self._win():g} eV.")
+
+    def _split_changed(self):
+        """The spin-orbit choice is a saved preference; it changes the
+        candidate list, Auto-label and the nearby lines drawn on the plot."""
+        self.app.set_ident_split(self.split.get())
+        if self.clicked is not None:
+            self._on_click(self.clicked)
 
     def _on_select(self, event=None):
         sel = self.cand_list.curselection()

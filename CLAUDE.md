@@ -151,6 +151,7 @@ Work goes in milestones that are each tested and committed on their own; **check
 - *Reports*
   - The **mosaic** is only in the PDF and the slides: a viewer for it in the app or the HTML browser, gain (exposure) matching between pictures, page titles that name the samples, and using the earlier (before-analysis) picture at a position are not done.
 - *Data*
+  - **Mg-anode (and other non-Al) Kratos data must be checked.** `readers/kratos_dset.py` `ENUMS` knows only the Al-mono anode (`F_REFER_TO_XRAY_MONO_AL` = 8), the hybrid lens mode and pass energies 20 / 40 / 160 eV, because every `.dset`/`.kal` pair seen so far is Al mono. A real Mg pair is needed to learn the Mg `Xray Reference Energy` number (and the dual-anode one); then check `kratos_kal._ANODES` (Mg Kα 1253.6 eV), the "anode unknown → kinetic-energy axis" warning path, and run the pair through `tests/test_kratos_dset.py` (`XPS_DSET_CORPUS`). KherveFitting's `C-Mg1253` instrument set (in `KherveFitting_library.xlsx`, under its install's `_internal/_defaults`) is a cross-check for which lines a Mg source can reach.
   - **`.xpsv` import / export** (the XPSView package format).
   - **Auto-height Z per point** in the metadata (`table` DataSpaces have no per-point X/Y in the `.avg` dump).
   - The **`.VGX`'s per-scan settings** (only names and order are read).

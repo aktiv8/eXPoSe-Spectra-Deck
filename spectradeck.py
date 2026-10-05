@@ -2561,10 +2561,21 @@ class Workspace:
         self.ann.clear_markers(*self._marker_key(r))
         self._ann_changed(relabel=False)
 
+    def ident_split(self):
+        """Name a doublet by its spin-orbit components (Ti 2p3/2, Ti 2p1/2)
+        instead of once (Ti 2p, the default)."""
+        return bool(self.cfg.get("ident_split_doublets", False))
+
+    def set_ident_split(self, on):
+        self.cfg["ident_split_doublets"] = bool(on)
+        save_config(self.cfg)
+        self._schedule_render()
+
     def identify_auto(self, r):
         shift, hv = self.identify_frame(r)
         found = xpslines.auto_label([e + shift for e in r.energy], r.counts,
-                                    self.element_lines(), hv=hv)
+                                    self.element_lines(), hv=hv,
+                                    split=self.ident_split())
         for be, label in found:
             self.ann.add_marker(*self._marker_key(r), be - shift, label)
         self._ann_changed(relabel=False)
@@ -3308,7 +3319,8 @@ class Workspace:
                                     self.IDENT_NEARBY_WINDOW, lines,
                                     hv=hv_r, exclude=m["label"],
                                     secondary=bool(ident_show.get("secondary")),
-                                    auger=bool(ident_show.get("auger"))):
+                                    auger=bool(ident_show.get("auger")),
+                                    split=self.ident_split()):
                                 nkey = (round(pos, 3), lbl, False, tier)
                                 if nkey in seen:
                                     continue

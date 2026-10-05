@@ -621,7 +621,8 @@ class TestPage(unittest.TestCase):
         # ranking penalty in V.candidates (mirrors xpslines._plausibility).
         # +4_000: the CasaXPS-curves switch and the zoom limit (viewer code);
         # +3_000: CasaXPS's own quantification numbers and the survey total
-        self.assertLess(len(page), 153_000 + raw)     # far below plain JSON
+        # +4_000: the spin-orbit merge and the photon-reach rule in V.candidates
+        self.assertLess(len(page), 157_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR
@@ -900,18 +901,33 @@ class TestJavaScript(unittest.TestCase):
                             (532.1, 2.0, 1486.6), (455.5, 3.0, 1486.6),
                             (978.0, 4.0, 1486.6), (978.0, 4.0, 1253.6),
                             (150.0, 0.5, None), (72.5, 5.0, 1486.6)):
-            got = xpslines.candidates(be, win, lines, hv)
-            cases.append({"be": be, "win": win, "hv": hv,
-                          "labels": [xpslines.label_of(e) for _d, e in got],
-                          "deltas": [d for d, _e in got]})
+            for split in (False, True):
+                got = xpslines.candidates(be, win, lines, hv, split=split)
+                cases.append({"be": be, "win": win, "hv": hv, "split": split,
+                              "labels": [xpslines.label_of(e) for _d, e in got],
+                              "deltas": [d for d, _e in got]})
+        # doublets and the reach of the photon: Ti 2p (both components), Ag 3d
+        # and a deep level for Ag Lalpha, a Mg-source peak above its reach
+        for be, win, hv in ((454.3, 3.0, 1486.6), (460.2, 3.0, 1486.6),
+                            (368.2, 3.0, 2984.2), (374.0, 2.0, 1486.6),
+                            (1300.0, 12.0, 1253.6), (1300.0, 12.0, 2984.2),
+                            (2300.0, 40.0, 2984.2)):
+            for split in (False, True):
+                got = xpslines.candidates(be, win, lines, hv, split=split)
+                cases.append({"be": be, "win": win, "hv": hv, "split": split,
+                              "labels": [xpslines.label_of(e) for _d, e in got],
+                              "deltas": [d for d, _e in got]})
         nearby = []
-        for be, win, hv, exclude, secondary, auger in (
-                (15.6, 2.0, 1486.6, "Hf 4f7/2", True, False),
-                (15.6, 2.0, 1486.6, "Hf 4f7/2", False, True),
-                (15.6, 2.0, 1486.6, "Hf 4f7/2", True, True)):
+        for be, win, hv, exclude, secondary, auger, split in (
+                (15.6, 2.0, 1486.6, "Hf 4f7/2", True, False, True),
+                (15.6, 2.0, 1486.6, "Hf 4f7/2", False, True, True),
+                (15.6, 2.0, 1486.6, "Hf 4f7/2", True, True, True),
+                (15.6, 2.0, 1486.6, "Hf 4f", True, True, False),
+                (456.0, 8.0, 1486.6, "Ti 2p", True, True, False),
+                (456.0, 8.0, 1486.6, "Ti 2p3/2", True, True, True)):
             got = xpslines.nearby_lines(be, win, lines, hv, exclude,
-                                        secondary, auger)
-            nearby.append({"be": be, "win": win, "hv": hv,
+                                        secondary, auger, split=split)
+            nearby.append({"be": be, "win": win, "hv": hv, "split": split,
                            "exclude": exclude, "secondary": secondary,
                            "auger": auger,
                            "labels": [g[1] for g in got],

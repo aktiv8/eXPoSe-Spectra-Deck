@@ -422,6 +422,7 @@ def element_table(lines):
             "common": sorted(xpslines.COMMON),
             "bonus": xpslines.COMMON_BONUS,
             "rare": xpslines.RARE_SECONDARY_PENALTY,
+            "reach": xpslines.REACH_MARGIN,
             "hv": xpslines.DEFAULT_HV}
 
 
