@@ -256,9 +256,16 @@ data (in the workbook) and applied when you plot, export and report.
   statement.
 * **Identify peaks…**: click a survey peak to list candidate element lines,
   add the one you want as a marker, or **Auto-label** every peak. Markers
-  follow BE shifts and the KE axis. Line positions are approximate (typical
-  values, chemical shifts of a few eV are normal); edit
-  `assets/xps_lines.json` to change or extend them.
+  follow BE shifts and the KE axis. A spin-orbit doublet is named once by
+  default (**Ti 2p**, **Au 4f**); tick *Show spin-orbit components* to get
+  2p3/2 / 2p1/2 instead (the choice is remembered; the HTML page has the same
+  box). Only lines the photon energy can reach are offered (a Mg Kα source
+  does not list a 1 300 eV level; deeper levels appear for Ag Lα and harder
+  sources). Line positions are approximate (typical values, chemical shifts of
+  a few eV are normal); edit `assets/xps_lines.json` to change or extend them:
+  the table is Thermo Avantage's own library, plus lines it lacks (lanthanide
+  and actinide levels, deep levels) taken from the X-ray Data Booklet table
+  that ships with KherveFitting and tagged `src: orange`.
 * **Cursor read-out** (status bar): BE, KE and intensity under the pointer.
 * **Comforts**: File → *Open recent*, *Save plot image…* (PNG / SVG / PDF, any
   size and dpi), drag files or folders onto the window (needs the optional

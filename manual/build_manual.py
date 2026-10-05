@@ -735,6 +735,20 @@ def build_chapters(doc):
         "window is ±3 eV."
     )
     para(doc,
+        "A spin-orbit doublet is named once by default: a peak near 454 eV "
+        "offers “Ti 2p”, and one near 84 eV “Au 4f”, whichever component you "
+        "click. Tick “Show spin-orbit components (2p3/2, 2p1/2)” in the dialog "
+        "(the interactive HTML page has the same box) to name the components "
+        "separately; the choice is remembered, and Auto-label follows it. "
+        "Markers you already placed keep the name they were given. Only lines "
+        "the photon energy can reach are offered, so a Mg Kα source does not "
+        "list a level at 1300 eV, while deeper levels appear for Ag Lα and "
+        "harder sources. The line table is Thermo Avantage’s own library, "
+        "extended with lanthanide and actinide levels, deep levels and a few "
+        "elements it lacks, taken from the X-ray Data Booklet table that ships "
+        "with KherveFitting."
+    )
+    para(doc,
         "Beneath the element lines the dialog also lists chemical states: "
         "literature binding energies for a core level (for example an iron "
         "oxide’s Fe 2p3/2 peaks), each with its source shown when you select "

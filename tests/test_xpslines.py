@@ -30,7 +30,10 @@ class TestTable(unittest.TestCase):
             self.assertIn(el, els)
         for e in LINES:
             if "be" in e:
-                self.assertTrue(0 < e["be"] < 1500, e)
+                # up to the deepest level any anode of the Kratos reader can
+                # reach (Cr K-alpha 5414.7 eV); xpslines.reachable hides the
+                # levels a given photon energy cannot excite
+                self.assertTrue(9.0 < e["be"] < 5500, e)
             else:
                 # Auger kinetic energy is set by the atom's own level
                 # spacing, not by the exciting photon energy, so it can
@@ -209,6 +212,68 @@ class TestPeaks(unittest.TestCase):
         for lbl, be in (("Al 2p3/2", 74.0), ("Mo 3d5/2", 228.5)):
             self.assertIn(lbl, got)
             self.assertAlmostEqual(got[lbl], be, delta=0.5)
+
+
+class TestBundledTable(unittest.TestCase):
+    """What the KherveFitting-derived additions must keep true."""
+
+    def test_keys_are_unique_and_every_row_is_valid(self):
+        keys = [(e["el"], e["line"]) for e in LINES]
+        self.assertEqual(len(keys), len(set(keys)))
+        for e in LINES:
+            self.assertIn(e.get("rank", 1), (1, 2, 3), e)
+            self.assertIn(e.get("src", "avantage"), ("avantage", "orange"))
+
+    def test_added_rows_never_override_and_gases_keep_their_solid_state_value(self):
+        self.assertEqual([e["be"] for e in LINES
+                          if (e["el"], e["line"]) == ("O", "1s")], [531.0])
+        self.assertEqual([e["be"] for e in LINES
+                          if (e["el"], e["line"]) == ("N", "1s")], [400.0])
+        self.assertFalse([e for e in LINES
+                          if e.get("src") == "orange" and e["el"] in ("H", "He")])
+
+    def test_each_element_has_one_main_line_reachable_with_al_k_alpha(self):
+        from collections import Counter
+        main = Counter(e["el"] for e in LINES if "be" in e
+                       and e["be"] < 1481.6 and e.get("rank", 1) == 1)
+        have = {e["el"] for e in LINES if "be" in e and e["be"] < 1481.6}
+        self.assertEqual(have - set(main), set())
+        self.assertEqual([el for el, n in main.items() if n > 1], [])
+
+    def test_elements_the_avantage_library_lacks_are_present(self):
+        els = {e["el"] for e in LINES}
+        for el in ("Ac", "Fr", "Pa", "Po"):
+            self.assertIn(el, els)
+
+    def test_the_lanthanide_levels_that_were_missing_are_offered(self):
+        got = {(e["el"], e["line"]) for e in LINES}
+        for k in (("Gd", "4d5/2"), ("Er", "4p3/2"), ("Ce", "5p1/2")):
+            self.assertIn(k, got)
+
+
+class TestPhotonReach(unittest.TestCase):
+    def test_a_level_beyond_the_photon_is_not_offered(self):
+        # a deep Pt level (3d5/2, 2122 eV) exists only for harder sources
+        deep = next(e for e in LINES if (e["el"], e["line"]) == ("Pt", "3d5/2"))
+        self.assertGreater(deep["be"], 2000)
+        for hv in (1253.6, 1486.6):
+            got = [xl.label_of(e) for _d, e in
+                   xl.candidates(deep["be"], 5.0, LINES, hv, split=True)]
+            self.assertNotIn("Pt 3d5/2", got, hv)
+        got = [xl.label_of(e) for _d, e in
+               xl.candidates(deep["be"], 5.0, LINES, 2984.2, split=True)]
+        self.assertIn("Pt 3d5/2", got)
+
+    def test_mg_k_alpha_loses_what_al_k_alpha_just_reaches(self):
+        entry = {"el": "X", "line": "1s", "be": 1300.0, "rank": 1}
+        self.assertTrue(xl.reachable(entry, 1486.6))
+        self.assertFalse(xl.reachable(entry, 1253.6))
+        self.assertTrue(xl.reachable(dict(entry, be=1248.0), 1253.6))
+        self.assertFalse(xl.reachable(dict(entry, be=1249.0), 1253.6))   # 5 eV margin
+
+    def test_auger_lines_are_not_filtered_by_reach(self):
+        self.assertTrue(xl.reachable({"el": "O", "line": "KL1", "ke": 506}, 1253.6))
+        self.assertTrue(xl.reachable({"el": "O", "line": "KL1", "ke": 506}, None))
 
 
 class TestDoublets(unittest.TestCase):
