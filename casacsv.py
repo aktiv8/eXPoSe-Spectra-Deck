@@ -19,6 +19,14 @@ same file (``D:\Temp\for claude files\PtCl2_new\PtCl2_casa_output_columns.csv``
   anywhere. It can only ever supply CPS-scale curve *shape*; matching and
   raw-counts conversion both rely on the already-open host region's own
   data/dwell/scans, never anything from the CSV itself.
+- **The B.E. column is the calibrated axis** (CasaXPS writes what it shows,
+  charge correction included) while ``Region.energy`` is the file's raw axis,
+  so the two differ by the file's own ``Calib`` shift (``Region.
+  calibration_shift``; 3.008 eV in ``D:\Temp\for claude files\PET EXAMPLE``).
+  Matching allows for it (:func:`_region_offset`), and the curves are placed on
+  the raw kinetic-energy axis ``hv - (B.E. - offset)`` that ``casafit.curves``
+  works in; the "columns" layout has the raw K.E. beside it, so its offset
+  comes from the data (:func:`_offset_from_ke`).
 - A per-component data column in either layout already has the background
   *added in* (``component_col = background + that component's own curve``,
   confirmed: ``Envelope == Background + sum(component - Background)`` to high
@@ -373,12 +381,121 @@ class MatchResult:
     n_components_aligned: int = 0
     reason: str = ""
     csv_curves: object = None    # a built casafit.CsvCurves, ready to attach
+    frame_note: str = ""         # the CSV's energy axis is not the file's raw
+                                 # one (a charge correction): what was found
 
 
 @dataclass
 class MatchReport:
     results: list = field(default_factory=list)
     unmatched_samples: list = field(default_factory=list)
+
+
+RANGE_TOL = 0.3        # eV: block vs region span
+SPAN_TOL = 0.1         # eV: equal widths when an offset is inferred
+RATIO_TOL = 1e-3       # CSV CPS / region counts must be one constant
+
+
+def is_export(head: bytes) -> bool:
+    """True when the first bytes of a file look like a CasaXPS ASCII export:
+    a ``Name`` / ``Cycle`` first row and the ``B.E.`` / ``K.E.`` header row
+    close below it (a plain results table that starts with "Name" is not)."""
+    try:
+        text = head.decode("utf-8-sig", errors="replace")
+        rows = [r for r in csv.reader(text.splitlines()[:40])
+                if any(c.strip() for c in r)]
+    except csv.Error:
+        return False
+    if not rows or detect_layout(rows[0]) is None:
+        return False
+    want = "k.e." if detect_layout(rows[0]) == "columns" else "b.e."
+    return any(r and r[0].strip().lower() == want for r in rows[1:15])
+
+
+def _offset_from_ke(block, region):
+    """``(offset, how)`` of a columns-layout block: eV by which its calibrated
+    B.E. exceeds ``hν − K.E.`` (the raw axis), taken from the data itself."""
+    hv = region.photon_energy or block.hv
+    if hv is None or block.ke is None:
+        return 0.0, ""
+    d = sorted(b + k - hv for b, k in zip(block.be, block.ke)
+               if b is not None and k is not None)
+    return (d[len(d) // 2], "data") if d else (0.0, "")
+
+
+def _cps_proportional(block, region):
+    """True when the block's CPS column is the region's counts times one
+    constant (1 / dwell x scans), point for point once ordered by energy: the
+    two are then the same spectrum, whatever the energy frame."""
+    import numpy as np
+    n = len(region.energy)
+    if len(block.be) != n or len(block.cps) != n or not region.counts:
+        return False
+    bb = np.asarray(block.be, dtype=float)
+    cps = np.asarray(block.cps, dtype=float)
+    rc = np.asarray(region.counts, dtype=float)
+    re_ = np.asarray(region.energy, dtype=float)
+    bo, ro = np.argsort(bb), np.argsort(re_)
+    cps, rc = cps[bo], rc[ro]
+    ok = np.isfinite(cps) & np.isfinite(rc) & (cps > 0) & (rc > 0)
+    if ok.sum() < 0.9 * n:
+        return False
+    ratio = cps[ok] / rc[ok]
+    return float((ratio.max() - ratio.min()) / ratio.mean()) < RATIO_TOL
+
+
+def _region_offset(block, b_be, region):
+    """``(offset, how)`` when ``region`` can be this rows-layout block, else
+    ``(None, "")``. The offset is what the CSV's calibrated axis adds to the
+    file's raw one: the file's own charge correction, or none, whichever the
+    spans fit; failing both, the shift that lines the two spans up **when the
+    CPS column proves it is the same spectrum** (a CSV exported after
+    re-calibrating in CasaXPS)."""
+    r_be = [v for v in region.energy if v is not None]
+    if not r_be:
+        return None, ""
+    b_lo, b_hi = min(b_be), max(b_be)
+    r_lo, r_hi = min(r_be), max(r_be)
+    shift = float(getattr(region, "calibration_shift", 0.0) or 0.0)
+    if abs(len(r_be) - len(b_be)) <= 2:
+        best = None
+        for off, how in ((shift, "file"), (0.0, "")):
+            err = max(abs(r_lo + off - b_lo), abs(r_hi + off - b_hi))
+            if err <= RANGE_TOL and (best is None or err < best[0]):
+                best = (err, off, how if abs(off) > 1e-9 else "")
+        if best:
+            return best[1], best[2]
+    if (len(r_be) == len(b_be)
+            and abs((b_hi - b_lo) - (r_hi - r_lo)) <= SPAN_TOL
+            and _cps_proportional(block, region)):
+        return b_lo - r_lo, "inferred"
+    return None, ""
+
+
+def _frame_note(off, how, shift):
+    if abs(off) < 0.005:
+        return ""
+    if how == "file":
+        return (f"CSV energies include the file's own charge correction "
+                f"({off:+.3f} eV)")
+    if how == "data":
+        return f"CSV energies include {off:+.3f} eV (from its K.E. column)"
+    return (f"CSV energies are {off:+.3f} eV from the file's stored axis, "
+            f"inferred from the data (the file's own correction is "
+            f"{shift:+.3f} eV)")
+
+
+def _no_match_reason(block, b_be, candidates):
+    fitted = [r for r in candidates if r.fit and r.energy]
+    if not fitted:
+        return (f"no region of sample '{block.sample}' has a CasaXPS fit to "
+                "attach curves to")
+    seen = "; ".join(
+        f"'{r.name}' {min(r.energy):.1f}-{max(r.energy):.1f} eV, "
+        f"{len(r.energy)} points" for r in fitted[:4])
+    return ("no matching region found by BE range + point count (CSV "
+            f"{min(b_be):.1f}-{max(b_be):.1f} eV, {len(b_be)} points; "
+            f"open: {seen})")
 
 
 def match_to_regions(blocks, regions):
@@ -426,6 +543,7 @@ def match_to_regions(blocks, regions):
             continue
 
         region = None
+        off, how = 0.0, ""          # the CSV's B.E. minus the file's own axis
 
         if block.ke is not None and block.counts is not None:
             bke = [v for v in block.ke if v is not None]
@@ -447,6 +565,7 @@ def match_to_regions(blocks, regions):
                         hits.append(r)
                 if len(hits) == 1:
                     region = hits[0]
+                    off, how = _offset_from_ke(block, region)
                 elif len(hits) > 1:
                     report.results.append(MatchResult(block=block,
                         reason=f"ambiguous: {len(hits)} regions in sample "
@@ -460,12 +579,14 @@ def match_to_regions(blocks, regions):
                 report.results.append(MatchResult(block=block,
                     reason="no usable data in this CSV block"))
                 continue
-            b_lo, b_hi = min(b_be), max(b_be)
             # Match by the REGION's own full acquisition span (Region.energy
             # is already binding energy), not any single FitRegion's own
             # narrower fit window -- a CSV block (any layout) always covers
             # the whole scan, while start_ke/end_ke only bounds the portion
-            # CasaXPS fit a background/components over inside it. Which
+            # CasaXPS fit a background/components over inside it. The CSV's
+            # axis is the CALIBRATED one (CasaXPS writes what it shows) and
+            # the region's is the file's raw one, so the file's own charge
+            # correction is allowed for (``_region_offset``). Which
             # specific FitRegion applies (when a region has more than one,
             # e.g. a Survey with several narrow background windows) is
             # resolved separately, below.
@@ -473,19 +594,14 @@ def match_to_regions(blocks, regions):
             for r in candidates:
                 if not r.fit or not r.energy:
                     continue
-                r_be = [v for v in r.energy if v is not None]
-                if not r_be:
-                    continue
-                if (abs(min(r_be) - b_lo) <= 0.3
-                        and abs(max(r_be) - b_hi) <= 0.3
-                        and abs(len(r_be) - len(b_be)) <= 2):
-                    hits.append(r)
+                o, h = _region_offset(block, b_be, r)
+                if o is not None:
+                    hits.append((r, o, h))
             if len(hits) == 1:
-                region = hits[0]
+                region, off, how = hits[0]
             elif not hits:
                 report.results.append(MatchResult(block=block,
-                    reason="no matching region found by BE range + point "
-                           "count"))
+                    reason=_no_match_reason(block, b_be, candidates)))
                 continue
             else:
                 report.results.append(MatchResult(block=block,
@@ -504,10 +620,12 @@ def match_to_regions(blocks, regions):
         else:
             b_be = [v for v in block.be if v is not None]
             b_lo, b_hi = min(b_be), max(b_be)
+            # the windows in the calibrated frame, like the block's own axis
+            wins = {id(fr): casafit.window_be(fr, region.photon_energy,
+                                              region.fit) for fr in frs}
             hits = [fr for fr in frs
-                    if abs((region.photon_energy - fr.end_ke) - b_lo) <= 0.3
-                    and abs((region.photon_energy - fr.start_ke) - b_hi)
-                    <= 0.3]
+                    if abs(wins[id(fr)][0] - b_lo) <= RANGE_TOL
+                    and abs(wins[id(fr)][1] - b_hi) <= RANGE_TOL]
             if len(hits) == 1:
                 fit_region_list = hits
             elif len(hits) > 1:
@@ -526,10 +644,8 @@ def match_to_regions(blocks, regions):
                 # range, and align each separately below instead of forcing
                 # a single pick.
                 contained = [fr for fr in frs
-                             if (region.photon_energy - fr.end_ke)
-                             >= b_lo - 0.3
-                             and (region.photon_energy - fr.start_ke)
-                             <= b_hi + 0.3]
+                             if wins[id(fr)][0] >= b_lo - RANGE_TOL
+                             and wins[id(fr)][1] <= b_hi + RANGE_TOL]
                 if not contained:
                     report.results.append(MatchResult(block=block,
                         region=region,
@@ -549,7 +665,11 @@ def match_to_regions(blocks, regions):
             if fit_comps and hv is not None:
                 pairs = []
                 for fc in fit_comps:
-                    fbe = casafit.component_be(fc, hv, region.fit)
+                    # the component's position in the CSV's own frame: its
+                    # calibrated BE less the file's correction (= its raw BE)
+                    # plus what the CSV's axis carries
+                    fbe = (casafit.component_be(fc, hv, region.fit)
+                           - region.fit.calib_shift + off)
                     for cc in block.components:
                         if cc.position_be is None:
                             continue
@@ -590,7 +710,9 @@ def match_to_regions(blocks, regions):
             if block.ke is not None:
                 ke_axis = block.ke
             elif hv is not None:
-                ke_axis = tuple(hv - be if be is not None else None
+                # raw kinetic energy, which is what casafit.curves() uses:
+                # the CSV's calibrated B.E. less the correction it carries
+                ke_axis = tuple(hv - (be - off) if be is not None else None
                                 for be in block.be)
             else:
                 ke_axis = None
@@ -609,7 +731,9 @@ def match_to_regions(blocks, regions):
                 envelope=block.envelope_cps, source=block.source)
             report.results.append(MatchResult(block=block, region=region,
                 fit_region=fr, n_components_total=n_total,
-                n_components_aligned=n_aligned, csv_curves=csv_curves))
+                n_components_aligned=n_aligned, csv_curves=csv_curves,
+                frame_note=_frame_note(
+                    off, how, getattr(region, "calibration_shift", 0.0))))
 
     report.unmatched_samples = unmatched
     return report
@@ -636,6 +760,13 @@ def summarise(report):
         if r.csv_curves is None and r.reason:
             label = f"{r.block.sample} / {r.block.scan_name}"
             lines.append(f"  {label}: {r.reason}")
+    noted = set()
+    for r in report.results:
+        if r.csv_curves is not None and r.frame_note \
+                and id(r.block) not in noted:
+            noted.add(id(r.block))
+            lines.append(f"  {r.block.sample} / {r.block.scan_name}: "
+                         f"{r.frame_note}")
     total_comp = sum(r.n_components_total for r in report.results)
     aligned_comp = sum(r.n_components_aligned for r in report.results)
     if total_comp:

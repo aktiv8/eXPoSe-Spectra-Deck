@@ -596,6 +596,18 @@ state and one colour.
   a still-open limitation of the calibrated Gaussian-broadening scale
   (`GAUSS_K`), tracked by `TestLAAsymmetryAccuracy` in `tests/test_casafit.py`.
   The areas, positions and widths shown are CasaXPS's own numbers.
+* **CasaXPS's own curves from its ASCII export.** The curves above are
+  reconstructed from the numbers in the `.vms`. To show exactly what CasaXPS
+  drew, use its *Export All to ASCII* (either layout) and open the resulting
+  `.csv` together with the `.vms` (select both, drop both, or open their
+  folder), or after it, or use **Tools → Import CasaXPS CSV export…**. Each
+  exported spectrum is matched to the fitted region it came from and its
+  components are lined up by position; a box says what matched. CasaXPS writes
+  the **charge-corrected** energy axis, so a file with a `Calib` correction is
+  matched across that shift and the curves are placed on the raw axis; the box
+  names the correction it found. The *CasaXPS CSV curves* checkbox beside the
+  fit toggles then switches between the exported curves and the
+  reconstruction, and the file is kept in the workbook.
 * **Export.** VAMAS export writes the fit back unchanged (CasaXPS reopens its
   own fit); CSV export adds the background, each component and the envelope as
   columns. The metadata lists the number of components and the calibration.

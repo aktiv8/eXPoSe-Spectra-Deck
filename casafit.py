@@ -479,3 +479,11 @@ def component_be(comp, hv, fit=None):
     if fit is None:
         return hv - comp.pos_ke
     return hv - comp.pos_ke - fit.shift_of_comps() + fit.calib_shift
+
+
+def window_be(reg, hv, fit):
+    """``(low, high)`` binding energy of a fit region's limits in the
+    calibrated frame (the one CasaXPS shows and exports), whichever way the
+    ``Calib`` line moved them: ``hν + calib_shift − (limit + shift_of_regions)``."""
+    off = hv + fit.calib_shift - fit.shift_of_regions()
+    return off - reg.end_ke, off - reg.start_ke

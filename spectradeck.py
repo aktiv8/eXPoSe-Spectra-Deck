@@ -1996,18 +1996,24 @@ class Workspace:
                 messagebox.showwarning("Some files need attention",
                                        "\n\n".join(problems[:12]))
             return
-        paths, skipped = [], []
+        paths, skipped, exports = [], [], []
         for name in sorted(os.listdir(folder)):
             p = os.path.join(folder, name)
             if os.path.isfile(p):
                 try:
                     reader_for(p)
                 except (UnsupportedFormat, OSError):
-                    skipped.append(name)
+                    if self._is_casa_export(p):
+                        exports.append(p)       # applied once the rest is in
+                    else:
+                        skipped.append(name)
                     continue
                 if kratos_dset.is_index_only(p):
                     continue            # the experiment's own index, no data
                 paths.append(p)
+        if not paths and exports and self.docs:
+            self._import_casa_csv_paths(exports)    # onto what is open
+            return
         if not paths:
             shown = ", ".join(skipped[:5]) + (", …" if len(skipped) > 5
                                               else "")
@@ -2022,7 +2028,7 @@ class Workspace:
         self._folder_note = (
             f"{len(skipped)} other file(s) in the folder skipped (not a "
             "recognised spectrum format)" if skipped else "")
-        self._add_files(paths)
+        self._add_files(paths + exports)
         self._update_status()
 
     def _add_files(self, paths):
@@ -2030,8 +2036,11 @@ class Workspace:
         paths = self._resolve_duplicate_formats(list(paths))
         if paths is None:                       # import cancelled
             return
+        paths, exports = self._split_casa_exports(paths)
         paths, imports = self._column_import(paths)
         if not paths:
+            if exports:
+                self._import_casa_csv_paths(exports)
             return
         problems = []
         many = len(paths) >= 3
@@ -2060,6 +2069,25 @@ class Workspace:
             more = f"\n… and {len(problems) - 12} more" if len(problems) > 12 else ""
             messagebox.showwarning("Some files need attention",
                                    "\n\n".join(shown) + more)
+        if exports:                  # now that the spectra they belong to are in
+            self._import_casa_csv_paths(exports)
+
+    @staticmethod
+    def _is_casa_export(path):
+        """True for a CasaXPS "Export All to ASCII" file (see ``casacsv``)."""
+        if os.path.isdir(path) or not path.lower().endswith((".csv", ".txt")):
+            return False
+        try:
+            with open(path, "rb") as fh:
+                return casacsv.is_export(fh.read(8192))
+        except OSError:
+            return False
+
+    def _split_casa_exports(self, paths):
+        """``(other paths, CasaXPS export paths)``. An export adds curves to a
+        fit that is already open, so it is applied after the spectra load."""
+        exports = [p for p in paths if self._is_casa_export(p)]
+        return [p for p in paths if p not in exports], exports
 
     def _column_import(self, paths):
         """``(paths to load, {path: options})``. Files that are only numbers in
@@ -2671,7 +2699,20 @@ class Workspace:
             title="Import CasaXPS CSV export",
             filetypes=[("CasaXPS ASCII export", "*.csv"),
                       ("All files", "*.*")])
-        if not paths:
+        if paths:
+            self._import_casa_csv_paths(paths)
+
+    def _import_casa_csv_paths(self, paths):
+        """Apply CasaXPS ASCII exports to the open fits and say what matched.
+        Also reached from *Open* / drag-and-drop / a folder, which hand over
+        the exports they find once the spectra are loaded."""
+        if not self.docs:
+            messagebox.showinfo(
+                "Import CasaXPS CSV export",
+                "A CasaXPS ASCII export adds its curves to a fit that is "
+                "already open.\n\nOpen the .vms file it was exported from "
+                "(with the fit in it) first, then open the export again, or "
+                "use Tools > Import CasaXPS CSV export.")
             return
         regions = [r for p in self.docs for r in p.regions]
         texts, any_problem = [], False

@@ -88,6 +88,17 @@ def reader_for(path: str):
     for _name, sniff, cls, _pats in READERS:
         if sniff(head, ext):
             return cls
+    try:
+        import casacsv
+        is_export = casacsv.is_export(head)
+    except Exception:                       # noqa: BLE001 - only a better message
+        is_export = False
+    if is_export:
+        raise UnsupportedFormat(
+            f"{os.path.basename(path)} is a CasaXPS ASCII export (Export All "
+            "to ASCII), not a spectrum: it adds its curves to a fit that is "
+            "already open. Open the .vms it was exported from together with "
+            "it, or after it, or use Tools > Import CasaXPS CSV export.")
     raise UnsupportedFormat(
         f"Unrecognised file format: {os.path.basename(path)}\n"
         f"{describe_unrecognised(head)} "
