@@ -329,7 +329,7 @@ class TestSpecCover(unittest.TestCase):
     def test_the_default_has_a_cover_and_the_old_sections_have_none(self):
         self.assertEqual(rs.cover_of(rs.default_spec()),
                          {"design": "ribbon", "image": "", "accent": "",
-                          "zone": "bottom"})
+                          "zone": "bottom", "font": "IBM Plex Sans"})
         self.assertEqual(rs.cover_of(rs.spec_from_sections(("cover",)))
                          ["design"], "none")
 
@@ -342,7 +342,8 @@ class TestSpecCover(unittest.TestCase):
         self.assertEqual(rs.cover_of(s), {"design": "file:a.png",
                                           "image": "p.png",
                                           "accent": "#1F7A8C",
-                                          "zone": "bottom"})
+                                          "zone": "bottom",
+                                          "font": "IBM Plex Sans"})
         self.assertEqual(rs.cover_of(rs.sanitise({"cover": "x"})),
                          rs.DEFAULT_COVER)
         self.assertEqual(rs.cover_of(rs.sanitise({})), rs.DEFAULT_COVER)

@@ -11,7 +11,6 @@ still reads on white; ``accent`` itself is for rules and bars.
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 
 import covers
@@ -23,43 +22,58 @@ TEXT = "#222222"
 MUTED = "#6B7785"
 RULE = "#C8D0D8"
 
-_registered: tuple | None = None
+_registered: dict = {}          # family -> (regular, bold) reportlab names
 
 
-def _font_file(name):
-    path = os.path.join(fonts.FONT_DIR, name)
-    return path if os.path.isfile(path) else ""
+def _names(family):
+    base = "".join(family.split())
+    return base, base + "-Bold"
 
 
-def register_fonts():
-    """``(regular, bold)`` reportlab font names: IBM Plex Sans when its files
-    are there and load, else Helvetica. Registered once per process."""
-    global _registered
-    if _registered is not None:
-        return _registered
-    _registered = FALLBACK
-    reg, bold = (_font_file(f) for f in fonts.FILES)
-    if reg and bold:
+def resolve_family(family=fonts.FAMILY):
+    """The family the report is really set in: ``family`` when it may be used
+    in a PDF and its files load, else IBM Plex Sans, else '' (Helvetica)."""
+    for fam in (family, fonts.FAMILY):
+        if fam in fonts.REPORT_FAMILIES and register_fonts(fam)[0] != FALLBACK[0]:
+            return fam
+    return ""
+
+
+def register_fonts(family=fonts.FAMILY):
+    """``(regular, bold)`` reportlab font names of a bundled family when its
+    files are there and load, else Helvetica. Registered once per process and
+    family. Asking for a family that is not in the catalog (or not meant for
+    a PDF) gives the same answer as IBM Plex Sans."""
+    if family not in fonts.REPORT_FAMILIES:
+        family = fonts.FAMILY
+    if family in _registered:
+        return _registered[family]
+    _registered[family] = FALLBACK
+    paths = fonts.family_paths(family)
+    if paths:
+        reg_name, bold_name = _names(family)
         try:
             from reportlab.pdfbase import pdfmetrics
             from reportlab.pdfbase.ttfonts import TTFont
-            pdfmetrics.registerFont(TTFont(REGULAR, reg))
-            pdfmetrics.registerFont(TTFont(BOLD, bold))
+            pdfmetrics.registerFont(TTFont(reg_name, paths[0]))
+            pdfmetrics.registerFont(TTFont(bold_name, paths[1]))
             # no italic files: <i> keeps the upright face rather than failing
-            pdfmetrics.registerFontFamily(REGULAR, normal=REGULAR, bold=BOLD,
-                                          italic=REGULAR, boldItalic=BOLD)
-            _registered = (REGULAR, BOLD)
+            pdfmetrics.registerFontFamily(reg_name, normal=reg_name,
+                                          bold=bold_name, italic=reg_name,
+                                          boldItalic=bold_name)
+            _registered[family] = (reg_name, bold_name)
         except Exception:                    # noqa: BLE001 - never stop a report
-            _registered = FALLBACK
-    return _registered
+            _registered[family] = FALLBACK
+    return _registered[family]
 
 
-def font_file(bold=False):
+def font_file(bold=False, family=fonts.FAMILY):
     """The regular (or, ``bold``, bold) typeface's file, for PyMuPDF (page
-    footers, divider pages); '' = none."""
-    if register_fonts()[0] != REGULAR:
+    footers, divider pages); '' = none (Helvetica)."""
+    fam = resolve_family(family)
+    if not fam:
         return ""
-    return _font_file(fonts.FILES[1] if bold else fonts.FILES[0])
+    return fonts.family_paths(fam)[1 if bold else 0]
 
 
 def page_size(option="a4"):
@@ -79,6 +93,7 @@ class Look:
     accent: str = covers.DEFAULT_ACCENT
     font: str = FALLBACK[0]
     bold: str = FALLBACK[1]
+    family: str = ""             # bundled family behind font/bold ('' = none)
 
     @property
     def ink(self):
@@ -90,10 +105,13 @@ class Look:
         return covers.tint(self.accent, t)
 
 
-def look(accent=""):
-    """The ``Look`` for an accent colour ('' = the default one)."""
-    font, bold = register_fonts()
-    return Look(covers.valid_accent(accent) or covers.DEFAULT_ACCENT, font, bold)
+def look(accent="", family=fonts.FAMILY):
+    """The ``Look`` for an accent colour ('' = the default one) and a bundled
+    family (see ``resolve_family`` for what an unusable one becomes)."""
+    fam = resolve_family(family)
+    font, bold = register_fonts(fam) if fam else FALLBACK
+    return Look(covers.valid_accent(accent) or covers.DEFAULT_ACCENT, font,
+                bold, fam)
 
 
 def rgb(hex_colour):

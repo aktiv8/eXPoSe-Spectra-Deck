@@ -13,7 +13,8 @@ VERSION = "1.0"
 DESCRIPTION = ("Browse, plot and export XPS spectra from many instruments "
                "in one window.")
 GITHUB_URL = "https://github.com/aktiv8"
-FONT_CREDIT = "Fonts: IBM Plex Sans, SIL Open Font License 1.1"
+FONT_CREDIT = ("Fonts: IBM Plex Sans, IBM Plex Serif, IBM Plex Mono, Inter, "
+               "Source Sans 3, STIX Two Text, all SIL Open Font License 1.1")
 
 ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".gif")

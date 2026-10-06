@@ -21,6 +21,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
+import fonts
+
 THEME_FONT = "Theme font"
 
 
@@ -47,14 +49,16 @@ GRID_MODES = ("Off", "Vertical", "Horizontal", "Both")
 Y_UNITS = ("Auto", "Counts", "Counts / s", "Arbitrary units (a.u.)", "None")
 LEGEND_LOCS = ("best", "upper right", "upper left", "lower right",
                "lower left", "center right", "center left")
-FONTS = (THEME_FONT, "DejaVu Sans", "Arial", "Helvetica", "Calibri",
-         "Times New Roman", "Georgia", "Courier New")
+# the bundled typefaces first (always there), then system ones (if installed)
+FONTS = (THEME_FONT, *fonts.FAMILIES, "DejaVu Sans", "Arial", "Helvetica",
+         "Calibri", "Times New Roman", "Georgia", "Courier New")
 
 FIELDS: tuple[Field, ...] = (
     # -- text --------------------------------------------------------------
     Field("font", "Font", "choice", THEME_FONT, "Text",
-          "Typeface for every label. A font that is not installed falls "
-          "back to the theme font.", choices=FONTS),
+          "Typeface for every label. The first group is bundled with the "
+          "app; the others need to be installed, else DejaVu Sans is used.",
+          choices=FONTS),
     Field("font_size", "Axis label size", "int", 9, "Text",
           lo=5, hi=32, step=1, unit="pt"),
     Field("title_size", "Panel title size", "int", 10, "Text",

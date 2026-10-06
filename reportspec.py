@@ -9,7 +9,8 @@ workbook and in named presets)::
      "skip": {"figures": ["fig2"], "metadata": ["f3"]},  # children switched off
      "options": {"sha": "short", "dividers": "auto", "mosaic": "on",
                 "page": "a4", "rsf": "off"},
-     "cover": {"design": "ribbon", "image": "", "accent": ""}}   # see covers
+     "cover": {"design": "ribbon", "image": "", "accent": "",
+               "zone": "bottom", "font": "IBM Plex Sans"}}      # see covers
 
 Children that are not listed in ``skip`` are on, so a figure or file added
 later appears in the report without the choice being redone. ``sanitise`` makes
@@ -29,6 +30,7 @@ import os
 from dataclasses import dataclass, field
 
 import covers
+import fonts
 
 VERSION = 1
 
@@ -93,9 +95,11 @@ DEFAULT_OPTIONS = {"sha": "short", "dividers": "auto", "mosaic": "on",
                   "page": "a4", "rsf": "off"}
 # The cover picture (see ``covers``): a design id, the file for the 'image'
 # design, the accent colour ('' = the default one) and where the text panel
-# sits on the PDF's full-page cover ("top", "middle" or "bottom").
+# sits on the PDF's full-page cover ("top", "middle" or "bottom"), and the
+# typeface of the PDF's text (a ``fonts.REPORT_FAMILIES`` name; slides and Word
+# keep Calibri). Like the accent it is the user's look, so a preset keeps it.
 DEFAULT_COVER = {"design": "ribbon", "image": "", "accent": "",
-                 "zone": covers.DEFAULT_ZONE}
+                 "zone": covers.DEFAULT_ZONE, "font": fonts.FAMILY}
 
 
 def default_spec():
@@ -153,6 +157,9 @@ def sanitise(spec=None):
         zone = cov.get("zone")
         if zone in covers.ZONES:
             out["cover"]["zone"] = zone
+        font = cov.get("font")
+        if font in fonts.REPORT_FAMILIES:
+            out["cover"]["font"] = font
     return out
 
 
@@ -251,13 +258,13 @@ def with_children(spec, sid, ids, on):
 
 
 def cover_of(spec):
-    """The cover choice: ``{"design", "image", "accent", "zone"}``."""
+    """The cover choice: ``{"design", "image", "accent", "zone", "font"}``."""
     return dict(sanitise(spec)["cover"])
 
 
 def with_cover(spec, **changes):
     """``spec`` with the given cover fields changed (``design``, ``image``,
-    ``accent``)."""
+    ``accent``, ``zone``, ``font``)."""
     out = sanitise(spec)
     out["cover"].update(changes)
     return sanitise(out)

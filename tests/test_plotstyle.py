@@ -66,6 +66,19 @@ class TestSanitise(unittest.TestCase):
                          "font": ["Arial"]})
         self.assertEqual(s, ps.DEFAULTS)
 
+    def test_the_bundled_fonts_are_offered_first_and_accepted(self):
+        import fonts
+        choices = ps.BY_KEY["font"].choices
+        self.assertEqual(choices[0], ps.THEME_FONT)
+        self.assertEqual(choices[1:1 + len(fonts.FAMILIES)], fonts.FAMILIES)
+        self.assertEqual(len(set(choices)), len(choices))
+        for fam in fonts.FAMILIES:
+            self.assertEqual(ps.sanitise({"font": fam})["font"], fam)
+            self.assertEqual(ps.rc_overrides({"font": fam})["font.family"],
+                             [fam, "DejaVu Sans"])
+        self.assertEqual(ps.sanitise({"font": "Comic Sans"})["font"],
+                         ps.THEME_FONT)
+
     def test_numbers_are_clamped_and_coerced(self):
         s = ps.sanitise({"font_size": 500, "tick_size": 1, "line_width": "2",
                          "fig_dpi": 10000, "marker_size": float("nan"),

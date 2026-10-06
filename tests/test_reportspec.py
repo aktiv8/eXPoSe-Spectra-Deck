@@ -53,6 +53,23 @@ class TestSpec(unittest.TestCase):
         self.assertEqual(rs.order(s)[-2:], ["metadata", "files"])   # appendix
         self.assertTrue(all(rs.is_on(s, i) for i in rs.SECTION_IDS))
 
+    def test_the_cover_font_is_validated_and_kept_by_presets(self):
+        import fonts
+        self.assertEqual(rs.cover_of(rs.default_spec())["font"], fonts.FAMILY)
+        for bad in (None, 3, "", "Comic Sans", "IBM Plex Mono", ["Inter"]):
+            s = rs.sanitise({"cover": {"font": bad}})
+            self.assertEqual(rs.cover_of(s)["font"], fonts.FAMILY, bad)
+        s = rs.with_cover(rs.default_spec(), font="Inter")
+        self.assertEqual(rs.cover_of(s)["font"], "Inter")
+        # a spec saved before the font existed reads as the default
+        old = rs.default_spec()
+        del old["cover"]["font"]
+        self.assertEqual(rs.cover_of(old)["font"], fonts.FAMILY)
+        # a preset says what goes in, never the look
+        for name, preset in rs.BUILTIN_PRESETS.items():
+            got = rs.with_cover_of(preset, s)
+            self.assertEqual(rs.cover_of(got)["font"], "Inter", name)
+
     def test_every_section_has_a_label_a_hint_and_a_short_name(self):
         # the PDF preview's toolbar indexes SHORT by section id
         self.assertEqual(set(rs.SHORT), set(rs.SECTION_IDS))

@@ -237,6 +237,51 @@ class TestColourScales(unittest.TestCase):
         self.assertIsNot(themes.scale_colourmap("Viridis", False, p),
                          themes.scale_colourmap("Viridis", False, p))
 
+    def test_black_scale_is_for_traces_only(self):
+        self.assertNotIn(themes.BLACK_SCALE, themes.SCALE_NAMES)
+        self.assertEqual(themes.TRACE_SCALE_NAMES[-1], themes.BLACK_SCALE)
+        self.assertEqual(themes.TRACE_SCALE_NAMES[:-1], themes.SCALE_NAMES)
+
+    def test_black_scale_is_one_visible_colour(self):
+        for pname, p in themes.PALETTES.items():
+            for n in (1, 2, 8, 30):
+                cols = themes.scale_colours(themes.BLACK_SCALE, False, n, p)
+                self.assertEqual(len(cols), n)
+                self.assertEqual(len(set(cols)), 1, pname)
+                self.assertGreaterEqual(
+                    themes.contrast(cols[0], p["plot_bg"]),
+                    themes.MIN_INK_CONTRAST - 1e-9, f"{pname}: {cols[0]}")
+            # reverse changes nothing
+            self.assertEqual(
+                themes.scale_colours(themes.BLACK_SCALE, True, 3, p),
+                themes.scale_colours(themes.BLACK_SCALE, False, 3, p))
+
+    def test_black_scale_is_true_black_on_a_light_plot(self):
+        for pname in ("Light", "Solarized Light"):
+            p = themes.PALETTES[pname]
+            if themes.contrast("#000000", p["plot_bg"]) >= \
+                    themes.MIN_INK_CONTRAST:
+                self.assertEqual(
+                    themes.scale_colours(themes.BLACK_SCALE, False, 2, p),
+                    ["#000000"] * 2, pname)
+        # print style (white plot)
+        self.assertEqual(
+            themes.scale_colours(themes.BLACK_SCALE, False, 1, themes.PRINT),
+            ["#000000"])
+
+    def test_black_scale_falls_back_to_foreground_on_a_dark_plot(self):
+        p = themes.PALETTES["Dark"]
+        self.assertEqual(themes.scale_colours(themes.BLACK_SCALE, False, 3, p),
+                         [p["plot_fg"]] * 3)
+
+    def test_black_scale_heatmap_uses_greys(self):
+        p = themes.PALETTES["Light"]
+        from matplotlib.colors import to_hex
+        a = themes.scale_colourmap(themes.BLACK_SCALE, False, p)
+        b = themes.scale_colourmap("Greys", False, p)
+        for t in (0.0, 0.5, 1.0):
+            self.assertEqual(to_hex(a(t)), to_hex(b(t)))
+
 
 class TestAxisColour(unittest.TestCase):
     def test_default_returns_the_palette_unchanged(self):

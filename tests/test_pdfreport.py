@@ -47,6 +47,40 @@ class TestLook(unittest.TestCase):
         self.assertIn(lk.font, (pdfstyle.REGULAR, pdfstyle.FALLBACK[0]))
         self.assertEqual(lk.bold == pdfstyle.BOLD, lk.font == pdfstyle.REGULAR)
 
+    def test_every_report_family_has_its_own_reportlab_names(self):
+        import fonts
+        seen = set()
+        for fam in fonts.REPORT_FAMILIES:
+            lk = pdfstyle.look("", fam)
+            self.assertEqual(lk.family, fam)
+            self.assertEqual(lk.font, "".join(fam.split()))
+            self.assertEqual(lk.bold, lk.font + "-Bold")
+            seen.add(lk.font)
+        self.assertEqual(len(seen), len(fonts.REPORT_FAMILIES))
+
+    def test_an_unusable_family_becomes_plex_not_helvetica(self):
+        import fonts
+        for fam in ("IBM Plex Mono", "Comic Sans", ""):      # no Greek / unknown
+            lk = pdfstyle.look("", fam)
+            self.assertEqual((lk.family, lk.font),
+                             (fonts.FAMILY, pdfstyle.REGULAR), fam)
+        self.assertEqual(pdfstyle.font_file(family="Comic Sans"),
+                         pdfstyle.font_file())
+
+    def test_missing_files_fall_back_to_helvetica(self):
+        import fonts
+        old, cache = fonts.FONT_DIR, dict(pdfstyle._registered)
+        try:
+            fonts.FONT_DIR = os.path.join(old, "does-not-exist")
+            pdfstyle._registered.clear()
+            lk = pdfstyle.look("", "Inter")
+            self.assertEqual((lk.font, lk.family), (pdfstyle.FALLBACK[0], ""))
+            self.assertEqual(pdfstyle.font_file(family="Inter"), "")
+        finally:
+            fonts.FONT_DIR = old
+            pdfstyle._registered.clear()
+            pdfstyle._registered.update(cache)
+
     def test_page_size_resolves_a4_or_letter(self):
         a4, a4_fig = pdfstyle.page_size("a4")
         letter, letter_fig = pdfstyle.page_size("letter")
@@ -112,7 +146,8 @@ class TestReport(unittest.TestCase):
             self.figs if figs is None else figs, self.render,
             spec=spec or rs.default_spec(), render_images=images)
         self.doc = mupdf.open(path)
-        self.addCleanup(self.doc.close)
+        self.addCleanup(lambda d=self.doc: d.close() if not d.is_closed
+                        else None)
         return [p.get_text() for p in self.doc]
 
     def test_the_contents_are_the_second_page_and_list_the_sections(self):
@@ -175,6 +210,35 @@ class TestReport(unittest.TestCase):
 
     def test_the_greek_letter_survives(self):
         self.assertIn("Kα", self.build()[0])
+
+    def fonts_used(self):
+        names = set()
+        for page in self.doc:
+            for f in page.get_fonts():
+                names.add(f[3].split("+")[-1])          # drop the subset tag
+        return names
+
+    def test_the_chosen_font_sets_the_text_the_footer_and_the_dividers(self):
+        import fonts
+        figs = [{"name": f"F{i}", "caption": "", "state": {}}
+                for i in range(1, 7)]                   # long: gets a divider
+        for fam in fonts.REPORT_FAMILIES:
+            spec = rs.with_cover(rs.default_spec(), font=fam)
+            pages = self.build(spec, figs=figs)
+            self.assertIn("Kα", pages[0], fam)          # glyph is in the face
+            used = self.fonts_used()
+            base = "".join(fam.split())
+            self.assertTrue(any(n.startswith(base) for n in used),
+                            f"{fam}: {used}")
+            if fam != fonts.FAMILY:
+                self.assertFalse(
+                    any(n.startswith("IBMPlexSans") for n in used),
+                    f"{fam} left Plex in the PDF: {used}")
+            self.doc.close()
+
+    def test_a_font_without_greek_is_not_offered_for_the_pdf(self):
+        spec = rs.with_cover(rs.default_spec(), font="IBM Plex Mono")
+        self.assertEqual(rs.cover_of(spec)["font"], "IBM Plex Sans")
 
     def test_page_size_option_changes_every_text_page(self):
         # no figures: isolate the text-flow pages report.py itself sizes

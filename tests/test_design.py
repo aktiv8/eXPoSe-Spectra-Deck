@@ -173,6 +173,45 @@ class TestFonts(unittest.TestCase):
         self.assertEqual(len(fonts.font_paths()), len(fonts.FILES))
         self.assertTrue(os.path.isfile(os.path.join(fonts.FONT_DIR, "OFL.txt")))
 
+    def test_every_catalog_family_is_complete_and_licensed(self):
+        self.assertEqual(fonts.FAMILIES[0], fonts.FAMILY)      # the default
+        for name, face in fonts.CATALOG.items():
+            paths = fonts.family_paths(name)
+            self.assertEqual(len(paths), 2, name)
+            lic = os.path.join(fonts.FONT_DIR, face.licence)
+            self.assertTrue(os.path.isfile(lic), name)
+            with open(lic, encoding="utf-8", errors="replace") as fh:
+                self.assertIn("Open Font License", fh.read(), name)
+        self.assertEqual(fonts.family_paths("Comic Sans"), ())
+
+    def test_catalog_names_match_the_files_and_the_greek_flag_is_true(self):
+        try:
+            from fontTools.ttLib import TTFont
+        except ImportError:
+            self.skipTest("fontTools not installed")
+        for name, face in fonts.CATALOG.items():
+            for path, style in zip(fonts.family_paths(name),
+                                   ("Regular", "Bold")):
+                f = TTFont(path)
+                self.assertEqual(f["name"].getDebugName(1), name, path)
+                self.assertNotIn("fvar", f, path)       # static, not variable
+                self.assertNotIn("CFF ", f, path)       # TrueType outlines
+                cmap = f.getBestCmap()
+                for ch in "µ°±Å":                       # every face has these
+                    self.assertIn(ord(ch), cmap, f"{path}: {ch}")
+                if face.report:                         # Al Kα in a PDF
+                    self.assertIn(ord("α"), cmap, path)
+
+    def test_every_catalog_family_reaches_matplotlib(self):
+        try:
+            from matplotlib import font_manager
+        except ImportError:
+            self.skipTest("matplotlib not installed")
+        fonts.register_matplotlib()
+        have = {f.name for f in font_manager.fontManager.ttflist}
+        for name in fonts.FAMILIES:
+            self.assertIn(name, have)
+
     def test_missing_font_files_fall_back_quietly(self):
         old = fonts.FONT_DIR
         try:

@@ -1325,22 +1325,29 @@ class Workspace:
         ttk.Label(grp, text="Colour").pack(side="left")
         sc_name = cfg.get("colour_scale", "Theme default")
         self.colscale_var = tk.StringVar(
-            value=sc_name if sc_name in themes.SCALE_NAMES
+            value=sc_name if sc_name in themes.TRACE_SCALE_NAMES
             else "Theme default")
-        cb = ttk.Combobox(grp, textvariable=self.colscale_var, width=13,
-                          state="readonly", values=themes.SCALE_NAMES)
+        cb = ttk.Combobox(grp, textvariable=self.colscale_var, width=18,
+                          state="readonly", values=themes.TRACE_SCALE_NAMES)
         cb.pack(side="left", padx=(6, 0))
-        cb.bind("<<ComboboxSelected>>", lambda e: self._schedule_render())
+        cb.bind("<<ComboboxSelected>>", lambda e: self._colour_scale_changed())
         tip(cb, "Colour scale for the heatmap and for the traces of a stack "
                 "or waterfall (spread along the series). Theme default keeps "
-                "the colours of the current theme.")
+                "the colours of the current theme. Black (single colour) "
+                "draws every trace in one colour (black; the theme's text "
+                "colour on a dark plot), a heatmap then uses Greys. Overlaid "
+                "traces without an offset look the same in that mode. For "
+                "black points only, combine it with the \"Data points\" "
+                "preset of Plot style.")
         ctl3.add(grp)
 
         self.colrev_var = tk.BooleanVar(value=bool(cfg.get("colour_reverse")))
-        rev = ttk.Checkbutton(ctl3, text="Reverse", variable=self.colrev_var,
-                              command=self._schedule_render)
-        tip(rev, "Flip the colour scale.")
-        ctl3.add(rev)
+        self.colrev_btn = ttk.Checkbutton(
+            ctl3, text="Reverse", variable=self.colrev_var,
+            command=self._schedule_render)
+        tip(self.colrev_btn, "Flip the colour scale.")
+        ctl3.add(self.colrev_btn)
+        self._sync_colour_controls()
 
         grp = ttk.Frame(ctl3)
         ttk.Label(grp, text="Axes").pack(side="left")
@@ -1542,6 +1549,16 @@ class Workspace:
                         else ["disabled"])
         self.ke_cb.state(["disabled"] if self.scale_var.get() == "Kinetic"
                          else ["!disabled"])
+
+    def _sync_colour_controls(self):
+        """Reverse means nothing for a single colour."""
+        self.colrev_btn.state(
+            ["disabled"] if self.colscale_var.get() == themes.BLACK_SCALE
+            else ["!disabled"])
+
+    def _colour_scale_changed(self):
+        self._sync_colour_controls()
+        self._schedule_render()
 
     def _on_offset(self, value):
         self.offset_lbl.config(text=f"{float(value):.1f}×")
@@ -3842,7 +3859,8 @@ class Workspace:
             "group_by": self.GROUP_MODES, "norm": self.NORM_MODES,
             "view_mode": self.VIEW_MODES,
             "energy_scale": viewdata.ENERGY_SCALES,
-            "z_axis": viewdata.Z_MODES, "colour_scale": themes.SCALE_NAMES,
+            "z_axis": viewdata.Z_MODES,
+            "colour_scale": themes.TRACE_SCALE_NAMES,
             "panels_per_page": self.PANEL_CHOICES,
         }
         for key, (var, _x) in self.STATE_CHOICES.items():
@@ -3858,6 +3876,7 @@ class Workspace:
                          ("colour_reverse", self.colrev_var)):
             if isinstance(st.get(key), bool):
                 var.set(st[key])
+        self._sync_colour_controls()
         if isinstance(st.get("plot_style"), dict):
             self.plot_style = plotstyle.sanitise(st["plot_style"])
         fs = st.get("fit_show")

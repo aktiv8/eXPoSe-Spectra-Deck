@@ -151,16 +151,24 @@ COLOUR_SCALES = {
     "Turbo": "turbo", "Coolwarm": "coolwarm", "Greys": "Greys",
     "Blues": "Blues", "YlOrRd": "YlOrRd",
 }
-SCALE_NAMES = list(COLOUR_SCALES)
+SCALE_NAMES = list(COLOUR_SCALES)      # real colormaps (images, heatmaps)
+# Not a colormap: every trace one colour. Offered only for traces, so the image
+# dialogs (which list SCALE_NAMES) never see it.
+BLACK_SCALE = "Black (single colour)"
+TRACE_SCALE_NAMES = SCALE_NAMES + [BLACK_SCALE]
 MIN_TRACE_CONTRAST = 2.0       # trace colour vs plot background (WCAG ratio)
+MIN_INK_CONTRAST = 3.0         # pure black vs plot background, else plot_fg
 
 
 def scale_colourmap(name, reverse, pal):
     """matplotlib Colormap for a scale name ("Theme default" = the palette's
-    ``heat`` ramp). Always a private copy, so callers may ``set_bad``."""
+    ``heat`` ramp). Always a private copy, so callers may ``set_bad``. The
+    single-colour scale has no colormap of its own: a heatmap takes Greys."""
     import copy
     import matplotlib
     from matplotlib.colors import LinearSegmentedColormap
+    if name == BLACK_SCALE:
+        name = "Greys"
     key = COLOUR_SCALES.get(name)
     if key is None:
         cmap = LinearSegmentedColormap.from_list("heat", list(pal["heat"]))
@@ -186,7 +194,18 @@ def scale_colours(name, reverse, n, pal):
     end of Greys on white, the dark end of Magma on a dark plot) are trimmed,
     and any colour still too faint (the pale middle of Coolwarm) is nudged
     toward the foreground colour, so every trace stays visible. A lone trace
-    takes the middle of the scale."""
+    takes the middle of the scale.
+
+    ``BLACK_SCALE`` gives every trace the same ink: black where it stands out
+    from the plot background (contrast >= ``MIN_INK_CONTRAST``), otherwise the
+    plot's foreground colour (the "black" of a dark theme). ``reverse`` has no
+    effect on it."""
+    if name == BLACK_SCALE:
+        if n < 1:
+            return None
+        ink = ("#000000" if contrast("#000000", pal["plot_bg"])
+               >= MIN_INK_CONTRAST else pal["plot_fg"])
+        return [ink] * n
     key = COLOUR_SCALES.get(name)
     if key is None or n < 1:
         return None

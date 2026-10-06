@@ -26,6 +26,7 @@ from tkinter import (colorchooser, filedialog, messagebox, simpledialog,
                      ttk)
 
 import covers
+import fonts
 import reportspec
 from workbook_ui import _finish
 
@@ -253,11 +254,22 @@ class ReportGeneratorDialog(tk.Toplevel):
             b.pack(side="left", padx=(5, 0))
         ttk.Button(acc, text="Other…",
                    command=self._pick_accent).pack(side="left", padx=(8, 0))
+        fnt = ttk.Frame(tab)
+        fnt.grid(row=5, column=0, sticky="ew", pady=(8, 0))
+        ttk.Label(fnt, text="Font").pack(side="left")
+        self.font_var = tk.StringVar(value=reportspec.cover_of(self.spec)["font"])
+        fcb = ttk.Combobox(fnt, textvariable=self.font_var, width=18,
+                           state="readonly", values=list(fonts.REPORT_FAMILIES))
+        fcb.pack(side="left", padx=(8, 0))
+        fcb.bind("<<ComboboxSelected>>",
+                 lambda e: self.set_cover(font=self.font_var.get()))
+        ttk.Label(fnt, text="(PDF text; slides and Word use Calibri)",
+                  style="Muted.TLabel").pack(side="left", padx=(8, 0))
         self.cover_text = ttk.Label(tab, style="Muted.TLabel", wraplength=340,
                                     justify="left")
-        self.cover_text.grid(row=5, column=0, sticky="w", pady=(10, 2))
+        self.cover_text.grid(row=6, column=0, sticky="w", pady=(10, 2))
         ttk.Button(tab, text="Edit details…",
-                   command=self._edit_details).grid(row=6, column=0,
+                   command=self._edit_details).grid(row=7, column=0,
                                                     sticky="w")
         self.refresh_cover()
 
@@ -297,13 +309,14 @@ class ReportGeneratorDialog(tk.Toplevel):
 
     def set_cover(self, **changes):
         """Change the cover (``design``, ``image``, ``accent``, ``zone``: where
-        the text panel sits on the PDF's full-page cover); applied to the app
-        at once."""
+        the text panel sits on the PDF's full-page cover, ``font``: the PDF's
+        typeface); applied to the app at once."""
         old = reportspec.cover_of(self.spec)
         self._set(reportspec.with_cover(self.spec, **changes))
         new = reportspec.cover_of(self.spec)
         self.design.set(new["design"])
         self.zone.set(new["zone"])
+        self.font_var.set(new["font"])
         if any(new[k] != old[k] for k in ("accent", "image", "zone")):
             self.build_cover_list()
         self.refresh_cover()

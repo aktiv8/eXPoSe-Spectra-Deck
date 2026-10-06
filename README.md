@@ -58,7 +58,7 @@ energy* (not charge-corrected) whenever the photon energy is known.
 | `vamasmeta.py` | metadata carried in VAMAS comments |
 | `elements.py`, `reels.py`, `iss_ui.py` | ISS element identification, REELS band gap and their dialog |
 | `holder.py` | holder-photo geometry: stage position → photo pixel, calibration nudges, marker picking |
-| `fonts.py`, `assets/fonts/` | bundled IBM Plex Sans (SIL Open Font License) |
+| `fonts.py`, `assets/fonts/` | bundled fonts: IBM Plex Sans (the default), Plex Serif / Mono, Inter, Source Sans 3, STIX Two Text (SIL Open Font License) |
 | `splash.py`, `about_ui.py`, `appinfo.py`, `assets/splash.png` | the start-up splash, the About box, the app name / version / link, and the picture you supply |
 | `ribbon.py`, `icons.py` | the tabbed toolbar and the icons drawn in code for it |
 | `pdf_preview.py` | in-app PDF preview (PyMuPDF) |
@@ -175,7 +175,12 @@ skip it.
      a depth profile runs from surface to bulk); **Reverse** flips it. The tree
      swatches follow, so the tree stays the legend. Ends of a scale that would
      vanish into the plot background are trimmed. With a scale chosen, traces
-     are no longer coloured per file / sample.
+     are no longer coloured per file / sample. **Black (single colour)** is the
+     last choice: every trace in one colour (black; on a dark theme the theme's
+     text colour, so it stays visible), a heatmap then uses Greys, and
+     **Reverse** does nothing. For black *points* only, pair it with the
+     *Data points* preset of Plot style. Overlaid traces without an offset look
+     the same in this mode.
    * **Axes** — colour of the axis lines, ticks and labels: *Theme default*,
      *Black*, *White* or *Custom…*. A choice that would be hard to see on the
      current background (black on Dark, white on Light) is ignored and the
@@ -326,7 +331,9 @@ workbook. Sections, in the default results-first order:
   **cover picture** you choose on the *Cover* tab: five designs drawn from one
   accent colour (spectrum ribbon, band, minimal, your own data, peak map), a
   picture of your own (or one you drop in `assets/covers/`), or none, in one of
-  six accent colours or your own. Presets never change the cover.
+  six accent colours or your own, and the **font** of the PDF's text (IBM Plex
+  Sans by default; also Source Sans 3, Inter, IBM Plex Serif or STIX Two Text —
+  slides and Word keep Calibri). Presets never change the cover.
 * **Contents** — the sections and their pages (slides), with the real numbers;
   the PDF also gets bookmarks. The PDF and the slides get a divider page /
   slide before long sections (*Options* tab), the PDF marks its audit sections
@@ -460,7 +467,8 @@ whole counts (exact), compressed: about 50 to 70 KB a map.
 ## Plot style
 
 **View → Plot style…** (or the *Style…* button under the plot controls) opens
-one dialog for how plots *look*: font and sizes, line width / style, markers,
+one dialog for how plots *look*: font (the bundled IBM Plex Sans / Serif /
+Mono, Inter, Source Sans 3 and STIX Two Text, or any installed font) and sizes, line width / style, markers,
 fill under traces, frame (open or box), tick direction / length / minor ticks,
 grid, panel titles and axis labels (or your own text), y units, energy and
 intensity ranges, trace labels (at the end of each trace, a legend box or
@@ -701,7 +709,10 @@ in `CLAUDE.md` have the detail):
   it’s missing.
 * The interface font is **IBM Plex Sans** (SIL Open Font License, see
   `assets/fonts/OFL.txt`), registered for this app only. If it can't be loaded
-  the app quietly falls back to the system font.
+  the app quietly falls back to the system font. Five more free fonts (IBM Plex
+  Serif and Mono, Inter, Source Sans 3, STIX Two Text; each with its licence in
+  its own folder of `assets/fonts/`) can be chosen for plots, and all but Plex
+  Mono (no Greek letters) for the PDF text.
 * Settings (theme, panel sizes, view options, plot style and your presets) are
   saved in `~/.spectradeck_config.json`. The holder-photo calibration
   lives in each workbook; the last one used is kept in

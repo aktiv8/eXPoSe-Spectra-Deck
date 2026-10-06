@@ -779,8 +779,8 @@ def _draw_divider(out, mu, sid, count, look, pagesize):
     w, h = pagesize
     page = out.new_page(width=w, height=h)
     page.draw_rect(page.rect, color=None, fill=pdfstyle.rgb(look.ink))
-    path = pdfstyle.font_file()
-    bold_path = pdfstyle.font_file(bold=True)
+    path = pdfstyle.font_file(family=look.family)
+    bold_path = pdfstyle.font_file(bold=True, family=look.family)
     x = 54
     title_kw = {"fontfile": bold_path} if bold_path else {}
     page.insert_text((x, h * 0.42), reportspec.LABELS[sid], fontsize=28,
@@ -799,7 +799,7 @@ def _footer(out, mu, title, sections, look, skip_first, skip_pages=()):
     (not the first when ``skip_first``, nor those in ``skip_pages``: a
     full-page cover)."""
     total = out.page_count
-    path = pdfstyle.font_file()
+    path = pdfstyle.font_file(family=look.family)
     font = None
     if path:
         try:
@@ -866,9 +866,10 @@ def build_report(path, details, logo, file_rows, docs, figures,
         raise ReportError("The experiment report needs reportlab "
                           "(pip install reportlab).")
     mu = _mupdf()
-    look = pdfstyle.look(reportspec.cover_of(spec)["accent"])
+    cov = reportspec.cover_of(spec)
+    look = pdfstyle.look(cov["accent"], cov["font"])
     pagesize = pdfstyle.page_size(reportspec.option(spec, "page"))[0]
-    art, cover = None, reportspec.cover_of(spec)
+    art, cover = None, cov
     if any(sid == "cover" for sid, _s in items):
         art = covers.page_art(cover, reportspec.option(spec, "page"),
                               cover_data)

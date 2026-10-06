@@ -499,7 +499,10 @@ def build_chapters(doc):
         ("Z axis", "What the trace axis shows in a waterfall or heatmap: Auto (etch "
          "time, else etch level, else acquisition time, else trace order), or pick one."),
         ("Colour", "Theme default, or a named scale (Viridis, Plasma, Magma, …) "
-         "applied to the heatmap and spread across a stack's traces; Reverse flips it."),
+         "applied to the heatmap and spread across a stack's traces; Reverse flips it. "
+         "Black (single colour) draws every trace in one colour (black; the theme's "
+         "text colour on a dark plot) — pair it with the Data points preset for "
+         "black points."),
         ("Axes", "Colour of the axis lines, ticks and labels: Theme default, Black, "
          "White, or a colour you choose."),
         ("Energy", "Binding or Kinetic (KE = hν − BE, when the photon energy "
@@ -852,7 +855,8 @@ def build_chapters(doc):
         "The Cover tab offers five designs drawn from one accent colour "
         "(spectrum ribbon, band, minimal, your own data, peak map), a picture "
         "of your own (or one dropped into assets/covers/), or no picture, in "
-        "one of six accent colours or a colour you choose. Presets never change "
+        "one of six accent colours or a colour you choose, and the font of the "
+        "PDF's text (slides and Word keep Calibri). Presets never change "
         "the cover."
     )
     para(doc,
@@ -1038,7 +1042,9 @@ def build_chapters(doc):
     h1(doc, "17. Plot style")
     para(doc,
         "View → Plot style… (or the Style… button under the plot "
-        "controls) opens one dialog for how plots look: font and sizes, line "
+        "controls) opens one dialog for how plots look: font (IBM Plex Sans, Source "
+        "Sans 3, Inter, IBM Plex Serif, STIX Two Text and IBM Plex Mono are "
+        "bundled; any installed font also works) and sizes, line "
         "width and style, markers, fill under traces, frame, tick direction "
         "and length, grid, panel titles and axis labels, y units, energy and "
         "intensity ranges, trace labels, and the size and resolution of saved "
