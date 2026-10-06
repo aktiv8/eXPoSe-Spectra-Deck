@@ -7,7 +7,8 @@ import os
 from .base import Region, ImageBlob, TreeNode, SpectrumFile
 from .kratos_experiment import EscapeParser
 from . import (vamas, thermo_avg, thermo_vgd, phi_spe, scienta_txt,
-               kratos_kal, kratos_dset, thermo_vgx, khervefitting_kfit)
+               kratos_kal, kratos_dset, thermo_vgx, khervefitting_kfit,
+               column_text)
 from .thermo_experiment import (ThermoExperiment, LoadCancelled,
                                 looks_like_experiment, experiment_roots)
 
@@ -42,6 +43,9 @@ READERS = [
      ("*.experiment",)),
     ("KherveFitting (.kfit)", khervefitting_kfit.sniff,
      khervefitting_kfit.KherveFittingKfitFile, ("*.kfit",)),
+    # last: any other file of numbers in columns (see readers/column_text.py)
+    ("Column text (CSV / ASC / TXT)", column_text.sniff,
+     column_text.ColumnTextFile, column_text.PATTERNS),
 ]
 
 
@@ -90,8 +94,10 @@ def reader_for(path: str):
         f"Supported formats: {'; '.join(supported_names())}.")
 
 
-def load_file(path: str, progress=None) -> SpectrumFile:
-    """Load ``path`` with whichever reader recognises it.
+def load_file(path: str, progress=None, options=None) -> SpectrumFile:
+    """Load ``path`` with whichever reader recognises it. ``options`` is how
+    the column-text reader should read the file (``columntext.guess_options``
+    says what it uses without); the other readers have no use for it.
 
     A folder or a ``.VGX`` opens as an Avantage experiment; only that reader
     reports ``progress(i, n, name)`` (return True to cancel, which raises
@@ -99,4 +105,6 @@ def load_file(path: str, progress=None) -> SpectrumFile:
     cls = reader_for(path)
     if cls is ThermoExperiment:
         return cls().load(path, progress)
+    if cls is column_text.ColumnTextFile:
+        return cls().load(path, options)
     return cls().load(path)

@@ -291,6 +291,12 @@ FORMATS_ROWS = [
      "run order, camera images and SnapMaps (Chapter 22)."),
     ("PHI / ULVAC-PHI MultiPak", ".spe", "Intensities are counts per second, as stored."),
     ("Scienta Omicron SES", ".txt", "Detector/angle columns are summed to one spectrum."),
+    ("Numbers in columns", ".csv .asc .txt .dat .tsv",
+     "Any spectrum saved as plain columns (tab, comma, semicolon or space separated, "
+     "with or without a header), as Surface Science Spectra asks for. An import dialog "
+     "checks the energy and intensity columns, binding or kinetic energy, the unit and "
+     "the name, and takes the sample, photon energy and pass energy; how each file was "
+     "read is saved in the workbook."),
     ("Kratos Vision2 dataset", ".dset",
      "The binary file Vision2 writes, read directly without the DumpDataset step. Gives the "
      "same spectra and settings as its .kal. A setting the reader has not met before is left "

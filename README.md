@@ -20,6 +20,7 @@ previewed before it is saved.
 | **Kratos Vision** | `.kal` | Includes the transmission function. Files that don't record the X-ray source stay on a kinetic-energy axis (a warning says so). |
 | **Kratos Vision2 dataset** | `.dset` | The binary Vision2 writes, read directly (no DumpDataset step); gives the regions of its `.kal`. A setting whose Kratos constant has not been met yet is left out with a warning, never guessed; a `.dset` that holds only the index says so. |
 | **Kratos ESCApe** | `.experiment` | Undocumented binary container; best-effort reverse engineering. |
+| **Numbers in columns** | `.csv` `.asc` `.txt` `.dat` `.tsv` | Any spectrum saved as plain columns (what *Surface Science Spectra* asks for, and most programs export). Tab, comma, semicolon or space separated, with or without a header; an *Import* dialog checks the columns before loading: see [Columns of numbers](#columns-of-numbers-csv--asc--txt). |
 
 Files are recognised by **content**, not only by extension, so renamed files
 still open. Every loaded format can be exported to CSV or VAMAS, which makes the
@@ -32,6 +33,7 @@ energy* (not charge-corrected) whenever the photon energy is known.
 |------|---------|
 | `spectradeck.py` | the application window and dialogs |
 | `readers/` | one reader per format plus the registry that picks one (`readers/__init__.py`); `thermo_experiment.py` / `thermo_vgx.py` open an Avantage experiment folder |
+| `columntext.py`, `readers/column_text.py`, `columnimport_ui.py` | plain columns of numbers (CSV / ASC / TXT): finding the table, the column guesses, the reader and the import dialog |
 | `snapmap.py`, `snapmap_ui.py` | SnapMap pixels (a spectrum at every pixel), the map viewer and its dialog |
 | `snapshot.py` | camera-image geometry: stage position ↔ picture pixel |
 | `exporters.py` | CSV, VAMAS and metadata (CSV/PDF) writers |
@@ -697,6 +699,36 @@ Kratos Axis these files came from, in medium magnification; two pairs agreed to 
 viewer says "approx." wherever a µm value appears. A small rotation (about 4°)
 between the image and the stage axes is not applied. Imaging maps are in the
 data browser (an **Image maps** tab) but not yet in the PDF or the slides.
+
+## Columns of numbers (CSV / ASC / TXT)
+
+A spectrum saved as plain columns opens like any other file: *Open*, drag and
+drop, or a folder. Journals such as *Surface Science Spectra* ask for exactly
+this, and most programs can export it. Because such a file says almost nothing
+about itself, an **import dialog** shows what was found before anything is
+loaded, one row per file, with a preview of the spectrum:
+
+* **Energy column and intensity column**: the energy is the column that runs
+  steadily one way, wherever it stands (some files put the counts first). Files
+  with several intensity columns can load each as its own spectrum.
+* **Axis**: binding or kinetic energy (read from a header such as `BE_Cl2p`,
+  `KE_C 1s` or `Binding Energy (eV)`; binding energy otherwise). Kinetic
+  energies are turned into binding energies when the photon energy is given,
+  else the kinetic axis is kept and a warning says so.
+* **Unit**: counts/s (`CPS`, `c/s`), counts or a.u.; an unlabelled file is a.u.
+* **Name**: from the header (`BE_Cl2p` gives `Cl 2p`, `Gen` gives `Survey`). When
+  there is none the dialog may suggest a core level from the energy window, marked
+  `?` (only when exactly one common element's strongest line lies in a window of
+  40 eV or less); otherwise the file name is used. Check any suggestion.
+* **For all files**: the sample name, the photon energy (Al Kα, Mg Kα or your
+  own value) and the pass energy. None of these is in such a file, so none is
+  assumed; the answers are offered again next time.
+
+A header row, text above it and stray lines below the table are set aside (the
+dialog says how many lines are ignored); only the longest block of numbers is
+read. Binding-energy data are stored high to low like every other format. How
+each file was read is saved in the workbook, so reopening it does not ask again.
+*Cancel* leaves those files out.
 
 ## Depth profiles
 

@@ -100,7 +100,6 @@ class TestFolder(unittest.TestCase):
         ee.messagebox.showinfo = lambda *a, **k: self.shown.append(a)
         ee.Workspace._add_files = lambda ws, paths: self.added.extend(paths)
         ee.Workspace._scan_casa_quant = lambda ws, folder: None
-        self.ws.status.config(text="2 files loaded")
 
     def _unpatch(self):
         for obj, name, value in self._patches:
@@ -112,7 +111,12 @@ class TestFolder(unittest.TestCase):
                          ["a.vms", "b.vms"])
         text = self.ws.status.cget("text")
         self.assertIn("2 other file(s)", text)
-        self.assertTrue(text.startswith("2 files loaded"))
+        self.assertTrue(text.startswith("No files loaded"))   # none really loaded
+        self.ws._update_status()                  # a redraw keeps the note
+        self.assertIn("2 other file(s)", self.ws.status.cget("text"))
+        self.ws.close_all()
+        self.ws._update_status()                  # as the redraw after it does
+        self.assertNotIn("other file(s)", self.ws.status.cget("text") or "")
 
     def test_a_folder_with_nothing_readable_lists_what_was_skipped(self):
         for n in ("a.vms", "b.vms"):

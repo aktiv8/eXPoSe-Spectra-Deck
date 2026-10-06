@@ -18,6 +18,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass, field
 
+import columntext
 import nexus_settings
 import sputter as sputter_mod
 
@@ -75,6 +76,7 @@ class Annotations:
     sputter: dict = field(default_factory=dict)          # sample key -> settings
     reels: dict = field(default_factory=dict)            # region key -> band gap
     instrument: dict = field(default_factory=dict)       # file id -> NeXus settings
+    imports: dict = field(default_factory=dict)          # file id -> how a column-text file is read
     extra: dict = field(default_factory=dict)            # unknown keys kept
 
     # -- names -----------------------------------------------------------------
@@ -243,13 +245,26 @@ class Annotations:
         else:
             self.instrument.pop(str(fid), None)
 
+    # -- how a plain column-text file is read (per file) ---------------------------
+    def import_for(self, fid):
+        """The options the file was imported with (``columntext``), or {}."""
+        opts = self.imports.get(str(fid))
+        return columntext.sanitise_options(opts) if opts else {}
+
+    def set_import(self, fid, options):
+        if options:
+            self.imports[str(fid)] = columntext.sanitise_options(options)
+        else:
+            self.imports.pop(str(fid), None)
+
     # -- state ---------------------------------------------------------------------
     def is_empty(self):
         return not (self.sample_names or self.region_names
                     or self.sample_notes or self.region_notes or self.md_edits
                     or self.shifts or self.calibration or self.markers
                     or self.calibration_statement or self.experiment_notes
-                    or self.sputter or self.reels or self.instrument)
+                    or self.sputter or self.reels or self.instrument
+                    or self.imports)
 
     def copy(self):
         return copy.deepcopy(self)
@@ -259,7 +274,7 @@ class Annotations:
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes", "md_edits", "shifts", "calibration",
                      "calibration_statement", "markers", "experiment_notes",
-                     "sputter", "reels", "instrument"):
+                     "sputter", "reels", "instrument", "imports"):
             d[name] = copy.deepcopy(getattr(self, name))
         d.update(self.extra)
         return d
@@ -273,7 +288,7 @@ class Annotations:
         known = {"version", "sample_names", "region_names", "sample_notes",
                  "region_notes", "md_edits", "shifts", "calibration",
                  "calibration_statement", "markers", "experiment_notes",
-                 "sputter", "reels", "instrument"}
+                 "sputter", "reels", "instrument", "imports"}
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes"):
             v = data.get(name)
@@ -326,6 +341,11 @@ class Annotations:
                 clean = nexus_settings.sanitise(x)
                 if clean:
                     a.instrument[str(k)] = clean
+        v = data.get("imports")
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if isinstance(x, dict) and x:
+                    a.imports[str(k)] = columntext.sanitise_options(x)
         for name in ("calibration_statement", "experiment_notes"):
             if isinstance(data.get(name), str):
                 setattr(a, name, data[name])

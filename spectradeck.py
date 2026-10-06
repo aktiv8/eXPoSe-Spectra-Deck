@@ -79,7 +79,8 @@ from readers import (Region, ImageBlob, TreeNode, SpectrumFile, EscapeParser,
                      load_file, reader_for, supported_patterns,
                      UnsupportedFormat, ThermoExperiment, LoadCancelled,
                      looks_like_experiment, experiment_roots)
-from readers import khervefitting_kfit, kratos_dset
+from readers import column_text, khervefitting_kfit, kratos_dset
+from readers.base import read_bytes
 from readers.base import canon_region_name
 import about_ui
 import crashlog
@@ -102,6 +103,8 @@ import annotations
 import appinfo
 import calibration
 import casacsv
+import columnimport_ui
+import columntext
 import casafit
 import casaquant
 import casaquant_ui
@@ -2016,16 +2019,19 @@ class Workspace:
                    "this version reads."
                    if skipped else ""))
             return
+        self._folder_note = (
+            f"{len(skipped)} other file(s) in the folder skipped (not a "
+            "recognised spectrum format)" if skipped else "")
         self._add_files(paths)
-        if skipped:
-            self.status.config(text=(
-                f"{self.status.cget('text')}  ·  {len(skipped)} other file(s) "
-                "in the folder skipped (not a recognised spectrum format)"))
+        self._update_status()
 
     def _add_files(self, paths):
         """Load several files, reporting problems once at the end."""
         paths = self._resolve_duplicate_formats(list(paths))
         if paths is None:                       # import cancelled
+            return
+        paths, imports = self._column_import(paths)
+        if not paths:
             return
         problems = []
         many = len(paths) >= 3
@@ -2041,7 +2047,8 @@ class Workspace:
                         problems.append(f"Loading cancelled after {i} of "
                                         f"{len(paths)} files.")
                         break
-                problems += self._add_file(path, refresh=not many)
+                problems += self._add_file(path, refresh=not many,
+                                           options=imports.get(path))
         finally:
             self.root.config(cursor="")
             if prog is not None:
@@ -2053,6 +2060,47 @@ class Workspace:
             more = f"\n… and {len(problems) - 12} more" if len(problems) > 12 else ""
             messagebox.showwarning("Some files need attention",
                                    "\n\n".join(shown) + more)
+
+    def _column_import(self, paths):
+        """``(paths to load, {path: options})``. Files that are only numbers in
+        columns (CSV / ASC / TXT / DAT) say nothing about themselves, so they
+        are shown in the import dialog first: the energy column, the axis, the
+        unit, the name, and the sample and photon energy no such file holds.
+        Cancelling leaves those files out; the other files are unaffected."""
+        loaded = {os.path.abspath(p.path) for p in self.docs if p.path}
+        items = []
+        for p in paths:
+            if os.path.isdir(p) or os.path.abspath(p) in loaded:
+                continue
+            try:
+                if reader_for(p) is not column_text.ColumnTextFile:
+                    continue
+                table = columntext.read_table(
+                    columntext.decode(read_bytes(p)))
+            except (UnsupportedFormat, OSError):
+                continue
+            if table is not None:
+                items.append((p, table, columntext.guess_options(table, p)))
+        if not items:
+            return paths, {}
+        chosen = self._ask_column_import(items)
+        mine = {p for p, _t, _o in items}
+        rest = [p for p in paths if p not in mine]
+        if chosen is None:                      # cancelled: leave them out
+            return rest, {}
+        first = next(iter(chosen.values()))
+        self.cfg["column_import"] = {
+            k: first[k] for k in ("sample", "photon_energy", "pass_energy")}
+        keep = [p for p in paths if p in chosen or p not in mine]
+        return keep, chosen
+
+    def _ask_column_import(self, items):
+        """Show the dialog for ``[(path, table, options)]``; returns
+        ``{path: options}`` or None (a seam for the tests)."""
+        dlg = columnimport_ui.ColumnImportDialog(
+            self.root, self, items, self.cfg.get("column_import"))
+        self.root.wait_window(dlg)
+        return dlg.result
 
     def _resolve_duplicate_formats(self, paths):
         """Drop the redundant copy when a dataset is present in two formats
@@ -2100,8 +2148,12 @@ class Workspace:
         self._refresh_images()
         self._schedule_render(reset_page=True)
 
-    def _add_file(self, path, file_id=None, origin="", refresh=True):
-        """Load one file into the tree. Returns a list of problem strings."""
+    def _add_file(self, path, file_id=None, origin="", refresh=True,
+                  options=None):
+        """Load one file into the tree. Returns a list of problem strings.
+        ``options`` is how a column-text file is read (the import dialog's
+        answer); a file reopened from a workbook uses what was stored for its
+        id."""
         name = os.path.basename(path.rstrip("\\/")) or path
         if any(p.path == os.path.abspath(path) or p.path == path
                for p in self.docs):
@@ -2114,7 +2166,10 @@ class Workspace:
                 if parser is None:                       # cancelled
                     return []
             else:
-                parser = load_file(path)
+                if options is None and file_id:
+                    options = self.ann.import_for(file_id) or None
+                parser = (load_file(path, options=options) if options
+                          else load_file(path))
         except UnsupportedFormat as exc:
             return [str(exc)]
         except Exception as exc:
@@ -2135,6 +2190,8 @@ class Workspace:
         self.file_ids[id(parser)] = fid
         self.file_origin[id(parser)] = origin or path
         parser.annotations, parser.file_id = self.ann, fid
+        if getattr(parser, "import_options", None):     # how it was read
+            self.ann.set_import(fid, parser.import_options)
         for r in parser.regions:
             self.region_parser[id(r)] = parser
         if refresh:
@@ -2848,6 +2905,7 @@ class Workspace:
         self._schedule_render(reset_page=True)
 
     def close_all(self):
+        self._folder_note = ""
         for p in list(self.docs):
             self._remove_doc(p)
         self.casa_csv_imports = []
@@ -5214,8 +5272,10 @@ class Workspace:
         return True
 
     def _update_status(self):
+        note = getattr(self, "_folder_note", "")
         if not self.docs:
-            self.status.config(text="No files loaded. Use Open to add spectra.")
+            self.status.config(text="No files loaded. Use Open to add spectra."
+                               + (f"  ·  {note}" if note else ""))
             return
         n_spec, n_groups = getattr(self, "_counts", (0, 0))
         nf = len(self.docs)
@@ -5236,6 +5296,8 @@ class Workspace:
         if any(r.extra.get("cube") is not None
                for r in getattr(self, "sel_regions", ())):
             text += "  ·  map selected: double-click or press Enter to open it"
+        if note:
+            text += f"  ·  {note}"
         self.status.config(text=text)
 
     # -- side panels ----------------------------------------------------
