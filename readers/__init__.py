@@ -50,6 +50,28 @@ def supported_patterns():
     return [(name, list(pats)) for name, _s, _c, pats in READERS]
 
 
+def supported_names():
+    """The format names the Open dialog lists, in registry order."""
+    return [name for name, _s, _c, _p in READERS]
+
+
+def describe_unrecognised(head: bytes) -> str:
+    """What an unrecognised file looks like, from its first bytes: a plain
+    text file (with its first line) or something binary."""
+    if not head:
+        return "The file is empty or could not be read."
+    if b"\x00" in head[:512]:
+        return "It looks like a binary file."
+    try:
+        text = head.decode("utf-8")
+    except UnicodeDecodeError:
+        text = head.decode("latin-1")
+    first = next((ln.strip() for ln in text.splitlines() if ln.strip()), "")
+    first = first if len(first) <= 70 else first[:67] + "…"
+    return (f"It looks like a text file starting “{first}”."
+            if first else "It looks like a text file with no content.")
+
+
 def reader_for(path: str):
     if os.path.isdir(path):
         return ThermoExperiment            # an experiment folder
@@ -63,7 +85,9 @@ def reader_for(path: str):
         if sniff(head, ext):
             return cls
     raise UnsupportedFormat(
-        f"Unrecognised file format: {os.path.basename(path)}")
+        f"Unrecognised file format: {os.path.basename(path)}\n"
+        f"{describe_unrecognised(head)} "
+        f"Supported formats: {'; '.join(supported_names())}.")
 
 
 def load_file(path: str, progress=None) -> SpectrumFile:

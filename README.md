@@ -60,6 +60,7 @@ energy* (not charge-corrected) whenever the photon energy is known.
 | `holder.py` | holder-photo geometry: stage position → photo pixel, calibration nudges, marker picking |
 | `fonts.py`, `assets/fonts/` | bundled fonts: IBM Plex Sans (the default), Plex Serif / Mono, Inter, Source Sans 3, STIX Two Text (SIL Open Font License) |
 | `splash.py`, `about_ui.py`, `appinfo.py`, `assets/splash.png` | the start-up splash, the About box, the app name / version / link, and the picture you supply |
+| `crashlog.py` | the error log (`~/.spectradeck.log`) and the *Something went wrong* box |
 | `ribbon.py`, `icons.py` | the tabbed toolbar and the icons drawn in code for it |
 | `pdf_preview.py` | in-app PDF preview (PyMuPDF) |
 | `launch.py` | one-step launcher (creates a venv, installs deps, starts the app) |
@@ -128,6 +129,21 @@ info* button for bug reports. Without a picture both show just the name.
 Start with `--no-splash`, or untick *Help → Show splash screen at start*, to
 skip it.
 
+**Sharp text on scaled screens (Windows).** On a 125–200 % display Windows
+stretches a program that has not said it can draw at the real pixel density,
+which blurs text. *Help → Sharp text on scaled screens* (or `--dpi-aware`; the
+setting is `dpi_aware`) turns that on at the next start. It is off by default
+because a few parts of the layout are sized in pixels for 100 %; if something
+looks wrong, untick it or start once with `--no-dpi-aware`.
+
+**When something goes wrong.** An error the program did not expect is written
+to `~/.spectradeck.log` (it keeps the last few hundred KB) and shown in a
+*Something went wrong* box with a *Copy details* button (version, library
+versions and the traceback) to paste into a bug report; you can carry on
+working. A file the program does not recognise says what it looks like and
+lists the formats it reads; opening a folder says how many other files it
+skipped.
+
 1. **Open** (or File menu) → *Spectra files…* to load several files of any
    supported format, or *Folder…* to load every recognised file in a folder.
    Each file is a top-level node in the tree. (A folder from a Thermo Avantage
@@ -135,8 +151,8 @@ skip it.
    the same dataset as both `.avg` and `.vgd` (Avantage), or as both `.dset` and
    `.kal` (Kratos Vision2 and its DumpDataset text), you are asked which to
    import (`.avg` / `.dset` are pre-selected; *Remember my choice* stops the
-   question for that pair of formats, and File → *Ask about .avg / .vgd and
-   .kal / .dset duplicates again* brings it back). A folder's own index-only
+   question for that pair of formats, and File → *Forget my choice for duplicate
+   files* brings it back). A folder's own index-only
    `.dset` (the experiment-level file with no spectra) is skipped.
 2. Every node that holds spectra has a **tick box** (click it, or press
    **Space**). Ticking a sample, region folder or whole file ticks everything
@@ -228,6 +244,13 @@ skip it.
    use only the traces currently in view; **Save as…** writes exactly what you
    see. Without PyMuPDF the PDF opens in your default viewer instead.
 9. **Export** — *Ticked spectra to CSV / VAMAS / NeXus* writes exactly what is ticked.
+   The CSV is UTF-8 with a byte-order mark (so Excel shows α and µ in names);
+   *File → Add a provenance header to CSV exports* puts a few `#` lines first
+   (the program and version, the date, the source files, whether your renames and
+   shifts are applied), off by default because a plain CSV reader does not skip them.
+   Shortcuts: **Ctrl+O** open files, **Ctrl+Shift+O** open a folder, **Ctrl+E** export
+   dialog, **Ctrl+S** save the workbook, **Ctrl+Q** quit; menu entries that need
+   spectra are dimmed until some are open.
    The NeXus file (`.nxs`, NXxps, needs the optional `h5py`) has one entry per
    spectrum with the instrument settings, the charge correction and any CasaXPS
    fit; fields the instrument file never recorded are left out, not guessed.

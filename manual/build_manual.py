@@ -335,6 +335,9 @@ SHORTCUTS = [
     ("F2", "Rename the selected sample or region"),
     ("F11", "Focus mode — hide the side panels"),
     ("Ctrl+S", "Save the workbook"),
+    ("Ctrl+O / Ctrl+Shift+O", "Open spectra files / a folder"),
+    ("Ctrl+E", "Export spectra (choose regions and levels)"),
+    ("Ctrl+Q", "Quit"),
     ("▶ / ◀ →", "Play, or step, through the traces"),
     ("Page Up / Page Down", "Previous / next page of panels"),
     ("Home / End", "First / last page of panels"),
@@ -450,8 +453,8 @@ def build_chapters(doc):
         "(Avantage), or as both .dset and .kal (Kratos Vision2 and its "
         "DumpDataset text), you are asked which to import (.avg and .dset are "
         "pre-selected). Tick “Remember my choice” to stop being asked about "
-        "that pair of formats; File → “Ask about .avg / .vgd and .kal / .dset "
-        "duplicates again” brings the question back. A folder’s own "
+        "that pair of formats; File → “Forget my choice for duplicate files” "
+        "brings the question back. A folder’s own "
         "index-only .dset, which holds no spectra, is skipped."
     )
     para(doc,

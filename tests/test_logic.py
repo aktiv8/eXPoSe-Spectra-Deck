@@ -71,6 +71,19 @@ class TestConfig(unittest.TestCase):
                 json.dump([1, 2], fh)
             self.assertEqual(ee.load_config(), {})               # wrong type
 
+    def test_a_failed_save_keeps_the_old_settings_and_leaves_no_temp_file(self):
+        from unittest import mock
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            with mock.patch.object(ee, "CONFIG_PATH", path), \
+                    mock.patch.object(ee, "LEGACY_CONFIG_PATH",
+                                      os.path.join(d, "old.json")):
+                self.assertTrue(ee.save_config({"theme": "Dark"}))
+                # something that cannot be written as JSON fails part-way
+                self.assertFalse(ee.save_config({"bad": object()}))
+                self.assertEqual(ee.load_config(), {"theme": "Dark"})
+                self.assertEqual(os.listdir(d), ["c.json"])
+
     def test_settings_of_the_former_name_are_picked_up(self):
         with tempfile.TemporaryDirectory() as d:
             ee.CONFIG_PATH = os.path.join(d, "new.json")

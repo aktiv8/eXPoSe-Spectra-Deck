@@ -45,10 +45,31 @@ def fit_columns(r, pre="", prefer_csv=False):
     return cols
 
 
-def export_csv(regions, path, include_fits=True, prefer_csv=False):
+def provenance_comment(app, version, sources, corrected, when=None):
+    """Lines for ``export_csv(comment=)``: what wrote the file, when, from
+    which files, and whether the user's names and binding-energy shifts are
+    in the numbers. ``when`` is a ``datetime`` (default: now, UTC)."""
+    import datetime
+    when = when or datetime.datetime.now(datetime.timezone.utc)
+    names = ", ".join(sources) if sources else "(unknown)"
+    return "\n".join((
+        f"{app} {version}, written {when:%Y-%m-%d %H:%M} UTC",
+        f"Source file(s): {names}",
+        "Names and binding-energy shifts you entered are applied"
+        if corrected else
+        "Original names and energies (your renames and shifts are not applied)",
+    ))
+
+
+def export_csv(regions, path, include_fits=True, prefer_csv=False,
+               comment=None):
     """Export selected regions to a single CSV (wide format). A region with a
     CasaXPS fit gets its background, components and envelope as extra
-    columns (``include_fits=False`` leaves them out)."""
+    columns (``include_fits=False`` leaves them out). The file is UTF-8 with a
+    byte-order mark, like the metadata CSV, so Excel reads "α" and "µ" in a
+    sample name. ``comment`` (text, one line per line) is written first, each
+    line behind "# "; it is off by default because a plain CSV reader does not
+    skip such lines."""
     usable = [r for r in regions if r.decodable and r.counts]
     if not usable:
         raise ValueError("None of the selected regions contain decodable data.")
@@ -61,7 +82,9 @@ def export_csv(regions, path, include_fits=True, prefer_csv=False):
         if include_fits:
             cols += fit_columns(r, pre, prefer_csv)
         maxlen = max(maxlen, len(r.counts))
-    with open(path, "w", newline="") as fh:
+    with open(path, "w", newline="", encoding="utf-8-sig") as fh:
+        for line in (comment or "").splitlines():
+            fh.write(f"# {line}\r\n")
         w = csv.writer(fh)
         w.writerow([c[0] for c in cols])
         for i in range(maxlen):

@@ -104,6 +104,28 @@ class TestSplashSetting(unittest.TestCase):
             json.dump({"show_splash": True}, fh)
         self.assertTrue(splash.wanted([], self.path))
 
+    # -- DPI awareness (Windows): off unless chosen ---------------------------
+    def test_dpi_awareness_is_off_by_default(self):
+        self.assertFalse(splash.dpi_aware_wanted([], self.path))
+
+    def test_dpi_awareness_by_flag_or_setting_and_the_off_flag_wins(self):
+        self.assertTrue(splash.dpi_aware_wanted(["x", "--dpi-aware"], self.path))
+        with open(self.path, "w") as fh:
+            json.dump({"dpi_aware": True}, fh)
+        self.assertTrue(splash.dpi_aware_wanted([], self.path))
+        self.assertFalse(splash.dpi_aware_wanted(["--no-dpi-aware"], self.path))
+
+    def test_a_broken_settings_file_leaves_dpi_awareness_off(self):
+        with open(self.path, "w") as fh:
+            fh.write("{not json")
+        self.assertFalse(splash.dpi_aware_wanted([], self.path))
+
+    def test_only_windows_has_anything_to_call(self):
+        self.assertEqual(splash.dpi_plan("linux"), [])
+        self.assertEqual(splash.dpi_plan("darwin"), [])
+        self.assertEqual(len(splash.dpi_plan("win32")), 2)
+        self.assertEqual(splash.make_dpi_aware("linux"), "")
+
     def test_a_broken_settings_file_does_not_stop_the_splash(self):
         with open(self.path, "w") as fh:
             fh.write("{not json")

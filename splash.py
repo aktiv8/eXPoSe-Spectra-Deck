@@ -48,6 +48,50 @@ def wanted(argv=None, config_path=None):
         return True
 
 
+def dpi_aware_wanted(argv=None, config_path=None):
+    """Whether to tell Windows this program draws at the screen's real pixel
+    density (sharp text on a 125-200 % display instead of a stretched bitmap).
+    Off unless asked: ``--dpi-aware`` or ``dpi_aware: true`` in the settings
+    file (Help menu); ``--no-dpi-aware`` wins. Pixel-sized parts of the layout
+    were designed at 100 %, so this stays a choice until it has been looked at
+    on every screen the program is used on."""
+    argv = sys.argv if argv is None else argv
+    if "--no-dpi-aware" in argv:
+        return False
+    if "--dpi-aware" in argv:
+        return True
+    path = config_path or os.path.join(os.path.expanduser("~"), CONFIG_NAME)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return bool(json.load(fh).get("dpi_aware", False))
+    except Exception:
+        return False
+
+
+def dpi_plan(platform=None):
+    """The Windows calls ``make_dpi_aware`` tries, in order (``[]`` elsewhere)."""
+    platform = sys.platform if platform is None else platform
+    if not platform.startswith("win"):
+        return []
+    return ["shcore.SetProcessDpiAwareness(1)", "user32.SetProcessDPIAware()"]
+
+
+def make_dpi_aware(platform=None):
+    """Declare the process DPI-aware (system level). Call before the first Tk
+    window exists. Returns the call that worked, or ``""``; never raises."""
+    for call in dpi_plan(platform):
+        try:
+            import ctypes
+            if call.startswith("shcore"):
+                if ctypes.windll.shcore.SetProcessDpiAwareness(1) in (0, ):
+                    return call
+            elif ctypes.windll.user32.SetProcessDPIAware():
+                return call
+        except Exception:                   # noqa: BLE001 - best effort
+            continue
+    return ""
+
+
 def create_root():
     """The program's Tk root (drag-and-drop capable when tkinterdnd2 is
     installed)."""
@@ -62,6 +106,8 @@ def begin(argv=None):
     """Prelude of the application script: fonts, the hidden root and the
     splash. Returns the root."""
     set_app_id()
+    if dpi_aware_wanted(argv):
+        make_dpi_aware()                    # before any window exists
     try:
         import fonts
         fonts.register_process_fonts()      # before Tk enumerates fonts

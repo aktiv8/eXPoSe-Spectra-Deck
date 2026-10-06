@@ -82,6 +82,7 @@ from readers import (Region, ImageBlob, TreeNode, SpectrumFile, EscapeParser,
 from readers import khervefitting_kfit, kratos_dset
 from readers.base import canon_region_name
 import about_ui
+import crashlog
 import externalapps
 import fonts
 import holder
@@ -136,7 +137,7 @@ from plots import (draw_holder_markers as plots_draw_markers,
                    place_marker_labels)
 from pdf_preview import PdfPreview, HAVE_PDF, open_external
 from exporters import (export_csv, export_vamas, export_metadata_csv,
-                       export_metadata_pdf)
+                       export_metadata_pdf, provenance_comment)
 from nexus_export import export_nexus
 
 
@@ -189,11 +190,19 @@ def load_config():
 
 
 def save_config(cfg):
+    """Write the settings file (a temporary file first, then a rename, so a
+    crash part-way leaves the old settings, not half a file)."""
+    tmp = CONFIG_PATH + ".tmp"
     try:
-        with open(CONFIG_PATH, "w") as fh:
+        with open(tmp, "w") as fh:
             json.dump(cfg, fh, indent=2)
+        os.replace(tmp, CONFIG_PATH)
         return True
     except Exception:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
         return False
 
 
@@ -552,6 +561,36 @@ class ReportCancelled(Exception):
     on its progress dialog (see ``Workspace._report_tick``)."""
 
 
+FORGET_DUP_LABEL = ("Forget my choice for duplicate files "
+                    "(.avg/.vgd, .kal/.dset)")
+# menu entries that need loaded spectra (dimmed while none are), by label
+FILE_NEEDS_DATA = frozenset((
+    "Save plot image…", "Close all files",
+    "Export ticked spectra → CSV…", "Export ticked spectra → VAMAS…",
+    "Export ticked spectra → NeXus…",
+    "Export spectra (choose regions/levels)…",
+    "Export metadata → CSV…", "Export metadata → PDF…",
+    "Preview spectra PDF…", "Save spectra as PDF…",
+    "Preview metadata PDF…"))
+WORKBOOK_NEEDS_DATA = frozenset((
+    "Save workbook", "Save workbook as…", "Figures…",
+    "Save current view as a figure…", "Report generator…",
+    "Experiment report — preview…", "Experiment report — save PDF…",
+    "Export PowerPoint…", "Export Word document…",
+    "Hand-over package (ZIP)…", "Interactive data browser (HTML)…"))
+TOOLS_NEEDS_DATA = frozenset((
+    "Calibrate binding energy…", "Identify peaks…", "Sputter settings…",
+    "Instrument settings (NeXus)…", "ISS / REELS…",
+    "SnapMap / image map viewer…", "Rename…", "Notes…"))
+VIEW_NEEDS_DATA = frozenset((
+    "Expand all", "Collapse all", "Untick all",
+    "Tick matching regions everywhere",
+    "Untick matching regions everywhere"))
+# widget classes where a typed Ctrl+letter belongs to the text box
+TEXT_WIDGETS = frozenset(("Entry", "TEntry", "Text", "TCombobox", "Spinbox",
+                          "TSpinbox"))
+
+
 class Workspace:
     """The single main window: file tree with tick boxes (left), stacked-plot
     area (top right) and a Metadata / Images / Stage-map notebook (bottom
@@ -701,8 +740,9 @@ class Workspace:
         self.themes.register_menu(bar)
         self.themes.register_menu(filem)
         filem.add_command(label="Open spectra file(s)…",
-                          command=self.open_files)
-        filem.add_command(label="Open folder…", command=self.open_folder)
+                          command=self.open_files, accelerator="Ctrl+O")
+        filem.add_command(label="Open folder…", command=self.open_folder,
+                          accelerator="Ctrl+Shift+O")
         self.recent_menu = tk.Menu(filem, tearoff=0,
                                    postcommand=self._build_recent_menu)
         self.themes.register_menu(self.recent_menu)
@@ -710,8 +750,7 @@ class Workspace:
         filem.add_command(label="Save plot image…",
                           command=self.save_plot_image)
         filem.add_command(label="Close all files", command=self.close_all)
-        filem.add_command(label="Ask about .avg / .vgd and .kal / .dset "
-                                "duplicates again",
+        filem.add_command(label=FORGET_DUP_LABEL,
                           command=self._forget_dup_choice)
         filem.add_separator()
         filem.add_command(label="Export ticked spectra → CSV…",
@@ -721,7 +760,12 @@ class Workspace:
         filem.add_command(label="Export ticked spectra → NeXus…",
                           command=lambda: self.export_ticked("nexus"))
         filem.add_command(label="Export spectra (choose regions/levels)…",
-                          command=self.open_export)
+                          command=self.open_export, accelerator="Ctrl+E")
+        self.preamble_var = tk.BooleanVar(
+            value=bool(self.cfg.get("csv_preamble", False)))
+        filem.add_checkbutton(label="Add a provenance header to CSV exports",
+                              variable=self.preamble_var,
+                              command=self._on_preamble_toggle)
         filem.add_separator()
         filem.add_command(label="Export metadata → CSV…",
                           command=self.export_meta_csv)
@@ -735,14 +779,15 @@ class Workspace:
         filem.add_command(label="Preview metadata PDF…",
                           command=self.preview_metadata)
         filem.add_separator()
-        filem.add_command(label="Quit", command=self._on_close)
+        filem.add_command(label="Quit", command=self._on_close,
+                          accelerator="Ctrl+Q")
         bar.add_cascade(label="File", menu=filem)
         wbm = tk.Menu(bar, tearoff=0)
         self.themes.register_menu(wbm)
         wbm.add_command(label="New workbook", command=self.new_workbook)
         wbm.add_command(label="Open workbook…", command=self.open_workbook)
-        wbm.add_command(label="Save workbook   (Ctrl+S)",
-                        command=self.save_workbook)
+        wbm.add_command(label="Save workbook", command=self.save_workbook,
+                        accelerator="Ctrl+S")
         wbm.add_command(label="Save workbook as…",
                         command=lambda: self.save_workbook(as_new=True))
         self.cache_var = tk.BooleanVar(
@@ -790,7 +835,8 @@ class Workspace:
                        command=self.import_kfit_peak_library)
         tm.add_command(label="Import CasaXPS CSV export…",
                        command=self.import_casaxps_csv)
-        tm.add_command(label="Rename…   (F2)", command=self.rename_selected)
+        tm.add_command(label="Rename…", command=self.rename_selected,
+                       accelerator="F2")
         tm.add_command(label="Notes…", command=self.notes_selected)
         tm.add_separator()
         for key, info in externalapps.APPS.items():
@@ -824,7 +870,8 @@ class Workspace:
                           command=lambda: self._toggle_pane("tree"))
         viewm.add_command(label="Show/hide info column",
                           command=lambda: self._toggle_pane("info"))
-        viewm.add_command(label="Focus plot   (F11)", command=self.toggle_focus)
+        viewm.add_command(label="Focus plot", command=self.toggle_focus,
+                          accelerator="F11")
         viewm.add_separator()
         themem = tk.Menu(viewm, tearoff=0)
         self.themes.register_menu(themem)
@@ -851,9 +898,23 @@ class Workspace:
         helpm.add_checkbutton(label="Show splash screen at start",
                               variable=self.splash_var,
                               command=self._on_splash_toggle)
+        if sys.platform.startswith("win"):
+            self.dpi_var = tk.BooleanVar(
+                value=bool(self.cfg.get("dpi_aware", False)))
+            helpm.add_checkbutton(
+                label="Sharp text on scaled screens (restart to apply)",
+                variable=self.dpi_var, command=self._on_dpi_toggle)
         bar.add_cascade(label="Help", menu=helpm)
         self.menubar = bar
         self.root.config(menu=bar)
+        self._data_items = [
+            (menu, i) for menu, labels in (
+                (filem, FILE_NEEDS_DATA), (wbm, WORKBOOK_NEEDS_DATA),
+                (tm, TOOLS_NEEDS_DATA), (viewm, VIEW_NEEDS_DATA))
+            for i in range(menu.index("end") + 1)
+            if menu.type(i) == "command"
+            and menu.entrycget(i, "label") in labels]
+        self._sync_menu_state()
 
     def _build_body(self):
         bar = ttk.Frame(self.root)
@@ -897,6 +958,11 @@ class Workspace:
         self._restore_widths = {}   # pane name -> width to re-apply once shown
         self.root.bind("<F11>", lambda e: self.toggle_focus())
         self.root.bind("<Control-s>", lambda e: self.save_workbook())
+        for seq, fn in (("<Control-o>", self.open_files),
+                        ("<Control-O>", self.open_folder),
+                        ("<Control-e>", self.open_export),
+                        ("<Control-q>", self._on_close)):
+            self.root.bind(seq, self._shortcut(fn))
 
     def _build_ribbon(self):
         """The tabbed toolbar (see ``ribbon.py``)."""
@@ -921,6 +987,25 @@ class Workspace:
         r = getattr(self, "ribbon", None)
         if r is not None:
             r.refresh_state()
+        self._sync_menu_state()
+
+    def _shortcut(self, fn):
+        """A key binding for ``fn`` that stands aside while a text box has the
+        focus (Ctrl+E is "end of line" there) and returns "break" otherwise."""
+        def run(event=None):
+            w = self.root.focus_get()
+            if w is not None and w.winfo_class() in TEXT_WIDGETS:
+                return None
+            fn()
+            return "break"
+        return run
+
+    def _sync_menu_state(self):
+        """Dim the menu entries that need spectra while none are loaded (the
+        ribbon's buttons do the same, from the same test)."""
+        state = "normal" if self.docs else "disabled"
+        for menu, i in getattr(self, "_data_items", ()):
+            menu.entryconfigure(i, state=state)
 
     # -- the other programs (CasaXPS, KherveFitting) -------------------------
     def external_path(self, key):
@@ -979,6 +1064,19 @@ class Workspace:
 
     def _on_splash_toggle(self):
         self.cfg["show_splash"] = bool(self.splash_var.get())
+
+    def _on_preamble_toggle(self):
+        """CSV exports start with "# " lines naming the app, the source files
+        and whether names / shifts are applied. Off by default: a plain CSV
+        reader does not skip them."""
+        self.cfg["csv_preamble"] = bool(self.preamble_var.get())
+
+    def _on_dpi_toggle(self):
+        """Saved at once (the choice is read before the window exists, so it
+        applies at the next start; sizes drawn in pixels were made for 100 %,
+        so this is off until chosen)."""
+        self.cfg["dpi_aware"] = bool(self.dpi_var.get())
+        save_config(self.cfg)
 
     # -- theme --------------------------------------------------------------
     def _plot_palette(self, pal=None, paper=False):
@@ -1137,6 +1235,9 @@ class Workspace:
             shutil.rmtree(self._pdf_dir, ignore_errors=True)
         self.ribbon.save_state(cfg)
         cfg["show_splash"] = bool(self.splash_var.get())
+        cfg["csv_preamble"] = bool(self.preamble_var.get())
+        if hasattr(self, "dpi_var"):
+            cfg["dpi_aware"] = bool(self.dpi_var.get())
         cfg["cache_in_workbook"] = bool(self.cache_var.get())
         cfg["colour_scale"] = self.colscale_var.get()
         cfg["colour_reverse"] = bool(self.colrev_var.get())
@@ -1892,22 +1993,34 @@ class Workspace:
                 messagebox.showwarning("Some files need attention",
                                        "\n\n".join(problems[:12]))
             return
-        paths = []
+        paths, skipped = [], []
         for name in sorted(os.listdir(folder)):
             p = os.path.join(folder, name)
             if os.path.isfile(p):
                 try:
                     reader_for(p)
                 except (UnsupportedFormat, OSError):
+                    skipped.append(name)
                     continue
                 if kratos_dset.is_index_only(p):
                     continue            # the experiment's own index, no data
                 paths.append(p)
         if not paths:
-            messagebox.showinfo("Open folder",
-                                "No recognised spectra files in that folder.")
+            shown = ", ".join(skipped[:5]) + (", …" if len(skipped) > 5
+                                              else "")
+            messagebox.showinfo(
+                "Open folder",
+                "No recognised spectra files in that folder."
+                + (f"\n\n{len(skipped)} file(s) were not recognised: {shown}"
+                   "\n\nThe Open dialog's file-type list names the formats "
+                   "this version reads."
+                   if skipped else ""))
             return
         self._add_files(paths)
+        if skipped:
+            self.status.config(text=(
+                f"{self.status.cget('text')}  ·  {len(skipped)} other file(s) "
+                "in the folder skipped (not a recognised spectrum format)"))
 
     def _add_files(self, paths):
         """Load several files, reporting problems once at the end."""
@@ -5663,7 +5776,11 @@ class Workspace:
         source_parser = self.region_parser.get(id(regions[0]))
         metas = [self.region_parser[id(r)].region_metadata(r)
                  if id(r) in self.region_parser else None for r in regions]
-        if self.cfg.get("apply_corrections", True):     # names, BE shift
+        corrected = bool(self.cfg.get("apply_corrections", True))
+        sources = list(dict.fromkeys(
+            os.path.basename(self.region_parser[id(r)].path or "")
+            for r in regions if id(r) in self.region_parser))
+        if corrected:                                   # names, BE shift
             regions = [self._display(r) for r in regions]
         if fmt == "csv":
             path = filedialog.asksaveasfilename(
@@ -5681,7 +5798,11 @@ class Workspace:
         inst = parser.instrument if parser else {}
         try:
             if fmt == "csv":
-                n = export_csv(regions, path,
+                note = (provenance_comment(
+                    appinfo.NAME, appinfo.VERSION,
+                    [s for s in sources if s], corrected)
+                    if self.cfg.get("csv_preamble", False) else None)
+                n = export_csv(regions, path, comment=note,
                                prefer_csv=bool(self.csv_curves_var.get()))
             elif fmt == "nexus":
                 n = export_nexus(
@@ -5981,8 +6102,11 @@ class ExportDialog(tk.Toplevel):
 def main():
     root = splash.take_root()           # made by the prelude when run as a script
     if root is None:
+        if splash.dpi_aware_wanted():
+            splash.make_dpi_aware()
         fonts.register_process_fonts()  # before Tk enumerates fonts
         root = splash.create_root()
+    crashlog.install(root)              # log + dialog for uncaught errors
     splash.status("Building the window…")
     app = Workspace(root)
     splash.set_window_icon(root)

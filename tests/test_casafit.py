@@ -792,7 +792,7 @@ class TestExports(unittest.TestCase):
         r = fitted_region()
         path = os.path.join(self.dir, "x.csv")
         exporters.export_csv([r], path)
-        with open(path, newline="") as fh:
+        with open(path, newline="", encoding="utf-8-sig") as fh:
             rows = list(csv.reader(fh))
         head = rows[0]
         self.assertEqual(len(head), 2 + 1 + 2 + 1)
@@ -808,11 +808,11 @@ class TestExports(unittest.TestCase):
         r = fitted_region()
         path = os.path.join(self.dir, "a.csv")
         exporters.export_csv([r], path, include_fits=False)
-        with open(path, newline="") as fh:
+        with open(path, newline="", encoding="utf-8-sig") as fh:
             self.assertEqual(len(next(csv.reader(fh))), 2)
         r.fit = None
         exporters.export_csv([r], path)
-        with open(path, newline="") as fh:
+        with open(path, newline="", encoding="utf-8-sig") as fh:
             self.assertEqual(len(next(csv.reader(fh))), 2)
 
     def test_metadata_mentions_the_fit(self):

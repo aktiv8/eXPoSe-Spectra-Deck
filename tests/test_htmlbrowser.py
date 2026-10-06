@@ -1136,7 +1136,7 @@ class TestJavaScript(unittest.TestCase):
         payload = hb.build_payload([doc("fit.vms", [r])])
         path = os.path.join(tmp, "fit.csv")
         exporters.export_csv([r], path)
-        with open(path, newline="") as fh:
+        with open(path, newline="", encoding="utf-8-sig") as fh:
             text = fh.read()
         import quant
         from test_quant import profile_groups, sample_groups
@@ -1184,7 +1184,7 @@ class TestJavaScript(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             csv_path = os.path.join(tmp, "e.csv")
             exporters.export_csv(chosen, csv_path)
-            with open(csv_path, newline="") as fh:
+            with open(csv_path, newline="", encoding="utf-8-sig") as fh:
                 csv_text = fh.read()
             fx = {
                 "payload_b64": hb.encode_payload(payload),
@@ -1230,7 +1230,7 @@ class TestJavaScript(unittest.TestCase):
             got = z.read("csv/A/C 1s.csv").decode("utf-8-sig")
         want_path = os.path.join(tmp, "one.csv")
         exporters.export_csv([regs[0]], want_path)
-        with open(want_path, newline="") as fh:
+        with open(want_path, newline="", encoding="utf-8-sig") as fh:
             want = fh.read()
         self.assertEqual(got.splitlines()[0], want.splitlines()[0])
         self.assertEqual(len(got.splitlines()), len(want.splitlines()))
