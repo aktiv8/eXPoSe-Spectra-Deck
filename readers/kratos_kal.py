@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 
 import kratosmap
+from kratosterms import friendly
 
 from .base import (Region, SpectrumFile, analyser_mode_name, canon_region_name,
                    guess_region_name, read_bytes)
@@ -105,8 +106,7 @@ class KratosKalFile(SpectrumFile):
             "Instrument": "Kratos (Vision)",
             "Acquisition software": "Kratos Vision",
             "X-ray source": (f"{anode[0]} ({anode[1]:g} eV)" if anode else ""),
-            "Lens mode": first.get("HSA Lens Mode", "").replace(
-                "F_HSA_LENS_", "").title(),
+            "Lens mode": friendly(first.get("HSA Lens Mode", "")),
         }.items() if v}
         return self._finish()
 
@@ -184,8 +184,7 @@ class KratosKalFile(SpectrumFile):
             decodable=True, sample=o.get("Acquisition name", o["_object"]),
             photon_energy=hv, pass_energy=_num(o.get("Pass energy")),
             dwell=_num(o.get("Dwell time")), step=abs(step) or None,
-            lens_mode=o.get("HSA Lens Mode", "").replace("F_HSA_LENS_",
-                                                          "").title(),
+            lens_mode=friendly(o.get("HSA Lens Mode", "")),
             date=_date(o.get("Date Acquired", "")),
             anode=anode[0] if anode else "")
         self._decorate(reg, o)
@@ -245,9 +244,7 @@ class KratosKalFile(SpectrumFile):
             cube.energy = [round(hv - ke, 6)]
         elif "REFER_TO_NONE" not in o.get("Xray Reference Energy", "").upper():
             self._no_hv_maps.append(name)
-        lens = (o.get("MHSA Lens Mode", "").replace("F_MHSA_", "")
-                .replace("_MAGN", "_MAGNIFICATION").replace("_", " ")
-                .capitalize())
+        lens = friendly(o.get("MHSA Lens Mode", ""))
         z = _num(o.get("Stage Z Position"))
         reg = Region(
             name=canon_region_name(

@@ -16,6 +16,7 @@ import casafit
 import vamasmeta
 import sputter
 import timing
+from kratosterms import friendly
 from .base import (Region, SpectrumFile, clean, clean_text, canon_region_name,
                    guess_region_name, unset, kv_from_lines,
                    read_bytes, analyser_mode_name)
@@ -327,6 +328,8 @@ class VamasFile(SpectrumFile):
         for k in ("Lens mode", "Aperture", "Charge neutraliser",
                   "Ion gun / sputtering"):
             v = self._lookup(k)
+            if k == "Lens mode":
+                v = friendly(v)
             if v:
                 instr[k] = v
         # what an earlier export wrote into the comments (vamasmeta)
@@ -467,7 +470,7 @@ class VamasFile(SpectrumFile):
                 r.conditions[key] = f"{angle:g}"
         r.fit = casafit.parse(b["comments"])
         self._own_calibration(r, b["comments"])
-        r.lens_mode = self._lookup("Lens mode", kv)
+        r.lens_mode = friendly(self._lookup("Lens mode", kv))
         r.aperture = self._lookup("Aperture", kv)
         if "escape .experiment" in kv.get("vendor format", "").lower():
             # HarwellXPS's import of a Kratos file: it copies ESCApe's dwell,
