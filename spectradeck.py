@@ -665,6 +665,7 @@ class Workspace:
         self._render_job = None
         self._axmap = {}
         self._axhv = {}
+        self._axe0 = {}             # axes drawn as energy ratio -> beam energy
         self._view_notes = []
         self._thumb_imgs = []
         self._view_photo = None
@@ -1389,12 +1390,15 @@ class Workspace:
         scale = cfg.get("energy_scale", "Binding")
         self.scale_var = tk.StringVar(
             value=scale if scale in viewdata.ENERGY_SCALES else "Binding")
-        eb = ttk.Combobox(grp, textvariable=self.scale_var, width=8,
+        eb = ttk.Combobox(grp, textvariable=self.scale_var, width=11,
                           state="readonly", values=list(viewdata.ENERGY_SCALES))
         eb.pack(side="left", padx=(6, 0))
         eb.bind("<<ComboboxSelected>>", lambda e: self._on_view_changed())
         tip(eb, "Plot against binding energy or kinetic energy "
-                "(KE = photon energy − BE). Needs the photon energy.")
+                "(KE = photon energy − BE; needs the photon energy), or, for "
+                "ion scattering spectra, the energy ratio E/E₀ (needs the "
+                "beam energy: recorded in the file, or saved in ISS / REELS). "
+                "Other spectra keep their own axis.")
         ctl2.add(grp)
 
         self.ke_var = tk.BooleanVar(value=bool(cfg.get("ke_top", False)))
@@ -1651,8 +1655,8 @@ class Workspace:
         self.offset_sc.state(["!disabled"] if stack else ["disabled"])
         self.z_cb.state(["!disabled", "readonly"] if series
                         else ["disabled"])
-        self.ke_cb.state(["disabled"] if self.scale_var.get() == "Kinetic"
-                         else ["!disabled"])
+        self.ke_cb.state(["disabled"] if self.scale_var.get() in (
+            "Kinetic", viewdata.RATIO) else ["!disabled"])
 
     def _sync_colour_controls(self):
         """Reverse means nothing for a single colour."""
@@ -2274,11 +2278,14 @@ class Workspace:
         ds = ann.sample_label(fid, r.sample)
         shift = (ann.shift_for(fid, r.sample, r.name, r.calibration_shift)
                  if viewdata.is_binding(r) else 0.0)
-        if dn == r.name and ds == r.sample and not shift:
+        e0 = self._iss_e0(r, fid)       # the ion scattering energy-ratio axis
+        if dn == r.name and ds == r.sample and not shift and not e0:
             q = r
         else:
             q = copy.copy(r)
             q.name, q.sample = dn, ds
+            if e0:
+                q.extra = dict(r.extra, iss_e0=e0)
             if shift:
                 q.energy = [e + shift for e in r.energy]
                 q.shift_applied = shift
@@ -2286,6 +2293,20 @@ class Workspace:
                     q.photon_energy = r.photon_energy + shift
         self._disp_cache[id(r)] = q
         return q
+
+    def _iss_e0(self, r, fid):
+        """The beam energy (eV) of an ion scattering spectrum for the energy
+        ratio axis: the one the user saved with its file, else the one the
+        file records (Avantage's calibrated energy when it has one). The
+        Kratos geometry offered in the ISS dialog is only a suggestion and
+        is never used here. None when not an ISS spectrum or none is known."""
+        if not r.is_iss:
+            return None
+        saved = self.ann.iss_for(fid).get("e0")
+        if saved:
+            return saved
+        iss = r.extra.get("iss") or {}
+        return iss.get("e0_cal") or iss.get("e0") or None
 
     def _ann_changed(self, relabel=True):
         """Call after any change to ``self.ann`` (or after replacing it).
@@ -2591,6 +2612,8 @@ class Workspace:
             return None
         d = self._display(r)
         ax = viewdata.energy_axis(d, self.scale_var.get())
+        if ax.e0:                        # an energy-ratio axis: E = ratio x E0
+            return float(event.xdata) * ax.e0
         if ax.label == "Kinetic Energy":
             return float(event.xdata)
         return (d.photon_energy - float(event.xdata)
@@ -3540,7 +3563,7 @@ class Workspace:
         selected = ({id(r) for r in self.sel_regions}
                     | {id(self._display(r)) for r in self.sel_regions})
         axmap, stacked_axes, axhv = {}, [], {}
-        axinfo = {}
+        axinfo, axe0 = {}, {}
         zoom_sig = {}
         notes = []
         if fig is self.fig:
@@ -3564,6 +3587,11 @@ class Workspace:
                     viewdata.energy_axis(r, scale).ok for r in disp):
                 notes.append("no photon energy for some spectra: shown "
                              "as binding energy")
+            if scale == viewdata.RATIO and not all(
+                    viewdata.energy_axis(r, scale).ok for r in disp):
+                notes.append("beam energy unknown for some ion scattering "
+                             "spectra: shown as kinetic energy (enter it in "
+                             "ISS / REELS and 'Use for this file')")
             if ke_top and viewdata.mixed_photon_energy(disp):
                 notes.append("photon energies differ: KE axis uses the first")
             if len(rs) == 1:
@@ -3665,6 +3693,9 @@ class Workspace:
                        reels=reels_arg, auger_colour=pal["cycle"][1])
             axmap[ax] = key
             axhv[ax] = viewdata.photon_energy(disp)
+            e0 = viewdata.energy_axis(disp[0], scale).e0
+            if e0:
+                axe0[ax] = e0
             axinfo[ax] = (axhv[ax], "fit" if view == "Fit" else "stack",
                           len(disp), "")
             zoom_sig[ax] = sig
@@ -3672,6 +3703,7 @@ class Workspace:
                 stacked_axes.append(ax)
         if fig is self.fig:
             self._axhv = axhv
+            self._axe0 = axe0
             self._axinfo = axinfo
             self._zoom_sig = zoom_sig
         if rect is not None:            # leave room for a heading / caption
@@ -3727,6 +3759,8 @@ class Workspace:
         info = self._axinfo.get(ax)
         if ax is None or event.xdata is None or info is None:
             return None
+        if ax in self._axe0:             # an energy ratio is not a binding energy
+            return None
         x, hv = float(event.xdata), info[0]
         if self.scale_var.get() == "Kinetic":
             if not hv:
@@ -3764,7 +3798,10 @@ class Workspace:
             return
         hv, kind, n, zlabel = info
         x = float(event.xdata)
-        if self.scale_var.get() == "Kinetic":
+        e0 = self._axe0.get(ax)
+        if e0:
+            text = f"E/E₀ {x:.4f}   KE {x * e0:.1f} eV"
+        elif self.scale_var.get() == "Kinetic":
             text = f"KE {x:.2f} eV" + (f"   BE {hv - x:.2f} eV" if hv else "")
         else:
             text = f"BE {x:.2f} eV" + (f"   KE {hv - x:.2f} eV" if hv else "")
@@ -4015,7 +4052,10 @@ class Workspace:
             return
         x = float(event.xdata)
         hv = self._axhv.get(event.inaxes)
-        if self.scale_var.get() == "Kinetic" and hv:
+        e0 = self._axe0.get(event.inaxes)
+        if e0:
+            x = x * e0                  # an ISS cursor is a kinetic energy
+        elif self.scale_var.get() == "Kinetic" and hv:
             x = hv - x                  # cursors are kept as binding energy
         self.cursors[key] = x
         self._schedule_render()

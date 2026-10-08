@@ -12,7 +12,9 @@ from typing import NamedTuple
 
 import sputter
 
-ENERGY_SCALES = ("Binding", "Kinetic")
+RATIO = "Energy ratio"           # ISS: scattered energy / beam energy, E/E0
+RATIO_UNITS = "E/E$_0$"          # mathtext, so any plot font draws the 0
+ENERGY_SCALES = ("Binding", "Kinetic", RATIO)
 Z_MODES = ("Auto", "Etch time", "Etch level", "Acquisition time",
            "Trace order", "Depth", "Fluence")
 SPUTTER_MODES = ("Depth", "Fluence")     # need the sputter settings
@@ -25,6 +27,7 @@ class Axis(NamedTuple):
     units: str
     invert: bool        # binding-energy axes are drawn high -> low
     ok: bool            # False: kinetic was asked for but hν is unknown
+    e0: float = None    # the beam energy of an energy-ratio axis, else None
 
 
 def is_binding(region) -> bool:
@@ -37,9 +40,22 @@ def energy_axis(region, scale="Binding") -> Axis:
     Binding energies are the native axis for XPS with a known photon energy.
     ``scale="Kinetic"`` converts them (KE = hν − BE); if hν is unknown the
     native axis is kept and ``ok`` is False. A region that is natively
-    kinetic (no hν, so it was never converted) is left alone either way."""
+    kinetic (no hν, so it was never converted) is left alone either way.
+
+    ``scale=RATIO`` applies to ion scattering spectra only: kinetic energy
+    over the beam energy ``E0``, which the workspace puts on the region it
+    draws as ``extra["iss_e0"]`` (what was saved or recorded, never a
+    suggestion). Without it the kinetic axis is kept and ``ok`` is False;
+    any other spectrum keeps its own axis."""
     native = Axis(list(region.energy), region.energy_label,
                   region.energy_units, is_binding(region), True)
+    if (scale == RATIO and not is_binding(region)
+            and getattr(region, "is_iss", False)):
+        e0 = (region.extra or {}).get("iss_e0")
+        if not e0:
+            return native._replace(ok=False)
+        return Axis([e / e0 for e in region.energy], RATIO, RATIO_UNITS,
+                    False, True, e0)
     if scale != "Kinetic" or not is_binding(region):
         return native
     ke = region.kinetic_energy

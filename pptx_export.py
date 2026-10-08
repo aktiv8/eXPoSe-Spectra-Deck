@@ -121,7 +121,9 @@ def look_notes(state):
     st = state or {}
     parts = [f"View: {st.get('view_mode', 'Stack')}",
              f"grouped by {st.get('group_by', 'element name').lower()}",
-             f"{st.get('energy_scale', 'Binding').lower()} energy axis"]
+             "energy ratio axis (E/E0, ion scattering)"
+             if st.get("energy_scale") == "Energy ratio"
+             else f"{st.get('energy_scale', 'Binding').lower()} energy axis"]
     if st.get("norm") not in (None, "None"):
         parts.append(f"normalised: {st['norm']}")
     if st.get("colour_scale") not in (None, "Theme default"):

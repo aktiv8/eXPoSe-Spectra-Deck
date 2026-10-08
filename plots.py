@@ -158,8 +158,11 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
         draw_fit(ax, axes_x[0].x, fit, 1.0 / norm_factor(r0, norm, cursor),
                  muted, accent)
     if norm == "At cursor" and cursor is not None:
-        cx = (r0.photon_energy - cursor
-              if a0.label == "Kinetic Energy" else cursor)
+        if a0.e0:                       # cursors are kept as kinetic energy
+            cx = cursor / a0.e0
+        else:
+            cx = (r0.photon_energy - cursor
+                  if a0.label == "Kinetic Energy" else cursor)
         ax.axvline(cx, color=accent, ls="--", lw=0.9)
     if st["y_scale"] == "Log":
         ax.set_yscale("log")
@@ -214,7 +217,8 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
             tier = mk[3] if len(mk) > 3 else None
             colour = tier_colour.get(tier, muted)
             if kin:                          # ISS peaks: a kinetic energy
-                x = (hv - be if hv else None) if binding else be
+                x = ((hv - be if hv else None) if binding
+                     else be / a0.e0 if a0.e0 else be)
             else:
                 x = be if binding else (hv - be if hv else None)
             if x is None or not lo <= x <= hi:
