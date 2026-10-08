@@ -201,9 +201,11 @@ class IssReelsDialog(tk.Toplevel):
     def _region_changed(self):
         r = self._region()
         hv = r.photon_energy
-        # what the user saved with this file, else what the instrument's
-        # geometry suggests (see Workspace.iss_offer), else what was typed
-        pick = {**self.app.iss_offer(r), **self.app.iss_saved(r)}
+        # what the user saved with this file, else what the file itself
+        # records (Avantage), else what the instrument's geometry suggests
+        # (a Kratos Axis Ultra: see Workspace.iss_offer), else what was typed
+        recorded = self.app.iss_recorded(r)
+        pick = {**self.app.iss_offer(r), **recorded, **self.app.iss_saved(r)}
         if pick.get("ion") in elements.ION_MASS:
             self.ion.set(pick["ion"])
         if pick.get("theta"):
@@ -236,6 +238,16 @@ class IssReelsDialog(tk.Toplevel):
                 x for x in (saved.get("ion", ""),
                             f"{saved['e0']:g} eV" if saved.get("e0") else "",
                             f"{saved['theta']:g}°" if saved.get("theta")
+                            else "") if x) + ".")
+        elif self.app.iss_recorded(r):
+            rec = self.app.iss_recorded(r)
+            note = ("Recorded in the file: " + ", ".join(
+                x for x in (rec.get("ion", ""),
+                            (f"{rec['e0']:g} eV" + (
+                                f" (calibrated; set {rec['e0_set']:g} eV)"
+                                if rec.get("e0_set") else ""))
+                            if rec.get("e0") else "",
+                            f"{rec['theta']:g}°" if rec.get("theta")
                             else "") if x) + ".")
         elif self.app.iss_offer(r):
             note = ("Suggested for a Kratos Axis Ultra (ion gun 45° from the "

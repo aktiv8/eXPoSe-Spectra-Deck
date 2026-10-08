@@ -25,6 +25,7 @@ _AXISVALUE_RE = re.compile(
 _INT_TYPES = ("VT_I1", "VT_I2", "VT_I4", "VT_I8", "VT_UI1", "VT_UI2", "VT_UI4",
               "VT_UI8", "VT_INT", "VT_UINT")
 K_ENERGY = "DS_SOPROPID_ENERGY"
+ISS_TECHNIQUE = 6              # DS_GEPROPID_TECHNIQUE of an ion scattering file
 K_VALUE_TYPE = "DS_GEPROPID_VALUE_TYPE"
 VALUE_RGB = 13                       # a camera image: one packed colour per pixel
 # axis type codes of the binary VGSpaceAxes stream (the .avg dump spells them out)
@@ -256,7 +257,10 @@ class ThermoDataSpaceFile(SpectrumFile):
         hv = round(float(hv), 3) if hv else None    # stored as float32
         title = p.get("DS_EXT_SUPROPID_TITLE") or os.path.splitext(
             os.path.basename(self.path or ""))[0]
-        name = region_name_from_title(title)
+        # DS_GEPROPID_TECHNIQUE: 1 in every XPS file, 6 in every ion scattering
+        # file seen (the only two values met; any other stays XPS)
+        iss = p.get("DS_GEPROPID_TECHNIQUE") == ISS_TECHNIQUE
+        name = (title.strip() or "ISS") if iss else region_name_from_title(title)
         ax0 = ds.space_axes[0]
         if ax0["type"].upper() != "ENERGY":
             self.warnings.append(
@@ -265,15 +269,18 @@ class ThermoDataSpaceFile(SpectrumFile):
         native = [ax0["start"] + i * ax0["width"] for i in range(ax0["n"])]
         ev_scale = p.get("DS_ACPROPID_EV_SCALE", 1)
         is_ke = ax0["type"].upper() == "ENERGY" and ev_scale != 2
-        if ev_scale not in (1, 2):
+        # ion scattering is recorded on a kinetic axis (flag 0, no photon
+        # energy) by nature: nothing to warn about
+        if ev_scale not in (1, 2) and not iss:
             self.warnings.append(
                 f"Unknown energy scale flag ({ev_scale}); assumed kinetic.")
-        if is_ke and hv:
+        if is_ke and hv and not iss:
             energy, e_label = [hv - ke for ke in native], "Binding Energy"
         elif is_ke:
             energy, e_label = native, "Kinetic Energy"
-            self.warnings.append(
-                "Photon energy not found: shown on a kinetic-energy axis.")
+            if not iss:
+                self.warnings.append(
+                    "Photon energy not found: shown on a kinetic-energy axis.")
         else:
             energy, e_label = native, ax0["label"] or "Energy"
 
@@ -291,7 +298,8 @@ class ThermoDataSpaceFile(SpectrumFile):
             if ok:
                 counts = [v if v is not None else 0.0 for v in values]
             r = Region(
-                name=name, index=idx, offset=idx, technique="XPS",
+                name=name, index=idx, offset=idx,
+                technique="ISS" if iss else "XPS",
                 energy=energy if ok else None, counts=counts,
                 energy_label=e_label, energy_units=ax0["unit"] or "eV",
                 count_label=p.get("DS_GEPROPID_VALUE_LABEL") or "Counts",
@@ -361,6 +369,30 @@ class ThermoDataSpaceFile(SpectrumFile):
                 "total_etch_time": times[-1] if times else 0.0,
                 "cumulative": times, "etch_source": "data axis"}
 
+    @staticmethod
+    def _iss_settings(p):
+        """The ion beam of an ion scattering file, as the file records it
+        (float32 values, so rounded to what they can hold): ``ion``, ``e0``
+        the set beam energy (eV), ``e0_cal`` Avantage's ISS calibration of it
+        (eV; the energy the peaks fit, see CLAUDE.md), ``theta`` the
+        scattering angle (degrees) and the gun's ``description``. Only what
+        is present."""
+        out = {}
+        ion = p.get("DS_SOURCE_IONGUNPROPID_IONTYPE")
+        if ion:
+            out["ion"] = str(ion).strip()
+        for key, name, nd in (("DS_SOURCE_IONGUNPROPID_ENERGY", "e0", 3),
+                              ("DS_SOURCE_IONGUNPROPID_ISS_CALIBRATION",
+                               "e0_cal", 3),
+                              ("DS_SOURCE_IONGUNPROPID_ISS_ANGLE", "theta", 3)):
+            v = p.get(key)
+            if isinstance(v, (int, float)) and v > 0:
+                out[name] = round(float(v), nd)
+        desc = p.get("DS_SOURCE_IONGUNPROPID_DESCRIPTION")
+        if desc:
+            out["description"] = str(desc).strip()
+        return out
+
     def _acquisition_facts(self, r, p):
         """What the property block says about how the region was acquired:
         source (spot, anode voltage, emission), scans, the run's start and
@@ -383,6 +415,10 @@ class ThermoDataSpaceFile(SpectrumFile):
             r.conditions["X-ray spot (µm)"] = (
                 f"{w:g} × {ln:g}" if ln and abs(ln - w) > 1e-6 else f"{w:g}")
         x = r.extra
+        if r.technique == "ISS":
+            iss = self._iss_settings(p)
+            if iss:
+                x["iss"] = iss
         periods = p.get("DS_ACPROPID_PERIODS")
         # A SnapMap's .vgd says 2 where Avantage's own .avg export of it says
         # 1, so its scan count is left unknown; every other kind agrees.

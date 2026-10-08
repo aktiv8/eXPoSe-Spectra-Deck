@@ -23,7 +23,8 @@ import re
 
 # projectile masses (u)
 ION_MASS = {"H+": 1.0078, "He+": 4.0026, "Ne+": 19.9924, "Ar+": 39.9624}
-DEFAULT_THETA = 123.03           # deg: the scattering angle of some instruments
+DEFAULT_THETA = 123.03           # deg: Thermo's (an Avantage ISS file records
+                                 # 123.028, and a calibrated beam energy)
 DEFAULT_ION = "He+"
 # Kratos Axis Ultra: the ion gun is 45 deg from the surface normal, so the
 # scattering angle is 180 - 45 (Kratos test procedure TPC1369C, which also

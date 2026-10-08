@@ -140,7 +140,10 @@ def _iss_paragraph(rows):
     if ions:
         beam.append(f"{join_and(ions)} ions")
     if energy:
-        beam.append(f"a beam energy of {energy}")
+        cal, n_cal = values_text(
+            [r.get("ISS calibrated beam energy (eV)") for r in rows], "eV")
+        beam.append(f"a beam energy of {energy}"
+                    + (f" (calibrated {cal})" if cal and n_cal == 1 else ""))
     if angle:
         beam.append(f"a scattering angle of {angle.replace(' °', '°')}")
     s = ""

@@ -2619,6 +2619,25 @@ class Workspace:
         the file ``r`` came from ({} when none)."""
         return self.ann.iss_for(self._marker_key(r)[0])
 
+    def iss_recorded(self, r):
+        """The ion, beam energy and scattering angle the *file* records (an
+        Avantage ISS file does; Kratos files do not). The beam energy is
+        Avantage's ISS calibration of it when there is one, because that is
+        the energy the peaks fit (In at 867.7 eV, not 897.9 eV); ``e0_set``
+        is the nominal value."""
+        iss = r.extra.get("iss") or {}
+        out = {}
+        if iss.get("ion") in elements.ION_MASS:
+            out["ion"] = iss["ion"]
+        e0 = iss.get("e0_cal") or iss.get("e0")
+        if e0:
+            out["e0"] = e0
+        if iss.get("e0") and iss.get("e0_cal"):
+            out["e0_set"] = iss["e0"]
+        if iss.get("theta"):
+            out["theta"] = iss["theta"]
+        return out
+
     def iss_save(self, r, settings):
         self.ann.set_iss(self._marker_key(r)[0], settings)
         self._ann_changed(relabel=False)
@@ -5436,7 +5455,9 @@ class Workspace:
                     "Points", "Scans", "Counting time", "Quality",
                     "Position X (mm)", "Position Y (mm)", "Sample tilt (°)",
                     "Take-off angle (°)", "Ion gun beam HT (V)",
-                    "Ion gun emission current (mA)"])]
+                    "Ion gun emission current (mA)", "ISS ion",
+                    "ISS beam energy (eV)", "ISS calibrated beam energy (eV)",
+                    "ISS scattering angle (°)"])]
             r = regs[0]
             for title, keys in groups:
                 section(title, keys)

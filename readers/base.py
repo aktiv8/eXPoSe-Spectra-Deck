@@ -546,6 +546,12 @@ class SpectrumFile:
                     "Ion gun beam HT (V)", "Ion gun emission current (mA)"):
             if r.conditions.get(key):
                 md[key] = r.conditions[key]
+        iss = r.extra.get("iss") or {}      # the ion beam, as the file records it
+        for key, name in (("ion", "ISS ion"), ("e0", "ISS beam energy (eV)"),
+                          ("e0_cal", "ISS calibrated beam energy (eV)"),
+                          ("theta", "ISS scattering angle (°)")):
+            if iss.get(key):
+                md[name] = (iss[key] if key == "ion" else f"{iss[key]:g}")
         md["Pass energy (eV)"] = fmt(r.pass_energy, "", 0) if r.pass_energy else ""
         md["Lens mode"] = r.lens_mode or self.instrument.get("Lens mode", "")
         md["Aperture"] = r.aperture or self.instrument.get("Aperture", "")

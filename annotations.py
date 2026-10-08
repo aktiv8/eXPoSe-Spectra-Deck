@@ -152,6 +152,7 @@ class Annotations:
             out["ISS ion"] = iss["ion"]
         if iss.get("e0"):
             out["ISS beam energy (eV)"] = f"{iss['e0']:g}"
+            out.pop("ISS calibrated beam energy (eV)", None)  # theirs is *the* energy
         if iss.get("theta"):
             out["ISS scattering angle (°)"] = f"{iss['theta']:g}"
         rl = self.reels.get(region_key(fid, region.sample, region.name))
