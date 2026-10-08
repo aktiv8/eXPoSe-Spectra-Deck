@@ -50,8 +50,11 @@
           <label class="field" id="offsetField">Offset
             <input type="range" id="offset" min="0" max="3" step="0.05" value="0.6">
           </label>
-          <label class="field">Energy
+          <label class="field" id="scaleField">Energy
             <select id="scale"><option value="Binding">Binding</option><option value="Kinetic">Kinetic</option></select>
+          </label>
+          <label class="field" id="issField" hidden title="The x axis of ion scattering spectra: kinetic energy, or the energy ratio E/E0 (needs the beam energy recorded in the file or saved in the app)">ISS axis
+            <select id="issaxis"><option value="kinetic">Kinetic</option><option value="ratio">Energy ratio</option></select>
           </label>
           <button type="button" id="resetzoom" title="Undo zooming on every panel">Reset zoom</button>
           <button type="button" id="csv" title="Download the ticked spectra as CSV">Download CSV</button>

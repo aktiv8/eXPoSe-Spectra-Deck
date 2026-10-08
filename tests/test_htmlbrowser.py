@@ -1164,6 +1164,54 @@ class TestJavaScript(unittest.TestCase):
                            for c in payload["samples"][0]["regions"][0]
                            ["fit"]["rows"][0]["components"]]}
 
+    def iss_fixture(self):
+        """An ion scattering spectrum as the page receives it, and what the
+        desktop's own ``viewdata`` makes of the same region on each axis."""
+        import viewdata
+        n = 351
+        r = Region("ISS Survey", 0, 0, technique="ISS", sample="s",
+                   energy=[300.0 + 2.0 * i for i in range(n)],
+                   counts=[float(1 + (i * 7) % 11) for i in range(n)],
+                   energy_label="Kinetic Energy", decodable=True)
+        r.extra["iss"] = {"ion": "He+", "e0": 1000.0, "e0_cal": 966.313,
+                          "theta": 123.028}
+        payload = hb.build_payload([doc("dir/iss.avg", [r])],
+                                   details={"title": "T"})
+        shown = copy.copy(r)
+        shown.extra = dict(r.extra, iss_e0=966.313)
+        ratio = viewdata.energy_axis(shown, viewdata.RATIO)
+        return {"payload_b64": hb.encode_payload(payload),
+                "e0": 966.313, "x": list(r.energy), "ratio": ratio.x,
+                "marker_ke": 933.0, "marker_ratio": 933.0 / 966.313,
+                "read_v": 0.9, "read_ke": round(0.9 * 966.313, 1)}
+
+    def test_an_iss_spectrum_carries_its_beam_energy(self):
+        r = Region("ISS Survey", 0, 0, technique="ISS", sample="s",
+                   energy=[300.0, 302.0], counts=[1.0, 2.0],
+                   energy_label="Kinetic Energy", decodable=True)
+        r.extra["iss"] = {"ion": "He+", "e0": 1000.0, "e0_cal": 966.313,
+                          "theta": 123.028}
+        reg = hb.build_payload([doc("dir/i.avg", [r])],
+                               details={"title": "T"}
+                               )["samples"][0]["regions"][0]
+        self.assertEqual(reg["iss"], {"e0": 966.313, "ion": "He+",
+                                      "theta": 123.028})
+        # nothing recorded, nothing saved: the page is told it is unknown
+        r2 = Region("ISS", 0, 0, technique="ISS", sample="s",
+                    energy=[300.0, 302.0], counts=[1.0, 2.0],
+                    energy_label="Kinetic Energy", decodable=True)
+        reg2 = hb.build_payload([doc("dir/j.kal", [r2])],
+                                details={"title": "T"}
+                                )["samples"][0]["regions"][0]
+        self.assertIsNone(reg2["iss"]["e0"])
+        # an XPS spectrum has no ISS block, and the page has the control
+        x = hb.build_payload([doc("dir/x.vms", [region()])],
+                             details={"title": "T"}
+                             )["samples"][0]["regions"][0]
+        self.assertNotIn("iss", x)
+        self.assertIn('id="issaxis"', hb.build_html(hb.build_payload(
+            [doc("dir/x.vms", [region()])], details={"title": "T"})))
+
     def test_pure_half_agrees_with_python(self):
         regs = [region("C 1s", "A", n=61), region("O 1s", "A", n=41, lo=525,
                                                  hi=540, peak=532),
@@ -1200,6 +1248,7 @@ class TestJavaScript(unittest.TestCase):
                 fx["map"] = self.map_fixture()
             if HAVE_NP:
                 fx["imaging"] = self.imaging_fixture()
+            fx["iss"] = self.iss_fixture()
             fx["elements"] = self.element_fixture()
             fx["casaxps"] = self.casaxps_fixture()
             if HAVE_FIT:

@@ -31,6 +31,7 @@ except Exception:                                   # pragma: no cover
 
 from test_iss_kratos import iss_object  # noqa: E402
 from test_iss_thermo import iss_avg  # noqa: E402
+from test_readers import AVG_TEMPLATE  # noqa: E402
 
 
 def iss(e0=None, **kw):
@@ -43,8 +44,11 @@ def iss(e0=None, **kw):
 
 
 class TestRatioAxis(unittest.TestCase):
-    def test_it_is_a_scale_and_divides_by_the_beam_energy(self):
-        self.assertIn("Energy ratio", viewdata.ENERGY_SCALES)
+    def test_it_is_an_iss_axis_not_an_xps_scale(self):
+        self.assertEqual(viewdata.ENERGY_SCALES, ("Binding", "Kinetic"))
+        self.assertEqual(viewdata.ISS_AXES, ("Kinetic", "Energy ratio"))
+
+    def test_it_divides_by_the_beam_energy(self):
         a = viewdata.energy_axis(iss(1000.0), viewdata.RATIO)
         self.assertEqual(a.x, [0.1, 0.5, 0.933])
         self.assertEqual((a.label, a.units, a.invert, a.ok, a.e0),
@@ -139,6 +143,12 @@ class TestWindow(unittest.TestCase):
         cls.avg = os.path.join(cls.dir, "ISS Survey.avg")
         with open(cls.avg, "w") as fh:
             fh.write(iss_avg())
+        cls.xps = os.path.join(cls.dir, "C1s Scan.avg")
+        with open(cls.xps, "w") as fh:
+            fh.write(AVG_TEMPLATE.format(
+                title="C1s Scan",
+                rows="LIST@   0=  1.0,  2.0,  3.0,  4.0\n"
+                     "LIST@   4=  5.0,  6.0,  7.0,  8.0"))
         cls.kal = os.path.join(cls.dir, "iss.kal")
         with open(cls.kal, "w") as fh:
             fh.write("Dataset filename          = iss.dset\n"
@@ -157,7 +167,7 @@ class TestWindow(unittest.TestCase):
         ws._add_files([path])
         region = ws.docs[0].regions[0]
         ws.checked = {id(region)}
-        ws.scale_var.set("Energy ratio")
+        ws.iss_axis_var.set("Energy ratio")
         ws._render()
         return ws, region
 
@@ -196,11 +206,60 @@ class TestWindow(unittest.TestCase):
         self.assertEqual(self.axis(ws).get_xlabel(), "Energy ratio (E/E$_0$)")
         self.assertEqual(ws._axe0[self.axis(ws)], 1000.0)
 
-    def test_the_scale_is_saved_with_the_view(self):
+    def test_kinetic_is_the_default_and_the_switch_is_one_box(self):
+        ws = ee.Workspace(self.root)
+        self.assertEqual(ws.iss_axis_var.get(), "Kinetic")
+        ws._add_files([self.avg])
+        r = ws.docs[0].regions[0]
+        ws.checked = {id(r)}
+        ws._render()
+        self.assertEqual(self.axis(ws).get_xlabel(), "Kinetic energy (eV)")
+        ws.iss_axis_var.set("Energy ratio")
+        ws._on_view_changed()
+        ws._render()
+        self.assertEqual(self.axis(ws).get_xlabel(), "Energy ratio (E/E$_0$)")
+        self.assertEqual(ws.scale_var.get(), "Binding")     # XPS box untouched
+
+    def test_xps_keeps_its_own_scale_beside_ratio_iss(self):
+        ws = ee.Workspace(self.root)
+        ws._add_files([self.avg, self.xps])
+        ws.checked = {id(r) for d in ws.docs for r in d.regions}
+        ws.scale_var.set("Kinetic")
+        ws.iss_axis_var.set("Energy ratio")
+        ws._render()
+        labels = sorted(a.get_xlabel() for a in ws.fig.axes if a.get_xlabel())
+        self.assertEqual(labels, ["Energy ratio (E/E$_0$)",
+                                  "Kinetic energy (eV)"])
+
+    def test_the_axis_is_saved_with_the_view_and_old_states_stay_kinetic(self):
         ws, _r = self.open(self.avg)
-        self.assertEqual(ws.capture_state()["energy_scale"], "Energy ratio")
-        self.assertIn("energy ratio axis", __import__("pptx_export").look_notes(
-            ws.capture_state()))
+        st = ws.capture_state()
+        self.assertEqual((st["energy_scale"], st["iss_axis"]),
+                         ("Binding", "Energy ratio"))
+        self.assertIn("energy-ratio axis",
+                      __import__("pptx_export").look_notes(st))
+        old = dict(st)
+        del old["iss_axis"]                  # a state from before the choice
+        ws.apply_state(old, render=False)
+        self.assertEqual(ws.iss_axis_var.get(), "Kinetic")
+        first = dict(st, energy_scale="Energy ratio")  # the first version
+        del first["iss_axis"]
+        ws.apply_state(first, render=False)
+        self.assertEqual((ws.scale_var.get(), ws.iss_axis_var.get()),
+                         ("Binding", "Energy ratio"))
+
+    def test_the_iss_dialog_has_the_same_switch(self):
+        from iss_ui import IssReelsDialog
+        ws, _r = self.open(self.avg)
+        ws.iss_axis_var.set("Kinetic")
+        dlg = IssReelsDialog(self.root, ws)
+        self.addCleanup(lambda: dlg.winfo_exists() and dlg.destroy())
+        self.assertFalse(dlg.ratio_var.get())
+        dlg.ratio_var.set(True)
+        dlg._ratio_toggled()
+        self.assertEqual(ws.iss_axis_var.get(), "Energy ratio")
+        ws.iss_axis_var.set("Kinetic")             # changed in the main window
+        self.assertFalse(dlg.ratio_var.get())
 
 
 if __name__ == "__main__":

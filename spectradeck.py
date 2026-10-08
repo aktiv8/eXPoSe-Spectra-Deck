@@ -1254,6 +1254,7 @@ class Workspace:
         cfg["axis_colour_custom"] = self.axis_custom
         cfg["view_mode"] = self.view_var.get()
         cfg["energy_scale"] = self.scale_var.get()
+        cfg["iss_axis"] = self.iss_axis_var.get()
         cfg["ke_top"] = bool(self.ke_var.get())
         cfg["z_axis"] = self.z_var.get()
         cfg["group_by"] = self.group_var.get()
@@ -1388,17 +1389,32 @@ class Workspace:
         grp = ttk.Frame(ctl2)
         ttk.Label(grp, text="Energy").pack(side="left")
         scale = cfg.get("energy_scale", "Binding")
+        iss_axis = cfg.get("iss_axis", viewdata.ISS_AXES[0])
+        if scale == viewdata.RATIO:      # the first version kept it in this box
+            scale, iss_axis = "Binding", viewdata.RATIO
         self.scale_var = tk.StringVar(
             value=scale if scale in viewdata.ENERGY_SCALES else "Binding")
-        eb = ttk.Combobox(grp, textvariable=self.scale_var, width=11,
+        eb = ttk.Combobox(grp, textvariable=self.scale_var, width=8,
                           state="readonly", values=list(viewdata.ENERGY_SCALES))
         eb.pack(side="left", padx=(6, 0))
         eb.bind("<<ComboboxSelected>>", lambda e: self._on_view_changed())
         tip(eb, "Plot against binding energy or kinetic energy "
-                "(KE = photon energy − BE; needs the photon energy), or, for "
-                "ion scattering spectra, the energy ratio E/E₀ (needs the "
-                "beam energy: recorded in the file, or saved in ISS / REELS). "
-                "Other spectra keep their own axis.")
+                "(KE = photon energy − BE). Needs the photon energy.")
+        ctl2.add(grp)
+
+        grp = ttk.Frame(ctl2)
+        ttk.Label(grp, text="ISS axis").pack(side="left")
+        self.iss_axis_var = tk.StringVar(
+            value=iss_axis if iss_axis in viewdata.ISS_AXES
+            else viewdata.ISS_AXES[0])
+        ib = ttk.Combobox(grp, textvariable=self.iss_axis_var, width=11,
+                          state="readonly", values=list(viewdata.ISS_AXES))
+        ib.pack(side="left", padx=(6, 0))
+        ib.bind("<<ComboboxSelected>>", lambda e: self._on_view_changed())
+        tip(ib, "The x axis of ion scattering (ISS) spectra: kinetic energy, "
+                "or the energy ratio E/E₀. The ratio needs the beam energy, "
+                "recorded in the file or saved with 'Use for this file' in "
+                "ISS / REELS. Other spectra are not affected.")
         ctl2.add(grp)
 
         self.ke_var = tk.BooleanVar(value=bool(cfg.get("ke_top", False)))
@@ -1655,8 +1671,8 @@ class Workspace:
         self.offset_sc.state(["!disabled"] if stack else ["disabled"])
         self.z_cb.state(["!disabled", "readonly"] if series
                         else ["disabled"])
-        self.ke_cb.state(["disabled"] if self.scale_var.get() in (
-            "Kinetic", viewdata.RATIO) else ["!disabled"])
+        self.ke_cb.state(["disabled"] if self.scale_var.get() == "Kinetic"
+                         else ["!disabled"])
 
     def _sync_colour_controls(self):
         """Reverse means nothing for a single colour."""
@@ -2308,6 +2324,24 @@ class Workspace:
         iss = r.extra.get("iss") or {}
         return iss.get("e0_cal") or iss.get("e0") or None
 
+    def _panel_scale(self, disp, scale):
+        """The energy scale a panel is drawn on: the energy-ratio axis when
+        the ISS axis says so and every spectrum of the panel is ion
+        scattering, else the Energy box's scale (so XPS panels keep binding or
+        kinetic energy on the same page)."""
+        if (self.iss_axis_var.get() == viewdata.RATIO and disp
+                and all(r.is_iss for r in disp)):
+            return viewdata.RATIO
+        return scale
+
+    def _zoom_scale(self):
+        """What a saved zoom is tied to: its limits mean something else on
+        another axis, so both controls are part of it."""
+        scale = self.scale_var.get()
+        if self.iss_axis_var.get() == viewdata.RATIO:
+            return f"{scale}|{viewdata.RATIO}"
+        return scale                     # unchanged, so saved figures still fit
+
     def _ann_changed(self, relabel=True):
         """Call after any change to ``self.ann`` (or after replacing it).
         ``relabel=False`` skips rebuilding the tree (markers do not show
@@ -2611,7 +2645,8 @@ class Workspace:
         if event.xdata is None:
             return None
         d = self._display(r)
-        ax = viewdata.energy_axis(d, self.scale_var.get())
+        ax = viewdata.energy_axis(d, self._panel_scale([d],
+                                                       self.scale_var.get()))
         if ax.e0:                        # an energy-ratio axis: E = ratio x E0
             return float(event.xdata) * ax.e0
         if ax.label == "Kinetic Energy":
@@ -3579,16 +3614,17 @@ class Workspace:
             lim = self._panel_limit(limit, look)
             s = min(start, len(rs) - lim) if lim and len(rs) > lim else 0
             vis = rs[s:s + lim] if lim and len(rs) > lim else rs
-            sig = (view, norm, offset, scale, look.get("z_axis"), s,
-                  tuple(id(r) for r in vis))
+            sig = (view, norm, offset, scale, self.iss_axis_var.get(),
+                   look.get("z_axis"), s, tuple(id(r) for r in vis))
             colours = self.trace_colours(rs, base)[s:s + len(vis)]
             disp = [self._display(r) for r in vis]      # names, BE shift
-            if scale == "Kinetic" and not all(
-                    viewdata.energy_axis(r, scale).ok for r in disp):
+            pscale = self._panel_scale(disp, scale)    # ISS may differ
+            if pscale == "Kinetic" and not all(
+                    viewdata.energy_axis(r, pscale).ok for r in disp):
                 notes.append("no photon energy for some spectra: shown "
                              "as binding energy")
-            if scale == viewdata.RATIO and not all(
-                    viewdata.energy_axis(r, scale).ok for r in disp):
+            if pscale == viewdata.RATIO and not all(
+                    viewdata.energy_axis(r, pscale).ok for r in disp):
                 notes.append("beam energy unknown for some ion scattering "
                              "spectra: shown as kinetic energy (enter it in "
                              "ISS / REELS and 'Use for this file')")
@@ -3624,11 +3660,11 @@ class Workspace:
                                  subtitle, first_col=(i % cols == 0),
                                  bottom_row=(i + cols >= len(chunk)),
                                  top_row=top_row, muted=pal["muted"],
-                                 scale=scale, ke_top=ke_top, style=style)
+                                 scale=pscale, ke_top=ke_top, style=style)
                 else:
                     ax = fig.add_subplot(rows, cols, i + 1, projection="3d")
                     draw_waterfall3d(ax, disp, zvis, norm, colours, title,
-                                     subtitle, pal, scale, style=style)
+                                     subtitle, pal, pscale, style=style)
                 axmap[ax] = key
                 axinfo[ax] = (viewdata.photon_energy(disp), view.lower(),
                               len(disp), zvis.label)
@@ -3688,12 +3724,12 @@ class Workspace:
                        selected, multi, first_col=(i % cols == 0),
                        bottom_row=(i + cols >= len(chunk)),
                        accent=pal["accent"], muted=pal["muted"],
-                       scale=scale, ke_top=ke_top, top_row=top_row,
+                       scale=pscale, ke_top=ke_top, top_row=top_row,
                        markers=marks, style=style, fit=fit_arg,
                        reels=reels_arg, auger_colour=pal["cycle"][1])
             axmap[ax] = key
             axhv[ax] = viewdata.photon_energy(disp)
-            e0 = viewdata.energy_axis(disp[0], scale).e0
+            e0 = viewdata.energy_axis(disp[0], pscale).e0
             if e0:
                 axe0[ax] = e0
             axinfo[ax] = (axhv[ax], "fit" if view == "Fit" else "stack",
@@ -3940,7 +3976,7 @@ class Workspace:
                 continue
             if viewzoom.is_zoomed(auto, cur):
                 panels[key] = cur
-        return viewzoom.encode(panels, self.scale_var.get())
+        return viewzoom.encode(panels, self._zoom_scale())
 
     def current_figure_state(self):
         """What a figure saves: the look plus the zoom of what is on screen."""
@@ -4122,6 +4158,7 @@ class Workspace:
             "reverse": bool(self.reverse.get()),
             "view_mode": self.view_var.get(),
             "energy_scale": self.scale_var.get(),
+            "iss_axis": self.iss_axis_var.get(),
             "ke_top": bool(self.ke_var.get()), "z_axis": self.z_var.get(),
             "colour_scale": self.colscale_var.get(),
             "colour_reverse": bool(self.colrev_var.get()),
@@ -4157,10 +4194,18 @@ class Workspace:
             "colour_scale": themes.TRACE_SCALE_NAMES,
             "panels_per_page": self.PANEL_CHOICES,
         }
+        st = dict(st)
+        if st.get("energy_scale") == viewdata.RATIO:     # the first version
+            st["energy_scale"], st["iss_axis"] = "Binding", viewdata.RATIO
         for key, (var, _x) in self.STATE_CHOICES.items():
             v = st.get(key)
             if v in allowed[key]:
                 getattr(self, var).set(v)
+        # a saved look says how ISS spectra were drawn; one without the key
+        # was saved before there was a choice, so it was kinetic energy
+        self.iss_axis_var.set(st.get("iss_axis")
+                              if st.get("iss_axis") in viewdata.ISS_AXES
+                              else viewdata.ISS_AXES[0])
         try:
             self.offset_var.set(max(0.0, min(3.0, float(st["offset"]))))
             self.offset_lbl.config(text=f"{self.offset_var.get():.1f}×")
@@ -4234,7 +4279,7 @@ class Workspace:
         # a figure saved with a zoom puts it back; one without the key (an older
         # figure, or the live look) says nothing about it
         self._zoom_request = viewzoom.sanitise(st.get("zoom"),
-                                               self.scale_var.get())
+                                               self._zoom_scale())
         self._apply_mpl_theme()
         self._sync_view_controls()
         if render:

@@ -127,10 +127,19 @@
   };
 
   /* --------------------------------------------------------------- axes */
-  V.energyAxis = function (reg, x, scale) {
+  /* iss: 'kinetic' (the default) or 'ratio'. An ion scattering spectrum (reg.iss) is drawn as
+     E / E0, scattered over beam energy, ascending, when asked and its beam energy is known;
+     without it the kinetic axis is kept and ok is false. Every other spectrum is not affected. */
+  V.energyAxis = function (reg, x, scale, iss) {
     var label = reg.elabel || 'Binding Energy', low = label.toLowerCase();
     var native = { x: x, invert: !!reg.binding, ok: true, units: reg.eunits || 'eV',
                    label: low.charAt(0).toUpperCase() + low.slice(1) };
+    if (iss === 'ratio' && reg.iss && !reg.binding) {
+      var e0 = reg.iss.e0;
+      if (!e0) { native.ok = false; return native; }
+      return { x: x.map(function (v) { return v / e0; }), invert: false, ok: true,
+               units: 'E/E₀', label: 'Energy ratio', ratio: true, e0: e0 };
+    }
     if (scale !== 'Kinetic') return native;
     if (reg.binding && reg.hv) {
       return { x: x.map(function (v) { return reg.hv - v; }), invert: false, ok: true,
@@ -139,6 +148,26 @@
     if (!reg.binding) { native.invert = false; return native; }   /* native KE */
     native.ok = false;                                            /* no photon energy */
     return native;
+  };
+  /* where a peak marker sits on an axis from V.energyAxis. A kinetic marker (ion scattering)
+     is a kinetic energy: on a ratio axis at KE / E0; markers stored as binding energies
+     have no place on it */
+  V.markerX = function (m, ax) {
+    var fromHv = m.hv ? m.hv - m.be : null;
+    if (ax.ratio) return m.kin ? m.be / ax.e0 : null;
+    return m.kin ? (ax.invert ? fromHv : m.be) : (ax.invert ? m.be : fromHv);
+  };
+  /* the pieces of the read-out under the pointer at axis value v (ax from V.energyAxis, reg the
+     first spectrum of the panel) */
+  V.readoutParts = function (v, ax, reg) {
+    if (ax.ratio) return ['E/E₀ ' + v.toFixed(4), 'KE ' + (v * ax.e0).toFixed(1) + ' eV'];
+    var be = null, ke = null, parts = [];
+    if (ax.label === 'Kinetic energy') { ke = v; be = reg.hv ? reg.hv - v : null; }
+    else { be = v; ke = reg.hv && reg.binding ? reg.hv - v : null; }
+    if (be !== null && reg.binding) parts.push('BE ' + be.toFixed(2) + ' eV');
+    else if (ax.label !== 'Kinetic energy') parts.push(ax.label + ' ' + v.toFixed(2) + ' eV');
+    if (ke !== null) parts.push('KE ' + ke.toFixed(2) + ' eV');
+    return parts;
   };
   /* a zoom window kept inside the data span [dlo, dhi]: one as wide as the span (or wider)
      is the full view (null); otherwise it keeps its width and slides back in. A window
@@ -1120,7 +1149,7 @@
 
   /* ============================================================ the page */
   var S = { data: null, specs: [], byId: {}, ticked: new Set(), selected: null, mode: 'stack',
-            norm: 'none', offset: 0.6, scale: 'Binding', levelOn: false, levelIdx: 0, levels: [],
+            norm: 'none', offset: 0.6, scale: 'Binding', iss: 'kinetic', levelOn: false, levelIdx: 0, levels: [],
             panels: new Map(), theme: 'auto', printing: false, nodes: [], holderIdx: 0,
             holderHot: null, tab: 'plot', filter: '', camIdx: 0, mapById: {}, camById: {},
             fit: { components: true, envelope: true, background: true, residual: false, hidden: {},
@@ -1385,6 +1414,9 @@
     if (S.scale === 'Kinetic' && specs.some(function (s) { return s.reg.binding && !s.reg.hv; })) {
       notes.push('no photon energy for some spectra: shown as binding energy');
     }
+    if (S.iss === 'ratio' && specs.some(function (s) { return s.reg.iss && !s.reg.iss.e0; })) {
+      notes.push('beam energy unknown for some ion scattering spectra: shown as kinetic energy');
+    }
     var anyFit = false;
     S.panels.forEach(function (p) {
       var s = singleFit(p.group);
@@ -1589,7 +1621,7 @@
     var font = function (px_, w) { return (w || '') + ' ' + px_ + 'px system-ui, "Segoe UI", Helvetica, Arial, sans-serif'; };
 
     var items = g.items, n = items.length;
-    var axes = items.map(function (s) { return V.energyAxis(s.reg, s.x, S.scale); });
+    var axes = items.map(function (s) { return V.energyAxis(s.reg, s.x, S.scale, S.iss); });
     var ax0 = axes[0];
     var ys = items.map(function (s) {
       var f = V.normFactor(s.y, S.norm);
@@ -1709,8 +1741,7 @@
     /* the user's own labels first, then the app's, then the automatic ones: a label that
        would sit on top of one already drawn keeps its line but not its text */
     panelMarks(g).map(function (m) {
-      var fromHv = m.hv ? m.hv - m.be : null;
-      m.v = m.kin ? (ax0.invert ? fromHv : m.be) : (ax0.invert ? m.be : fromHv);
+      m.v = V.markerX(m, ax0);
       return m;
     }).filter(function (m) { return m.v !== null && m.v >= lo && m.v <= hi; })
       .sort(function (a, b) { return (b.mine - a.mine) || (a.auto - b.auto); }).forEach(function (m) {
@@ -1818,6 +1849,7 @@
   }
   /* click a peak in identify mode: list the element lines near it */
   function identifyAt(P, xpx) {
+    if (P.lay.ax.ratio) { S.ident.clicked = null; renderIdBox(); return; }   /* the line tables are binding energies */
     var v = P.lay.toX(xpx), item = P.items[0], hv = item.reg.hv;
     var be = P.lay.ax.label === 'Kinetic energy' ? (hv ? hv - v : null) : v;
     S.ident.clicked = be === null ? null : { be: be, item: item, hv: hv };
@@ -1940,13 +1972,7 @@
     }
     P.hover = x;
     var v = lay.toX(x), r0 = P.items[0].reg, a0 = lay.ax;
-    var be = null, ke = null;
-    if (a0.label === 'Kinetic energy') { ke = v; be = r0.hv ? r0.hv - v : null; }
-    else { be = v; ke = r0.hv && r0.binding ? r0.hv - v : null; }
-    var parts = [];
-    if (be !== null && r0.binding) parts.push('BE ' + be.toFixed(2) + ' eV');
-    else if (a0.label !== 'Kinetic energy') parts.push(a0.label + ' ' + v.toFixed(2) + ' eV');
-    if (ke !== null) parts.push('KE ' + ke.toFixed(2) + ' eV');
+    var parts = V.readoutParts(v, a0, r0);
     var best = null, bd = Infinity;
     P.items.forEach(function (s, i) {
       var yv = V.interp(P.axes[i].x, P.yoff[i], v);
@@ -3199,6 +3225,8 @@
       '. Self-contained: it needs no network and opens in any modern browser.';
     buildTree();
     buildTabs();
+    $('issField').hidden = !S.specs.some(function (s) { return s.reg.iss; });
+    $('scaleField').hidden = !S.specs.some(function (s) { return s.reg.binding; });   /* nothing to switch */
     V.seedInclude(S.q.include, data.quant_include);
     V.quantSource.casa = !!data.casa_numbers;
     V.fitSource.csv = !!(data.fit_csv && data.fit_csv.default);
@@ -3216,6 +3244,11 @@
     $('offset').addEventListener('input', function (e) { S.offset = +e.target.value; requestRender(); });
     $('scale').addEventListener('change', function (e) {
       S.scale = e.target.value;
+      S.panels.forEach(function (p) { p.zoom = null; });
+      requestRender();
+    });
+    $('issaxis').addEventListener('change', function (e) {
+      S.iss = e.target.value;
       S.panels.forEach(function (p) { p.zoom = null; });
       requestRender();
     });

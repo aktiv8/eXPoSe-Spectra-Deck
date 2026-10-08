@@ -244,8 +244,11 @@ class ThermoVgdFile(ThermoDataSpaceFile):
                         lab[si] = a["values"][i]
                     else:
                         lab[si] = a["start"] + i * a["width"]
+            # an unacquired point is stored as -inf (the .avg dump leaves it
+            # out): no value, so such a file is header-only in both readers
             ds.blocks.append({"index": tuple(idx), "labels": lab,
-                              "values": list(vals[k * n_e:(k + 1) * n_e])})
+                              "values": [v if math.isfinite(v) else None
+                                         for v in vals[k * n_e:(k + 1) * n_e]]})
         self._from_dataspace(ds)
         return self._finish()
 

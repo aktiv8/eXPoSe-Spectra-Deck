@@ -22,6 +22,7 @@ from tkinter import messagebox, ttk
 
 import elements
 import reels
+import viewdata
 from workbook_ui import _finish
 
 
@@ -134,6 +135,15 @@ class IssReelsDialog(tk.Toplevel):
                                   justify="left")
         self.iss_note.grid(row=7, column=0, columnspan=2, sticky="w",
                            pady=(10, 0))
+        # the same switch as the main window's "ISS axis" box
+        self.ratio_var = tk.BooleanVar(
+            value=self.app.iss_axis_var.get() == viewdata.RATIO)
+        ttk.Checkbutton(
+            t, text="Plot ion scattering spectra as energy ratio (E/E₀)",
+            variable=self.ratio_var, command=self._ratio_toggled
+        ).grid(row=8, column=0, columnspan=2, sticky="w", pady=(6, 0))
+        self._trace = self.app.iss_axis_var.trace_add(
+            "write", lambda *a: self._ratio_synced())
 
     # -- REELS tab -------------------------------------------------------------------
     def _build_reels(self):
@@ -173,6 +183,21 @@ class IssReelsDialog(tk.Toplevel):
     def _detach(self):
         if self.app._click_cb == self._on_click:
             self.app._click_cb = None
+        try:
+            self.app.iss_axis_var.trace_remove("write", self._trace)
+        except (tk.TclError, AttributeError, ValueError):
+            pass
+
+    def _ratio_toggled(self):
+        self.app.iss_axis_var.set(
+            viewdata.RATIO if self.ratio_var.get() else viewdata.ISS_AXES[0])
+        self.app._on_view_changed()
+
+    def _ratio_synced(self):
+        try:
+            self.ratio_var.set(self.app.iss_axis_var.get() == viewdata.RATIO)
+        except tk.TclError:
+            pass
 
     def _region(self):
         return self.regions[self.reg_cb.current()]

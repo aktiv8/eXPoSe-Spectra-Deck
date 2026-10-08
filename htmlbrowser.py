@@ -639,6 +639,14 @@ def build_payload(docs, display=None, details=None, methods_text="",
                 "meta": _meta(p.region_metadata(r)), "note": rnote,
                 "markers": marks,
             }
+            if d.is_iss:       # the page's ISS axis (kinetic, or the ratio E/E0)
+                rec = d.extra.get("iss") or {}
+                saved = ann.iss_for(fid) if ann is not None else {}
+                e0 = (saved.get("e0") or d.extra.get("iss_e0")
+                      or rec.get("e0_cal") or rec.get("e0"))
+                reg["iss"] = {"e0": e0 or None,
+                              "ion": saved.get("ion") or rec.get("ion"),
+                              "theta": saved.get("theta") or rec.get("theta")}
             auto = auto_labels(d, element_lines)
             if auto:
                 reg["auto"] = auto

@@ -14,7 +14,9 @@ import sputter
 
 RATIO = "Energy ratio"           # ISS: scattered energy / beam energy, E/E0
 RATIO_UNITS = "E/E$_0$"          # mathtext, so any plot font draws the 0
-ENERGY_SCALES = ("Binding", "Kinetic", RATIO)
+ENERGY_SCALES = ("Binding", "Kinetic")
+ISS_AXES = ("Kinetic", RATIO)     # the x axis of ion scattering spectra; the
+                                  # first is the default (see Workspace)
 Z_MODES = ("Auto", "Etch time", "Etch level", "Acquisition time",
            "Trace order", "Depth", "Fluence")
 SPUTTER_MODES = ("Depth", "Fluence")     # need the sputter settings

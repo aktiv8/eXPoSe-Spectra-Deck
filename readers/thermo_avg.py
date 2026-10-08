@@ -16,6 +16,7 @@ import re
 from array import array
 
 import timing
+from kratosterms import is_iss_lens
 from .base import (Region, ImageBlob, SpectrumFile, canon_region_name,
                    read_bytes, CAE)
 
@@ -259,7 +260,9 @@ class ThermoDataSpaceFile(SpectrumFile):
             os.path.basename(self.path or ""))[0]
         # DS_GEPROPID_TECHNIQUE: 1 in every XPS file, 6 in every ion scattering
         # file seen (the only two values met; any other stays XPS)
-        iss = p.get("DS_GEPROPID_TECHNIQUE") == ISS_TECHNIQUE
+        # A header with neither (an unacquired scan) still names the ISS lens.
+        iss = (p.get("DS_GEPROPID_TECHNIQUE") == ISS_TECHNIQUE
+               or is_iss_lens(p.get("DS_ANPROPID_LENS_MODE_NAME")))
         name = (title.strip() or "ISS") if iss else region_name_from_title(title)
         ax0 = ds.space_axes[0]
         if ax0["type"].upper() != "ENERGY":

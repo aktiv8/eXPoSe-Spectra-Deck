@@ -301,8 +301,36 @@ def _state_sentence(rows, key, noun, used, unused):
     return f"{noun}: {join_and(vals)}."
 
 
+def _iteration_sentence(rows):
+    """Ion scattering series: the same measurement repeated in succession
+    (Avantage's "Iteration" axis). Nothing is said about sputtering: the file
+    holds no etch settings for these."""
+    per = {}
+    for r in rows:
+        lvl = _num(r.get("Etch level"))
+        if lvl is not None:
+            per.setdefault(str(r.get("Sample", "")), set()).add(int(lvl))
+    if not per:
+        return ""
+    counts = sorted({len(v) for v in per.values()})
+    n_text = (f"{counts[0]}" if len(counts) == 1
+              else f"{counts[0]}{DASH}{counts[-1]}")
+    s = ("The ion scattering measurement was repeated in succession: "
+         f"{n_text} iterations per series")
+    if len(per) > 1:
+        s += f" on {len(per)} samples"
+    return s + "."
+
+
 def _depth_sentence(rows):
-    """Depth profiles: levels per sample and the etch times."""
+    """Depth profiles: levels per sample and the etch times. Ion scattering
+    iterations are described apart (``_iteration_sentence``)."""
+    iterations = _iteration_sentence([r for r in rows if is_iss(r)])
+    rows = [r for r in rows if not is_iss(r)]
+    return " ".join(s for s in (_etch_sentence(rows), iterations) if s)
+
+
+def _etch_sentence(rows):
     per = {}
     for r in rows:
         lvl = _num(r.get("Etch level"))

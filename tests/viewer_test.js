@@ -53,6 +53,34 @@ function near(a, b, msg, tol) {
   a = V.energyAxis({ binding: false, hv: null, elabel: 'Kinetic Energy' }, [1, 2], 'Kinetic');
   check(a.ok && !a.invert, 'native kinetic axis kept');
 
+  // ---- ion scattering: kinetic by default, energy ratio on request ----
+  const idata = await V.decode(fx.iss.payload_b64), ispec = V.prepare(idata)[0];
+  near(ispec.reg.iss.e0, fx.iss.e0, 'the payload carries the beam energy', 1e-9);
+  a = V.energyAxis(ispec.reg, ispec.x, 'Binding', 'kinetic');
+  check(a.ok && !a.invert && !a.ratio && a.label === 'Kinetic energy', 'ISS is kinetic by default');
+  eq(a.x, fx.iss.x, 'default ISS axis is the native kinetic one');
+  a = V.energyAxis(ispec.reg, ispec.x, 'Binding');
+  check(!a.ratio, 'no ISS axis given: kinetic');
+  a = V.energyAxis(ispec.reg, ispec.x, 'Binding', 'ratio');
+  check(a.ok && a.ratio && !a.invert && a.label === 'Energy ratio' && a.units === 'E/E₀', 'ratio axis look');
+  eq(a.x.length, fx.iss.ratio.length, 'ratio axis length');
+  a.x.forEach(function (v, i) { near(v, fx.iss.ratio[i], 'ratio value ' + i, 1e-12); });
+  near(a.e0, fx.iss.e0, 'the axis keeps the beam energy', 1e-9);
+  near(V.markerX({ be: fx.iss.marker_ke, kin: true, hv: null }, a), fx.iss.marker_ratio, 'a kinetic marker at KE / E0', 1e-12);
+  eq(V.markerX({ be: 285, kin: false, hv: null }, a), null, 'a binding marker has no place on a ratio axis');
+  eq(V.readoutParts(fx.iss.read_v, a, ispec.reg), ['E/E₀ 0.9000', 'KE ' + fx.iss.read_ke.toFixed(1) + ' eV'], 'ratio read-out');
+  const noE0 = { binding: false, hv: null, elabel: 'Kinetic Energy', iss: { e0: null } };
+  a = V.energyAxis(noE0, [100, 200], 'Binding', 'ratio');
+  check(!a.ok && !a.ratio && a.label === 'Kinetic energy', 'no beam energy: kinetic, flagged');
+  a = V.energyAxis(reg, [285, 290], 'Binding', 'ratio');
+  check(a.ok && a.invert && a.label === 'Binding energy', 'XPS is not affected by the ISS axis');
+  a = V.energyAxis(reg, [285, 290], 'Kinetic', 'ratio');
+  near(a.x[0], 1201.6, 'XPS kinetic still works beside it', 1e-9);
+  // the old markers and read-out are unchanged
+  near(V.markerX({ be: 285, kin: false, hv: 1486.6 }, V.energyAxis(reg, [285], 'Binding')), 285, 'binding marker on a binding axis');
+  near(V.markerX({ be: 285, kin: false, hv: 1486.6 }, V.energyAxis(reg, [285], 'Kinetic')), 1201.6, 'binding marker on a kinetic axis', 1e-9);
+  eq(V.readoutParts(285, V.energyAxis(reg, [285], 'Binding'), reg), ['BE 285.00 eV', 'KE 1201.60 eV'], 'binding read-out');
+
   // ---- ticks ----
   eq(V.niceTicks(280, 296, 8), [280, 282, 284, 286, 288, 290, 292, 294, 296], 'ticks 280-296');
   eq(V.niceTicks(0, 1, 5), [0, 0.2, 0.4, 0.6, 0.8, 1], 'ticks 0-1');

@@ -38,6 +38,7 @@ except Exception:                                   # pragma: no cover
     tk, ee, HAVE_MPL = None, None, False
 
 CORPUS = os.environ.get("XPS_THERMO_ISS_CORPUS", "")
+CORPUS2 = os.environ.get("XPS_THERMO_ISS_CORPUS2", "")
 HE = el.ION_MASS["He+"]
 IN = el.ELEMENTS["In"][1]
 
@@ -136,6 +137,37 @@ class TestThermoIssFile(Tmp):
         md = a.apply_metadata("f1", 0, r, f.region_metadata(r))
         self.assertEqual(md["ISS beam energy (eV)"], "966.313")
         self.assertNotIn("ISS calibrated beam energy (eV)", md)
+
+
+class TestUnacquiredAndSeries(Tmp):
+    def test_a_header_with_only_the_iss_lens_is_still_iss_and_quiet(self):
+        # an unacquired scan: no technique code, no ion gun block, no values
+        text = iss_avg(ion=False).replace(
+            "DS_GEPROPID_TECHNIQUE                       : VT_I4   = 6\n", "")
+        text = text.split("$DATA=*")[0] + "$DATA=*\n"
+        f = load_file(self.write("ISS Survey.avg", text))
+        r = f.regions[0]
+        self.assertEqual((r.technique, r.decodable), ("ISS", False))
+        self.assertEqual(f.warnings, [])
+        self.assertIn("Header only", r.note)
+
+    def test_an_iteration_series_is_not_called_depth_profiling(self):
+        rows = [{"Sample": "s", "Region": "ISS Survey", "Technique": "ISS",
+                 "Instrument": "Nexsa", "Lens mode": "ISS",
+                 "Etch level": str(k), "Pass energy (eV)": "200",
+                 "KE start (eV)": "300", "KE end (eV)": "1000"}
+                for k in range(50)]
+        text = methods.generate(rows)
+        self.assertIn("repeated in succession: 50 iterations per series", text)
+        for word in ("sputter", "Depth profiling", "etching"):
+            self.assertNotIn(word, text)
+
+    def test_real_depth_profiles_keep_their_wording(self):
+        rows = [{"Sample": "s", "Region": "C 1s", "Technique": "XPS",
+                 "Etch level": str(k), "Etch time (s)": str(10 * k),
+                 "BE start (eV)": "295", "BE end (eV)": "280"}
+                for k in range(5)]
+        self.assertIn("Depth profiling was performed", methods.generate(rows))
 
 
 class TestEnergyFit(unittest.TestCase):
@@ -258,6 +290,91 @@ class TestRealThermoIss(unittest.TestCase):
                 self.assertIn("In", [c["symbol"] for c in el.candidates(
                     r.energy[i], 966.313, "He+", 123.028)])
         self.assertGreaterEqual(found, 3)
+
+
+
+
+@unittest.skipUnless(CORPUS2 and os.path.isdir(CORPUS2),
+                     "set XPS_THERMO_ISS_CORPUS2 to the 'YX AB' folder")
+class TestSecondThermoSet(unittest.TestCase):
+    """Four Nexsa ISS iteration series (8, 50, an unacquired one, 50 levels):
+    both readers agree, the unacquired one is header-only in both, the
+    recorded beam is read, and the peaks sit where the calibrated beam energy
+    puts them, with the scatter these (probably charging) samples show."""
+
+    def path(self, d, ext):
+        return os.path.join(CORPUS2, "ISS Source", d, "Iteration",
+                            "ISS Survey." + ext)
+
+    def test_the_two_readers_agree_on_every_level(self):
+        for d, n in (("1", 8), ("1b", 50), ("2b", 50)):
+            with self.subTest(d):
+                a, v = load_file(self.path(d, "avg")), load_file(self.path(d, "VGD"))
+                self.assertEqual((len(a.regions), len(v.regions)), (n, n))
+                self.assertEqual((a.warnings, v.warnings), ([], []))
+                for x, y in zip(a.regions, v.regions):
+                    self.assertEqual((x.technique, x.etch_level, x.energy),
+                                     ("ISS", y.etch_level, y.energy))
+                    self.assertEqual(x.extra["iss"], y.extra["iss"])
+                    self.assertEqual(x.extra["iss"]["e0_cal"], 966.313)
+                    for p, q in zip(x.counts, y.counts):
+                        self.assertAlmostEqual(p, q, delta=1e-3 * max(1.0, abs(p)))
+
+    def test_the_unacquired_file_is_header_only_in_both(self):
+        for ext in ("avg", "VGD"):
+            with self.subTest(ext):
+                f = load_file(self.path("2", ext))
+                r = f.regions[0]
+                self.assertEqual((r.decodable, r.technique), (False, "ISS"))
+                self.assertEqual(f.warnings, [])
+
+    def test_the_methods_describe_iterations_not_sputtering(self):
+        f = load_file(self.path("1b", "avg"))
+        text = methods.generate([f.region_metadata(r) for r in f.regions])
+        self.assertIn("50 iterations per series", text)
+        self.assertNotIn("sputter", text)
+
+    def test_peaks_sit_where_the_calibrated_energy_puts_them(self):
+        cal, nom = 966.313, 1000.0
+
+        def peak(r, lo, hi):
+            """(energy, clear?) of the maximum of a 5-point (10 eV) average in
+            a window. Clear = the bump over the mean of the window's two ends
+            is at least 4 times the noise (rms of the counts around that
+            average), so a few counts of noise in a weak spectrum are not
+            taken for a peak."""
+            c = r.counts
+            sm = [sum(c[max(0, i - 2):i + 3]) / len(c[max(0, i - 2):i + 3])
+                  for i in range(len(c))]
+            noise = (sum((x - y) ** 2 for x, y in zip(c, sm)) / len(c)) ** 0.5
+            idx = [i for i, e in enumerate(r.energy) if lo <= e <= hi]
+            i = max(idx, key=sm.__getitem__)
+            edge = (sm[idx[0]] + sm[idx[-1]]) / 2
+            return r.energy[i], (sm[i] - edge) >= 4 * noise
+        tested = skipped = 0
+        for d in ("1", "1b", "2b"):
+            f = load_file(self.path(d, "avg"))
+            for r in (f.regions[0], f.regions[len(f.regions) // 2],
+                      f.regions[-1]):
+                for sym, lo, hi in (("Al", 560, 640), ("Ti", 700, 760)):
+                    m = el.ELEMENTS[sym][1]
+                    pc = el.iss_energy(cal, HE, m, 123.028)
+                    pn = el.iss_energy(nom, HE, m, 123.028)
+                    e, clear = peak(r, lo, hi)
+                    if not clear:
+                        skipped += 1
+                        continue
+                    tested += 1
+                    with self.subTest(f"{d} level {r.etch_level} {sym}"):
+                        self.assertLess(abs(e - pc), 30)      # charging scatter
+                        self.assertLess(abs(e - pc), abs(e - pn))
+                o, clear = peak(r, 400, 500)
+                if clear:
+                    with self.subTest(f"{d} level {r.etch_level} O"):
+                        self.assertLess(abs(o - el.iss_energy(
+                            cal, HE, 15.9949, 123.028)), 20)
+        self.assertGreaterEqual(tested, 12, f"only {tested} windows tested "
+                                            f"({skipped} had no clear peak)")
 
 
 if __name__ == "__main__":
