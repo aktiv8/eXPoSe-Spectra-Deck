@@ -148,7 +148,11 @@ def export_vamas(regions, path, institution="Not specified",
     for r, md in pairs:
         hv = r.photon_energy if r.photon_energy else 1486.69
         # Kinetic-energy abscissa (matches CasaXPS and the transmission axis).
-        ke = r.kinetic_energy or [hv - be for be in r.energy]
+        iss = r.is_iss             # no X-ray source: ion scattering
+        if "kinetic" in (r.energy_label or "").lower():
+            ke = list(r.energy)    # already kinetic: not a binding energy
+        else:
+            ke = r.kinetic_energy or [hv - be for be in r.energy]
         ke0 = ke[0]
         dke = (ke[1] - ke[0]) if len(ke) > 1 else 1.0
         counts = r.counts
@@ -185,14 +189,16 @@ def export_vamas(regions, path, institution="Not specified",
         a(str(len(comment)))      # lines in block comment
         for c in comment:
             a(c)
-        a("XPS")                  # technique
-        a(anode)                  # analysis source label
+        a("ISS" if iss else "XPS")  # technique
+        a("" if iss else anode)   # analysis source label (the ion is not in
+                                  # the file, so none is claimed for ISS)
         # A display copy already carries the file's own correction in hv and
         # the binding energies; the Calib line brings it back on reading, so
         # the axis keeps only what the user added on top.
-        a(f"{hv - (r.calibration_shift if r.shift_applied else 0.0):.10g}")
+        a(SENT if iss else
+          f"{hv - (r.calibration_shift if r.shift_applied else 0.0):.10g}")
                                   # source characteristic energy
-        a(power or SENT)          # source strength (W)
+        a(SENT if iss else (power or SENT))  # source strength (W)
         a(SENT)                   # beam width x
         a(SENT)                   # beam width y
         a(SENT)                   # source polar angle of incidence

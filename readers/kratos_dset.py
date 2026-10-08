@@ -147,7 +147,7 @@ IDS = {
 
 # id -> {number: Kratos constant}, every pair seen in the reference files
 ENUMS = {
-    1: {3: 'F_XPS'},
+    1: {1: 'F_ISS', 3: 'F_XPS'},
     2: {0: 'F_SPECTRUM', 2: 'F_MAPPING'},
     38: {0: 'F_ETCH', 1: 'F_POSITION', 2: 'F_COUNTER', 9: 'F_ION_GUN_GAS',
          10: 'F_DELAY'},
@@ -157,8 +157,10 @@ ENUMS = {
     3046: {0: 'F_FAT'},
     3047: {0: 'F_FAT_PASS_ENERGY_5_EV', 1: 'F_FAT_PASS_ENERGY_10_EV',
            2: 'F_FAT_PASS_ENERGY_20_EV', 3: 'F_FAT_PASS_ENERGY_40_EV',
-           4: 'F_FAT_PASS_ENERGY_80_EV', 5: 'F_FAT_PASS_ENERGY_160_EV'},
-    3049: {0: 'F_HSA_LENS_HYBRID', 3: 'F_HSA_LENS_ELECTROSTATIC'},
+           4: 'F_FAT_PASS_ENERGY_80_EV', 5: 'F_FAT_PASS_ENERGY_160_EV',
+           6: 'F_FAT_PASS_ENERGY_320_EV'},
+    3049: {0: 'F_HSA_LENS_HYBRID', 3: 'F_HSA_LENS_ELECTROSTATIC',
+           6: 'F_HSA_LENS_ISS'},
     3050: {0: 'F_MHSA_LOW_MAGN', 1: 'F_MHSA_MEDIUM_MAGN', 2: 'F_MHSA_HIGH_MAGN'},
     3070: {3: 'F_NEUTRALISER_MANUAL_SETTINGS'},
     3080: {2: 'F_REFER_TO_NONE', 8: 'F_REFER_TO_XRAY_MONO_AL'},

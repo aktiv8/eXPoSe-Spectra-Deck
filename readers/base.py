@@ -74,8 +74,18 @@ def is_survey_region(r) -> bool:
     """True for a Region that is a survey/wide scan: named so, or its own
     energy axis spans more than SURVEY_SPAN eV. The one classifier shared by
     naming, methods text, quantification tagging and the cover-page choice
-    (see ``Region.is_survey``)."""
+    (see ``Region.is_survey``). An ion scattering spectrum is wide by nature
+    and is never a survey."""
+    if is_iss_region(r):
+        return False
     return is_survey_name(r.name) or is_survey_span(r.energy)
+
+
+def is_iss_region(r) -> bool:
+    """True for an ion scattering spectrum: the file says so (technique), or
+    it is a Kratos ISS-lens spectrum whose technique a VAMAS export lost."""
+    return ((r.technique or "").strip().upper() == "ISS"
+            or (r.lens_mode or "").strip().upper() == "ISS")
 
 
 CAE = "Constant analyser energy (CAE)"
@@ -170,6 +180,11 @@ class Region:
         """True for a survey/wide scan: named so, or its own energy axis
         spans more than ``SURVEY_SPAN`` eV (see ``is_survey_region``)."""
         return is_survey_region(self)
+
+    @property
+    def is_iss(self) -> bool:
+        """True for an ion scattering spectrum (see ``is_iss_region``)."""
+        return is_iss_region(self)
 
     def dwell_and_scans(self):
         """(dwell per sweep, sweeps), so that their product is the time each
@@ -526,7 +541,8 @@ class SpectrumFile:
         md["Source power (W)"] = (r.conditions.get("X-ray Power", "")
                                   .replace("W", "").strip())
         for key in ("Anode voltage (kV)", "Emission current (mA)",
-                    "X-ray spot (µm)", "Sample tilt (°)", "Take-off angle (°)"):
+                    "X-ray spot (µm)", "Sample tilt (°)", "Take-off angle (°)",
+                    "Ion gun beam HT (V)", "Ion gun emission current (mA)"):
             if r.conditions.get(key):
                 md[key] = r.conditions[key]
         md["Pass energy (eV)"] = fmt(r.pass_energy, "", 0) if r.pass_energy else ""
@@ -536,8 +552,9 @@ class SpectrumFile:
             md["Analyser mode"] = r.extra["analyser_mode"]
         if r.extra.get("acq_mode"):
             md["Acquisition mode"] = r.extra["acq_mode"]
-        md["BE start (eV)"] = fmt(be0, "", 2)
-        md["BE end (eV)"] = fmt(be1, "", 2)
+        axis = "KE" if "kinetic" in (r.energy_label or "").lower() else "BE"
+        md[f"{axis} start (eV)"] = fmt(be0, "", 2)
+        md[f"{axis} end (eV)"] = fmt(be1, "", 2)
         md["Step (eV)"] = fmt(r.step, "", 3)
         md["Dwell (s)"] = fmt(r.dwell, "", 3)
         md["Points"] = str(r.n_points) if r.n_points else ""

@@ -19,6 +19,7 @@ import copy
 from dataclasses import dataclass, field
 
 import columntext
+import elements
 import nexus_settings
 import sputter as sputter_mod
 
@@ -76,6 +77,7 @@ class Annotations:
     sputter: dict = field(default_factory=dict)          # sample key -> settings
     reels: dict = field(default_factory=dict)            # region key -> band gap
     instrument: dict = field(default_factory=dict)       # file id -> NeXus settings
+    iss: dict = field(default_factory=dict)              # file id -> {ion, e0, theta}
     imports: dict = field(default_factory=dict)          # file id -> how a column-text file is read
     extra: dict = field(default_factory=dict)            # unknown keys kept
 
@@ -145,6 +147,13 @@ class Annotations:
                 for k, v in sputter_mod.metadata_rows(
                         sset, region.etch_time).items():
                     out[k] = v
+        iss = self.iss_for(fid) if getattr(region, "is_iss", False) else {}
+        if iss.get("ion"):
+            out["ISS ion"] = iss["ion"]
+        if iss.get("e0"):
+            out["ISS beam energy (eV)"] = f"{iss['e0']:g}"
+        if iss.get("theta"):
+            out["ISS scattering angle (°)"] = f"{iss['theta']:g}"
         rl = self.reels.get(region_key(fid, region.sample, region.name))
         if rl and rl.get("gap") is not None:
             out["REELS band gap (eV)"] = f"{rl['gap']:.2f}"
@@ -245,6 +254,19 @@ class Annotations:
         else:
             self.instrument.pop(str(fid), None)
 
+    # -- ion scattering settings the user confirmed (per file) ---------------------
+    def iss_for(self, fid):
+        """The ion, beam energy (eV) and scattering angle (degrees) saved for
+        a file (only what is set), or {}."""
+        return elements.sanitise_iss(self.iss.get(str(fid)))
+
+    def set_iss(self, fid, settings):
+        s = elements.sanitise_iss(settings)
+        if s:
+            self.iss[str(fid)] = s
+        else:
+            self.iss.pop(str(fid), None)
+
     # -- how a plain column-text file is read (per file) ---------------------------
     def import_for(self, fid):
         """The options the file was imported with (``columntext``), or {}."""
@@ -264,7 +286,7 @@ class Annotations:
                     or self.shifts or self.calibration or self.markers
                     or self.calibration_statement or self.experiment_notes
                     or self.sputter or self.reels or self.instrument
-                    or self.imports)
+                    or self.iss or self.imports)
 
     def copy(self):
         return copy.deepcopy(self)
@@ -274,7 +296,7 @@ class Annotations:
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes", "md_edits", "shifts", "calibration",
                      "calibration_statement", "markers", "experiment_notes",
-                     "sputter", "reels", "instrument", "imports"):
+                     "sputter", "reels", "instrument", "iss", "imports"):
             d[name] = copy.deepcopy(getattr(self, name))
         d.update(self.extra)
         return d
@@ -288,7 +310,7 @@ class Annotations:
         known = {"version", "sample_names", "region_names", "sample_notes",
                  "region_notes", "md_edits", "shifts", "calibration",
                  "calibration_statement", "markers", "experiment_notes",
-                 "sputter", "reels", "instrument", "imports"}
+                 "sputter", "reels", "instrument", "iss", "imports"}
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes"):
             v = data.get(name)
@@ -341,6 +363,12 @@ class Annotations:
                 clean = nexus_settings.sanitise(x)
                 if clean:
                     a.instrument[str(k)] = clean
+        v = data.get("iss")
+        if isinstance(v, dict):
+            for k, x in v.items():
+                clean = elements.sanitise_iss(x)
+                if clean:
+                    a.iss[str(k)] = clean
         v = data.get("imports")
         if isinstance(v, dict):
             for k, x in v.items():

@@ -141,6 +141,20 @@ SHORT = {
 RANGE_COLS = [("BE start", "BE start (eV)"), ("BE end", "BE end (eV)"),
               ("Points", "Points")]
 
+
+def range_cols(rows):
+    """``RANGE_COLS`` for these rows: a sample whose spectra are all on a
+    kinetic-energy axis (ion scattering, say) says KE, not BE."""
+    if rows and all(md.get("KE start (eV)") for md in rows):
+        return [(h.replace("BE", "KE"), k.replace("BE", "KE"))
+                for h, k in RANGE_COLS]
+    return RANGE_COLS
+
+
+def _range_val(md, key):
+    """A range value, from the other axis's key when a mixed sample has it."""
+    return _val(md, key) or _val(md, key.replace("BE", "KE"))
+
 _DAY_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?)")
 DASH = "–"
 
@@ -300,15 +314,16 @@ def layout_file(samples):
         if depth:
             cols += ["Levels", "Etch"]
         cols += [SHORT.get(f, f) for f in extra]
-        cols += [h for h, _k in RANGE_COLS]
+        ranges = range_cols(rows)
+        cols += [h for h, _k in ranges]
         if date_col:
             cols.append("Acquired")
         sl.columns = cols
 
         groups, seen = [], {}          # all levels of one region, one row
         for md in rows:
-            key = (_val(md, "Region"), _val(md, "BE start (eV)"),
-                   _val(md, "BE end (eV)"), _val(md, "Points"),
+            key = (_val(md, "Region"), _range_val(md, "BE start (eV)"),
+                   _range_val(md, "BE end (eV)"), _val(md, "Points"),
                    tuple(_val(md, f) for f in extra),
                    bool(_val(md, "Etch level")))
             if key[-1] and key in seen:      # depth levels may interleave
@@ -323,8 +338,8 @@ def layout_file(samples):
             row = {"Region": _val(md0, "Region")}
             for f in extra:
                 row[SHORT.get(f, f)] = _val(md0, f)
-            for h, k in RANGE_COLS:
-                row[h] = _val(md0, k)
+            for h, k in ranges:
+                row[h] = _range_val(md0, k)
             gdates = [_val(m, "Date acquired") for m in members]
             if date_col:
                 row["Acquired"] = _date_cell(gdates, day)

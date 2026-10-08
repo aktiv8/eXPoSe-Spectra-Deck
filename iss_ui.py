@@ -101,6 +101,8 @@ class IssReelsDialog(tk.Toplevel):
         for w in (e, a):
             w.bind("<Return>", lambda ev: self._save_settings())
             w.bind("<FocusOut>", lambda ev: self._save_settings())
+        ttk.Button(row, text="Use for this file",
+                   command=self._remember).pack(side="left", padx=(12, 0))
         ttk.Label(t, text="Candidates").grid(row=1, column=0, sticky="w",
                                              pady=(10, 0))
         self.cand_list = tk.Listbox(t, height=6, exportselection=False,
@@ -128,6 +130,10 @@ class IssReelsDialog(tk.Toplevel):
             side="left")
         ttk.Button(row, text="Clear all", command=self._clear).pack(
             side="left", padx=(6, 0))
+        self.iss_note = ttk.Label(t, style="Muted.TLabel", wraplength=470,
+                                  justify="left")
+        self.iss_note.grid(row=7, column=0, columnspan=2, sticky="w",
+                           pady=(10, 0))
 
     # -- REELS tab -------------------------------------------------------------------
     def _build_reels(self):
@@ -195,11 +201,53 @@ class IssReelsDialog(tk.Toplevel):
     def _region_changed(self):
         r = self._region()
         hv = r.photon_energy
-        if not self.e0.get():
+        # what the user saved with this file, else what the instrument's
+        # geometry suggests (see Workspace.iss_offer), else what was typed
+        pick = {**self.app.iss_offer(r), **self.app.iss_saved(r)}
+        if pick.get("ion") in elements.ION_MASS:
+            self.ion.set(pick["ion"])
+        if pick.get("theta"):
+            self.theta.set(f"{pick['theta']:g}")
+        if pick.get("e0"):
+            self.e0.set(f"{pick['e0']:g}")
+        elif not self.e0.get():
             self.e0.set(f"{hv:g}" if hv and 50 <= hv <= 10000 else "1000")
+        self._iss_status()
         self._refresh_markers()
         self._show_reels()
         self._set_hint()
+
+    def _remember(self):
+        """Save the ion, beam energy and angle shown with this spectrum's
+        file, so the methods text and exports state them."""
+        self._save_settings()
+        self.app.iss_save(self._region(), {"ion": self.ion.get(),
+                                           "e0": self._e0(),
+                                           "theta": self._theta()})
+        self._iss_status()
+
+    def _iss_status(self):
+        r = self._region()
+        saved = self.app.iss_saved(r)
+        gun = r.conditions.get("Ion gun beam HT (V)")
+        note = ""
+        if saved:
+            note = ("Saved with this file: " + ", ".join(
+                x for x in (saved.get("ion", ""),
+                            f"{saved['e0']:g} eV" if saved.get("e0") else "",
+                            f"{saved['theta']:g}°" if saved.get("theta")
+                            else "") if x) + ".")
+        elif self.app.iss_offer(r):
+            note = ("Suggested for a Kratos Axis Ultra (ion gun 45° from the "
+                    "surface normal, 1 kV helium beam). The file does not "
+                    "record these, so reports state them only after "
+                    "'Use for this file'.")
+        else:
+            note = ("These values are not saved with the file, so reports "
+                    "do not state them. 'Use for this file' saves them.")
+        if gun:
+            note += f" The file records an ion gun beam HT setting of {gun} V."
+        self.iss_note.config(text=note)
 
     def _save_settings(self):
         self.app.cfg["iss"] = {"ion": self.ion.get(),

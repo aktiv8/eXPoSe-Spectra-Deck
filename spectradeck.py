@@ -2614,6 +2614,29 @@ class Workspace:
         info = self._axinfo.get(event.inaxes)
         return info[2] if info else 0
 
+    def iss_saved(self, r):
+        """The ion, beam energy and scattering angle the user confirmed for
+        the file ``r`` came from ({} when none)."""
+        return self.ann.iss_for(self._marker_key(r)[0])
+
+    def iss_save(self, r, settings):
+        self.ann.set_iss(self._marker_key(r)[0], settings)
+        self._ann_changed(relabel=False)
+        self._update_metadata()
+
+    def iss_offer(self, r):
+        """What the ISS dialog offers for a spectrum when nothing is saved: a
+        Kratos Axis Ultra's geometry (gun 45 degrees from the normal, 1 kV He
+        beam) for its ISS spectra. The files record neither, so this is a
+        suggestion the user confirms, not a fact; other instruments get
+        nothing here."""
+        p = self.region_parser.get(id(r))
+        if (p is not None and r.is_iss
+                and "kratos" in p.instrument.get("Instrument", "").lower()):
+            return {"ion": elements.DEFAULT_ION, "e0": elements.KRATOS_E0,
+                    "theta": elements.KRATOS_THETA}
+        return {}
+
     def reels_get(self, r):
         return self.ann.reels_for(*self._marker_key(r))
 
@@ -5408,10 +5431,12 @@ class Workspace:
                 ("Region", [
                     "Region", "Technique", "Pass energy (eV)", "Lens mode",
                     "Aperture", "Analyser mode", "Acquisition mode",
-                    "BE start (eV)", "BE end (eV)", "Step (eV)", "Dwell (s)",
+                    "BE start (eV)", "BE end (eV)", "KE start (eV)",
+                    "KE end (eV)", "Step (eV)", "Dwell (s)",
                     "Points", "Scans", "Counting time", "Quality",
                     "Position X (mm)", "Position Y (mm)", "Sample tilt (°)",
-                    "Take-off angle (°)"])]
+                    "Take-off angle (°)", "Ion gun beam HT (V)",
+                    "Ion gun emission current (mA)"])]
             r = regs[0]
             for title, keys in groups:
                 section(title, keys)

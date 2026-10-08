@@ -39,7 +39,8 @@ EXPERIMENT_KEYS = ("Instrument", "Operator", "Acquisition computer",
                    "Charge neutraliser", "Ion gun / sputtering")
 # stored by VAMAS itself, exactly: the text never overrides these
 VAMAS_OWN = ("Photon energy (eV)", "Pass energy (eV)", "Dwell (s)",
-             "Step (eV)", "Points", "BE start (eV)", "BE end (eV)")
+             "Step (eV)", "Points", "BE start (eV)", "BE end (eV)",
+             "KE start (eV)", "KE end (eV)")
 
 
 def _esc(text: str) -> str:

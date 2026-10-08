@@ -26,6 +26,7 @@ HEADER_ID = b"VAMAS Surface Chemical Analysis Standard Data Transfer Format"
 
 # What CasaXPS copies from an Avantage file into its VAMAS comments
 _CASA_VERSION_RE = re.compile(r"CasaXPS\s+Version\s+(\S+)", re.I)
+_LENS_LINE = re.compile(r"^\s*Lens Mode\s*:\s*(\w+)", re.I | re.M)
 _SPOT_RE = re.compile(
     r"x-ray\s+spot-size:\s*([\d.]+)\s*um\s+by\s*([\d.]+)\s*um", re.I)
 _LENS_RE = re.compile(
@@ -471,7 +472,13 @@ class VamasFile(SpectrumFile):
         r.fit = casafit.parse(b["comments"])
         self._own_calibration(r, b["comments"])
         r.lens_mode = friendly(self._lookup("Lens mode", kv))
+        if any(friendly(m).upper() == "ISS" for m in
+               _LENS_LINE.findall("\n".join(b["comments"]))):
+            r.lens_mode = "ISS"      # CasaXPS lists the info of every object
         r.aperture = self._lookup("Aperture", kv)
+        if (r.lens_mode.upper() == "ISS" and is_ke and npts
+                and tech.upper() in ("XPS", "UPS")):
+            self._as_iss(r, native)
         if "escape .experiment" in kv.get("vendor format", "").lower():
             # HarwellXPS's import of a Kratos file: it copies ESCApe's dwell,
             # which is already summed over the sweeps, beside the sweep count
@@ -496,6 +503,21 @@ class VamasFile(SpectrumFile):
         if u and u.lower() not in ("d", "dimensionless"):
             return u
         return "counts" if "count" in (label or "").lower() else "arb."
+
+    @staticmethod
+    def _as_iss(r, native):
+        """A CasaXPS VAMAS export of a Kratos ISS run: Casa writes technique
+        XPS and its default photon energy (1486.6 eV), so the kinetic axis was
+        turned into a binding one. The lens mode is the file's own statement
+        that this is ion scattering, so the kinetic energies come back
+        (checked: identical to the same run's .kal) and there is no photon
+        energy. Casa also splits the name "ISS Au" into element "I" and
+        transition "SS Au"."""
+        r.energy = list(native)
+        r.energy_label = "Kinetic Energy"
+        r.photon_energy = None
+        r.technique = "ISS"
+        r.name = re.sub(r"^I\s+SS\b", "ISS", r.name)
 
     @staticmethod
     def _region_name(b):

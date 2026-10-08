@@ -33,6 +33,12 @@ def _num(s, default=None):
     return float(m.group(0)) if m else default
 
 
+def _technique(o):
+    """'ISS' when the object's own ``Technique`` says so (F_ISS), else XPS."""
+    return "ISS" if "ISS" in o.get("Technique", "").upper().split("_") \
+        else "XPS"
+
+
 def _list(value):
     body = value.strip().lstrip("{").rstrip("}")
     return [float(t) for t in re.findall(r"-?\d+\.?\d*(?:[eE][-+]?\d+)?", body)]
@@ -177,7 +183,7 @@ class KratosKalFile(SpectrumFile):
             f"{o.get('Transition or charge state', '')}".strip()
             or o["_object"]), energy)
         reg = Region(
-            name=name, index=idx, offset=idx, technique="XPS",
+            name=name, index=idx, offset=idx, technique=_technique(o),
             energy=energy, counts=vals, energy_label=e_label, energy_units="eV",
             count_label="Intensity",
             count_units=o.get("Ordinate units", "counts").lower(),
@@ -188,8 +194,24 @@ class KratosKalFile(SpectrumFile):
             date=_date(o.get("Date Acquired", "")),
             anode=anode[0] if anode else "")
         self._decorate(reg, o)
+        if reg.technique == "ISS":
+            self._ion_gun(reg, o)
         reg.extra["fields"] = o
         self.regions.append(reg)
+
+    @staticmethod
+    def _ion_gun(reg, o):
+        """What the gun recorded for an ISS spectrum: the beam HT setting and
+        the emission current. The ion, the exact beam energy and the
+        scattering angle are not in the file (the Axis Ultra's gun is at
+        45 degrees to the surface normal, so 135 degrees, but that is the
+        instrument's, not the file's, statement)."""
+        ht, emis = _num(o.get("NICPU Ion Gun PSU beam_ht")), \
+            _num(o.get("NICPU Ion Gun PSU Emission Current"))
+        if ht:
+            reg.conditions["Ion gun beam HT (V)"] = f"{ht:g}"
+        if emis:
+            reg.conditions["Ion gun emission current (mA)"] = f"{emis * 1000:.3g}"
 
     def _decorate(self, reg, o):
         """What a spectrum and a map share: source power, analyser mode,

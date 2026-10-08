@@ -25,6 +25,31 @@ import re
 ION_MASS = {"H+": 1.0078, "He+": 4.0026, "Ne+": 19.9924, "Ar+": 39.9624}
 DEFAULT_THETA = 123.03           # deg: the scattering angle of some instruments
 DEFAULT_ION = "He+"
+# Kratos Axis Ultra: the ion gun is 45 deg from the surface normal, so the
+# scattering angle is 180 - 45 (Kratos test procedure TPC1369C, which also
+# states the standard 1 kV beam HT and gold at 933 eV for He+). The data files
+# do not record either, so these are offered, never written as fact.
+KRATOS_THETA = 135.0
+KRATOS_E0 = 1000.0
+
+
+def sanitise_iss(d) -> dict:
+    """The ISS settings a user has confirmed for a file: ``ion`` (a known
+    projectile), ``e0`` (beam energy, eV) and ``theta`` (scattering angle,
+    degrees). Anything missing or invalid is dropped, never defaulted."""
+    out = {}
+    if not isinstance(d, dict):
+        return out
+    if d.get("ion") in ION_MASS:
+        out["ion"] = d["ion"]
+    for key, hi in (("e0", 1e5), ("theta", 180.0)):
+        try:
+            v = float(d[key])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if math.isfinite(v) and 0 < v <= hi:
+            out[key] = v
+    return out
 
 # symbol: (Z, mass of the most abundant isotope (u), name)
 ELEMENTS = {

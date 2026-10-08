@@ -56,12 +56,23 @@ def values_text(values, unit="", max_list=3):
 
 
 def is_survey(md):
-    """True for a survey / wide scan: named so, or spanning over 250 eV."""
+    """True for a survey / wide scan: named so, or spanning over 250 eV. An
+    ion scattering spectrum is wide by nature and is never a survey."""
+    if is_iss(md):
+        return False
     name = str(md.get("Region", "")).lower()
     if any(k in name for k in ("survey", "wide")):
         return True
-    a, b = _num(md.get("BE start (eV)")), _num(md.get("BE end (eV)"))
+    a = _num(md.get("BE start (eV)", md.get("KE start (eV)")))
+    b = _num(md.get("BE end (eV)", md.get("KE end (eV)")))
     return a is not None and b is not None and abs(a - b) > SURVEY_SPAN
+
+
+def is_iss(md):
+    """True for an ion scattering spectrum (technique ISS, or the ISS lens
+    of a Kratos file whose export lost the technique)."""
+    return (str(md.get("Technique", "")).strip().upper() == "ISS"
+            or str(md.get("Lens mode", "")).strip().upper() == "ISS")
 
 
 def _unique(rows, key):
@@ -116,7 +127,34 @@ def _settings(rows, plural_noun=""):
     return join_and(parts)
 
 
-def _analyser_paragraph(rows):
+def _iss_paragraph(rows):
+    """Ion scattering spectra: the beam as the user confirmed it (ion, energy,
+    scattering angle) and the analyser settings, plus the gun settings as the
+    file recorded them. A setting nobody stated is not written."""
+    ions = _unique(rows, "ISS ion")
+    energy, _n = values_text([r.get("ISS beam energy (eV)") for r in rows], "eV")
+    angle, _n = values_text([r.get("ISS scattering angle (°)") for r in rows],
+                            "°")
+    beam = []
+    if ions:
+        beam.append(f"{join_and(ions)} ions")
+    if energy:
+        beam.append(f"a beam energy of {energy}")
+    if angle:
+        beam.append(f"a scattering angle of {angle.replace(' °', '°')}")
+    s = ""
+    if beam:
+        s = "Ion scattering used " + join_and(beam) + ". "
+    ht = _unique(rows, "Ion gun beam HT (V)")
+    emis = _unique(rows, "Ion gun emission current (mA)")
+    if len(ht) <= 1 and len(emis) <= 1 and (ht or emis):
+        s += ("The ion gun was set to " + join_and(
+            [f"a beam HT of {ht[0]} V" if ht else "",
+             f"an emission current of {emis[0]} mA" if emis else ""]) + ". ")
+    return (s + _analyser_paragraph(rows, "Ion scattering spectra")).strip()
+
+
+def _analyser_paragraph(rows, noun="Spectra"):
     survey = [r for r in rows if is_survey(r)]
     detail = [r for r in rows if not is_survey(r)]
     sentences = []
@@ -132,7 +170,7 @@ def _analyser_paragraph(rows):
             sentences.append(f"High-resolution spectra ({len(detail)}: "
                              f"{names}) used {s}.")
     else:
-        kind = "Survey spectra" if survey else "Spectra"
+        kind = "Survey spectra" if survey else noun
         s = _settings(rows)
         if s:
             sentences.append(f"{kind} ({len(rows)}) were acquired with {s}.")
@@ -354,17 +392,25 @@ def generate(rows, calibration="", timing_summary=None):
     paras = []
     inst = _instrument_names(rows)
     operator = _unique(rows, "Operator")
-    intro = ("X-ray photoelectron spectroscopy (XPS) measurements were made "
+    iss_rows = [r for r in rows if is_iss(r)]
+    rows_x = [r for r in rows if not is_iss(r)]     # the X-ray measurements
+    techniques = ([] if not rows_x else
+                  ["X-ray photoelectron spectroscopy (XPS)"]) + (
+        ["ion scattering spectroscopy (ISS)"] if iss_rows else [])
+    intro = (f"{join_and(techniques)} measurements were made "
              + (f"on a {join_and(inst)} spectrometer" if inst
                 else "on the instrument recorded in the data files"))
+    intro = intro[0].upper() + intro[1:]
     if operator:
         intro += f" (operator: {join_and(operator)})"
-    paras.append(intro + ". " + _source_sentence(rows))
-    spectra = [r for r in rows if r.get("Acquisition mode") != MAP_MODE]
-    maps = [r for r in rows if r.get("Acquisition mode") == MAP_MODE]
+    paras.append(intro + ". " + (_source_sentence(rows_x) if rows_x else ""))
+    spectra = [r for r in rows_x if r.get("Acquisition mode") != MAP_MODE]
+    maps = [r for r in rows_x if r.get("Acquisition mode") == MAP_MODE]
     ana = _analyser_paragraph(spectra) if spectra else ""
     if ana:
         paras.append(ana)
+    if iss_rows:
+        paras.append(_iss_paragraph(iss_rows))
     if maps:
         paras.append(_map_paragraph(maps))
     extra = [s for s in (
@@ -381,7 +427,7 @@ def generate(rows, calibration="", timing_summary=None):
                                       timing_sentence(timing_summary)) if s))
     if calibration and calibration.strip():
         paras.append(calibration.strip())
-    else:
+    elif rows_x:                  # ion scattering has no binding energies
         paras.append("Binding energies are not charge-corrected.")
     return "\n\n".join(p.strip() for p in paras if p.strip())
 
