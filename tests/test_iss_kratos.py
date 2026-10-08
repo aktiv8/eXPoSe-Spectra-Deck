@@ -23,6 +23,7 @@ sys.path.insert(0, ROOT)
 
 import annotations  # noqa: E402
 import elements as el  # noqa: E402
+import kratosterms  # noqa: E402
 import methods  # noqa: E402
 from readers import Region, load_file  # noqa: E402
 from readers import kratos_dset  # noqa: E402
@@ -80,7 +81,7 @@ class TestKratosIss(Tmp):
         self.assertEqual(r.technique, "ISS")
         self.assertTrue(r.is_iss)
         self.assertFalse(r.is_survey)        # wide, but not a survey
-        self.assertEqual(r.lens_mode, "ISS")
+        self.assertEqual(r.lens_mode, kratosterms.LENS_MODES["HSA_LENS_ISS"])
         self.assertEqual(r.pass_energy, 320.0)
         self.assertEqual(r.energy_label, "Kinetic Energy")
         self.assertIsNone(r.photon_energy)
@@ -103,7 +104,7 @@ class TestKratosIss(Tmp):
         self.assertEqual(f.warnings, [])             # no unmet constant
         r = f.regions[0]
         self.assertEqual((r.technique, r.lens_mode, r.pass_energy),
-                         ("ISS", "ISS", 320.0))
+                         ("ISS", kratosterms.LENS_MODES["HSA_LENS_ISS"], 320.0))
         self.assertTrue(r.is_iss)
         self.assertIn(6, kratos_dset.ENUMS[3049])
 
@@ -112,7 +113,8 @@ class TestKratosIss(Tmp):
             "F_HSA_LENS_ISS", "F_HSA_LENS_HYBRID")
         r = load_file(self.write("b.kal", "Dataset filename = b\n"
                                  + text)).regions[0]
-        self.assertEqual((r.technique, r.lens_mode), ("XPS", "Hybrid"))
+        self.assertEqual((r.technique, r.lens_mode),
+                         ("XPS", kratosterms.LENS_MODES["HSA_LENS_HYBRID"]))
         self.assertFalse(r.is_iss)
 
 

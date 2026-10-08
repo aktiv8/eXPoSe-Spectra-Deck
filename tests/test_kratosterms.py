@@ -15,9 +15,27 @@ class TestFriendly(unittest.TestCase):
             self.assertEqual(friendly("F_" + key), text)
             self.assertEqual(friendly(key.lower()), text)
 
-    def test_magnification(self):
-        self.assertEqual(friendly("F_MHSA_MEDIUM_MAGN"), "Medium magnification")
-        self.assertEqual(friendly("MHSA_HIGH_MAGN"), "High magnification")
+    def test_fields_of_view_are_named(self):
+        self.assertEqual(friendly("F_MHSA_LOW_MAGN"),
+                         "Low magnification (FoV1)")
+        self.assertEqual(friendly("MHSA_MEDIUM_MAGN"),
+                         "Medium magnification (FoV2)")
+        self.assertEqual(friendly("F_MHSA_HIGH_MAGN"),
+                         "High magnification (FoV3)")
+
+    def test_iss_is_recognised_whatever_the_wording_is(self):
+        from unittest import mock
+        for s in ("F_HSA_LENS_ISS", "HSA_LENS_ISS", "ISS",
+                  kratosterms.LENS_MODES["HSA_LENS_ISS"]):
+            self.assertTrue(kratosterms.is_iss_lens(s), s)
+        for s in ("", None, "Hybrid", "HSA_LENS_HYBRID",
+                  kratosterms.LENS_MODES["HSA_LENS_HYBRID"]):
+            self.assertFalse(kratosterms.is_iss_lens(s), s)
+        words = dict(kratosterms.LENS_MODES, HSA_LENS_ISS="Ion scattering")
+        with mock.patch.object(kratosterms, "LENS_MODES", words):
+            self.assertEqual(friendly("F_HSA_LENS_ISS"), "Ion scattering")
+            self.assertTrue(kratosterms.is_iss_lens("Ion scattering"))
+            self.assertTrue(kratosterms.is_iss_lens("HSA_LENS_ISS"))
 
     def test_unknown_constant_is_tidied_not_blank(self):
         self.assertEqual(friendly("F_HSA_LENS_NEW_THING"), "New thing")
@@ -34,7 +52,8 @@ class TestVamasRoute(unittest.TestCase):
         kv = {"lens mode": "HSA_LENS_HYBRID"}
         self.assertEqual(
             friendly(VamasFile._lookup(VamasFile.__new__(VamasFile),
-                                       "Lens mode", kv)), "Hybrid")
+                                       "Lens mode", kv)),
+            kratosterms.LENS_MODES["HSA_LENS_HYBRID"])
 
 
 if __name__ == "__main__":

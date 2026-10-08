@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import timing
+from kratosterms import is_iss_lens
 
 UNSET = 1e36        # VAMAS uses 1e37 for "not specified"
 # Facts about the job or the analyser that a reader may put in ``instrument``
@@ -85,7 +86,7 @@ def is_iss_region(r) -> bool:
     """True for an ion scattering spectrum: the file says so (technique), or
     it is a Kratos ISS-lens spectrum whose technique a VAMAS export lost."""
     return ((r.technique or "").strip().upper() == "ISS"
-            or (r.lens_mode or "").strip().upper() == "ISS")
+            or is_iss_lens(r.lens_mode))
 
 
 CAE = "Constant analyser energy (CAE)"

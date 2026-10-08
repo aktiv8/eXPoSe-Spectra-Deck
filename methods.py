@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 
 import metasummary
+from kratosterms import is_iss_lens
 from readers.base import SURVEY_SPAN
 
 DASH = "–"
@@ -72,7 +73,7 @@ def is_iss(md):
     """True for an ion scattering spectrum (technique ISS, or the ISS lens
     of a Kratos file whose export lost the technique)."""
     return (str(md.get("Technique", "")).strip().upper() == "ISS"
-            or str(md.get("Lens mode", "")).strip().upper() == "ISS")
+            or is_iss_lens(md.get("Lens mode", "")))
 
 
 def _unique(rows, key):

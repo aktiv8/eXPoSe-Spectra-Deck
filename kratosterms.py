@@ -18,21 +18,34 @@ import re
 
 # ``HSA Lens Mode`` (field 3049): every value seen in 7 342 Kratos .kal files
 LENS_MODES = {
-    "HSA_LENS_HYBRID": "Hybrid",
-    "HSA_LENS_MAGNETIC": "Magnetic",
-    "HSA_LENS_ELECTROSTATIC": "Electrostatic",
-    "HSA_LENS_ISS": "ISS",
+    "HSA_LENS_HYBRID": "Hybrid (electrostatic and magnetic immersion lens)",
+    "HSA_LENS_MAGNETIC": "Magnetic (magnetic immersion lens)",
+    "HSA_LENS_ELECTROSTATIC": "Electrostatic (magnetic lens off)",
+    "HSA_LENS_ISS": "ISS (magnetic lens off)",
 }
 
-# ``MHSA Lens Mode`` (field 3050, stigmatic imaging maps)
+# ``MHSA Lens Mode`` (field 3050, stigmatic imaging maps): the three fields
+# of view of the imaging lens, FoV1 the widest
 MAGNIFICATIONS = {
-    "MHSA_LOW_MAGN": "Low magnification",
-    "MHSA_MEDIUM_MAGN": "Medium magnification",
-    "MHSA_HIGH_MAGN": "High magnification",
+    "MHSA_LOW_MAGN": "Low magnification (FoV1)",
+    "MHSA_MEDIUM_MAGN": "Medium magnification (FoV2)",
+    "MHSA_HIGH_MAGN": "High magnification (FoV3)",
 }
 
 _CONSTANT = re.compile(r"^(?:F_)?(M?HSA_[A-Z0-9_]+)$", re.I)
 _PREFIXES = ("MHSA_", "HSA_LENS_", "HSA_")
+
+
+def is_iss_lens(text) -> bool:
+    """True when a lens-mode text is the Kratos ISS lens: the constant (with
+    or without ``F_``), its wording in ``LENS_MODES`` (whatever it has been
+    changed to) or a bare "ISS". Reports and the readers decide "this is an
+    ion scattering spectrum" with this, never by comparing wording."""
+    s = (text or "").strip()
+    if not s:
+        return False
+    return (s.upper() == "ISS" or s == LENS_MODES["HSA_LENS_ISS"]
+            or friendly(s) == LENS_MODES["HSA_LENS_ISS"])
 
 
 def friendly(text) -> str:

@@ -16,7 +16,7 @@ import casafit
 import vamasmeta
 import sputter
 import timing
-from kratosterms import friendly
+from kratosterms import friendly, is_iss_lens
 from .base import (Region, SpectrumFile, clean, clean_text, canon_region_name,
                    guess_region_name, unset, kv_from_lines,
                    read_bytes, analyser_mode_name)
@@ -472,11 +472,12 @@ class VamasFile(SpectrumFile):
         r.fit = casafit.parse(b["comments"])
         self._own_calibration(r, b["comments"])
         r.lens_mode = friendly(self._lookup("Lens mode", kv))
-        if any(friendly(m).upper() == "ISS" for m in
-               _LENS_LINE.findall("\n".join(b["comments"]))):
-            r.lens_mode = "ISS"      # CasaXPS lists the info of every object
+        iss_line = next((m for m in _LENS_LINE.findall("\n".join(b["comments"]))
+                         if is_iss_lens(m)), None)
+        if iss_line:                 # CasaXPS lists the info of every object
+            r.lens_mode = friendly(iss_line)
         r.aperture = self._lookup("Aperture", kv)
-        if (r.lens_mode.upper() == "ISS" and is_ke and npts
+        if (is_iss_lens(r.lens_mode) and is_ke and npts
                 and tech.upper() in ("XPS", "UPS")):
             self._as_iss(r, native)
         if "escape .experiment" in kv.get("vendor format", "").lower():
