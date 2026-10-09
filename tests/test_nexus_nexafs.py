@@ -19,8 +19,10 @@ import unittest
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
+import annotations  # noqa: E402
 import exporters  # noqa: E402
 import methods  # noqa: E402
+import nexafs  # noqa: E402
 import readers  # noqa: E402
 import viewdata  # noqa: E402
 from readers import nexus_nexafs  # noqa: E402
@@ -397,6 +399,177 @@ class TestInTheWindow(unittest.TestCase):
         for s in flat:
             self.assertEqual((s["elabel"], s["eunits"], s["binding"]),
                              ("Photon Energy", "eV", False))
+
+
+class TestRingScalingMaths(unittest.TestCase):
+    def test_each_point_is_scaled_to_the_mean_ring_current(self):
+        counts, mean = nexafs.scale_to_mean([1.0, 1.0, 1.0], [300.0, 200.0,
+                                                              100.0])
+        self.assertEqual(mean, 200.0)
+        self.assertEqual(counts, [200.0 / 300.0, 1.0, 2.0])
+
+    def test_a_constant_ring_current_changes_nothing(self):
+        counts, mean = nexafs.scale_to_mean([1.0, 2.0], [250.0, 250.0])
+        self.assertEqual((counts, mean), ([1.0, 2.0], 250.0))
+
+    def test_a_point_without_a_usable_ring_current_is_nan_not_guessed(self):
+        counts, mean = nexafs.scale_to_mean(
+            [1.0, 1.0, 1.0, 1.0], [300.0, 0.0, float("nan"), 100.0])
+        self.assertEqual(mean, 200.0)                  # of the usable ones
+        self.assertEqual(counts[0], 200.0 / 300.0)
+        self.assertTrue(counts[1] != counts[1] and counts[2] != counts[2])
+        self.assertEqual(counts[3], 2.0)
+
+    def test_nothing_usable_gives_nothing(self):
+        self.assertEqual(nexafs.scale_to_mean([1.0], [0.0]), (None, None))
+        self.assertEqual(nexafs.scale_to_mean([1.0, 2.0], [5.0]), (None, None))
+
+    def test_the_annotation_is_saved_and_read_back(self):
+        a = annotations.Annotations()
+        self.assertTrue(a.is_empty())
+        a.nexafs_ring = True
+        self.assertFalse(a.is_empty())
+        b = annotations.Annotations.from_json(a.to_json())
+        self.assertTrue(b.nexafs_ring)
+        self.assertFalse(annotations.Annotations.from_json(
+            {"nexafs_ring": "yes"}).nexafs_ring)       # only a real true
+        self.assertNotIn("nexafs_ring", annotations.Annotations().to_json())
+
+
+@unittest.skipUnless(HAVE_H5, "h5py not installed")
+class TestRingScalingOfAFile(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.dir = tempfile.mkdtemp()
+        cls.path = os.path.join(cls.dir, "b07-1.nxs")
+        write_scan(cls.path)
+        cls.f = readers.load_file(cls.path)
+
+    @classmethod
+    def tearDownClass(cls):
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def test_the_reader_keeps_the_ring_current_of_every_point(self):
+        r = self.f.regions[0]
+        ring = nexafs.ring_points(r)
+        self.assertEqual(len(ring), r.n_points)
+        self.assertAlmostEqual(ring[0], 300.0)
+        self.assertAlmostEqual(ring[-1], 300.0 - 0.01 * 20)
+
+    def test_a_file_without_a_ring_current_has_nothing_to_scale(self):
+        p = os.path.join(self.dir, "noring.nxs")
+        write_scan(p)
+        with h5py.File(p, "r+") as h:
+            del h["entry1/instrument/ring_current"]
+        r = readers.load_file(p).regions[0]
+        self.assertIsNone(nexafs.ring_points(r))
+
+    def test_the_metadata_and_methods_text_say_so_only_when_chosen(self):
+        a = annotations.Annotations()
+        self.f.annotations, self.f.file_id = a, "f1"
+        plain = self.f.region_metadata(self.f.regions[0])
+        self.assertNotIn("Normalisation", plain)
+        self.assertIn("the spectra are not normalised",
+                      methods.generate(self.f.metadata_rows()))
+        a.nexafs_ring = True
+        md = self.f.region_metadata(self.f.regions[0])
+        self.assertIn("scaled to the mean ring current", md["Normalisation"])
+        self.assertIn("unit is not recorded", md["Normalisation"])
+        text = methods.generate(self.f.metadata_rows())
+        self.assertIn("scaled to the mean ring current of its scan", text)
+        self.assertNotIn("not normalised", text)
+        self.f.annotations = None
+
+
+@unittest.skipUnless(HAVE_H5 and HAVE_MPL, "h5py / matplotlib / Tk missing")
+class TestRingScalingInTheWindow(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        import matplotlib
+        cls._rc = matplotlib.rcParams.copy()
+        try:
+            cls.root = tk.Tk()
+        except tk.TclError:
+            raise unittest.SkipTest("no display")
+        cls.root.withdraw()
+        cls._boxes = (ee.messagebox.showinfo, ee.messagebox.showwarning,
+                      ee.messagebox.showerror, ee.messagebox.askyesno)
+        ee.messagebox.showinfo = ee.messagebox.showwarning = \
+            ee.messagebox.showerror = lambda *a, **k: None
+        ee.messagebox.askyesno = lambda *a, **k: True
+        cls.dir = tempfile.mkdtemp()
+        cls.path = os.path.join(cls.dir, "b07-1.nxs")
+        write_scan(cls.path)
+
+    @classmethod
+    def tearDownClass(cls):
+        (ee.messagebox.showinfo, ee.messagebox.showwarning,
+         ee.messagebox.showerror, ee.messagebox.askyesno) = cls._boxes
+        cls.root.destroy()
+        import matplotlib
+        matplotlib.rcParams.update(cls._rc)
+        shutil.rmtree(cls.dir, ignore_errors=True)
+
+    def setUp(self):
+        self.ws = ee.Workspace(self.root)
+        self.ws._add_files([self.path])
+        self.region = self.ws.docs[0].regions[0]
+        self.ws.checked = {id(r) for r in self.ws.docs[0].regions}
+
+    def choose(self, on):
+        self.ws.nexafs_ring_var.set(on)
+        self.ws.set_nexafs_ring()
+
+    def test_off_by_default_and_the_data_are_what_the_file_holds(self):
+        self.assertFalse(self.ws.ann.nexafs_ring)
+        self.assertIs(self.ws._display(self.region), self.region)
+
+    def test_the_choice_scales_the_drawn_copy_never_the_reader_output(self):
+        original = list(self.region.counts)
+        self.choose(True)
+        shown = self.ws._display(self.region)
+        self.assertEqual(self.region.counts, original)
+        ring = nexafs.ring_points(self.region)
+        mean = sum(ring) / len(ring)
+        self.assertAlmostEqual(shown.counts[-1] / original[-1],
+                               mean / ring[-1])
+        self.assertEqual(shown.count_label, "Normalised current")
+        self.assertEqual(shown.count_units, "A")
+        self.assertAlmostEqual(shown.extra["ring_norm"], mean)
+        self.choose(False)
+        self.assertIs(self.ws._display(self.region), self.region)
+
+    def test_it_draws_and_exports_the_scaled_values(self):
+        self.choose(True)
+        self.ws._render()
+        self.root.update_idletasks()
+        self.assertTrue(any("Normalised current" in ax.get_ylabel()
+                            for ax in self.ws.fig.axes))
+        p = os.path.join(self.dir, "scaled.csv")
+        exporters.export_csv([self.ws._display(r)
+                              for r in self.ws.docs[0].regions], p)
+        head = text_of(p, "utf-8-sig").splitlines()[0]
+        self.assertIn("Normalised current (A)", head)
+
+    def test_the_menu_box_follows_the_annotation_and_a_saved_workbook(self):
+        self.choose(True)
+        self.assertTrue(self.ws.nexafs_ring_var.get())
+        saved = self.ws.ann.to_json()
+        self.ws.ann = annotations.Annotations()
+        self.ws._ann_changed(relabel=False)
+        self.assertFalse(self.ws.nexafs_ring_var.get())
+        self.ws.ann = annotations.Annotations.from_json(saved)
+        self.ws._ann_changed(relabel=False)
+        self.assertTrue(self.ws.nexafs_ring_var.get())
+        self.assertIsNot(self.ws._display(self.region), self.region)
+
+    def test_a_spectrum_that_is_not_nexafs_is_untouched(self):
+        from readers import Region
+        r = Region("C 1s", 0, 0, energy=[285.0, 284.0], counts=[1.0, 2.0],
+                   decodable=True)
+        r.extra["ring_current_points"] = [300.0, 100.0]     # never used
+        self.ws.ann.nexafs_ring = True
+        self.assertIsNone(self.ws._ring_scaled(r))
 
 
 @unittest.skipUnless(HAVE_H5 and os.environ.get("XPS_NEXAFS_CORPUS"),

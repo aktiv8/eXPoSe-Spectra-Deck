@@ -308,7 +308,9 @@ FORMATS_ROWS = [
     ("NeXus NEXAFS scan", ".nxs",
      "Needs the optional h5py. A beamline photon-energy scan (Diamond B07 / GDA): one spectrum "
      "per detector channel, photon energy against current, named by detector. Nothing is "
-     "normalised or guessed (which channel is total electron yield is not in the file). VAMAS "
+     "guessed (which channel is total electron yield is not in the file) and nothing is "
+     "normalised unless you tick Ring-current scaling, which scales every point to the mean "
+     "ring current of its scan (its unit is not recorded, so it is not divided by). VAMAS "
      "export writes technique AES dir with the photon energy in the kinetic-energy field, as "
      "HarwellXPS does, and reads it back; NeXus export leaves these scans out."),
     ("KherveFitting project", ".kfit",

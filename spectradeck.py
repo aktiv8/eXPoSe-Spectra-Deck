@@ -101,6 +101,7 @@ import viewzoom
 import workbook as wbk
 import annotations
 import appinfo
+import nexafs
 import calibration
 import casacsv
 import columnimport_ui
@@ -698,6 +699,7 @@ class Workspace:
                                     # re-matched after reopening
         self._sha_cache = {}
         self.ann = annotations.Annotations()    # renames, notes, BE shifts...
+        self.nexafs_ring_var = tk.BooleanVar(value=False)   # mirrors the annotation
         self._disp_cache = {}       # id(region) -> region as drawn/exported
         self._ann_serial = 0        # counts changes to the annotations
         self._results_memo = None   # (key, resultspages.Results)
@@ -886,6 +888,9 @@ class Workspace:
                                    command=lambda n=name: self.set_theme(n))
         viewm.add_cascade(label="Colour theme", menu=themem)
         viewm.add_command(label="Plot style…", command=self.edit_plot_style)
+        viewm.add_checkbutton(label="NEXAFS: scale to the mean ring current",
+                              variable=self.nexafs_ring_var,
+                              command=self.set_nexafs_ring)
         viewm.add_command(label="Reset panel views",
                           command=self.reset_panel_views)
         bar.add_cascade(label="View", menu=viewm)
@@ -1416,6 +1421,15 @@ class Workspace:
                 "recorded in the file or saved with 'Use for this file' in "
                 "ISS / REELS. Other spectra are not affected.")
         ctl2.add(grp)
+
+        self.ring_cb = ttk.Checkbutton(ctl2, text="Ring-current scaling",
+                                       variable=self.nexafs_ring_var,
+                                       command=self.set_nexafs_ring)
+        tip(self.ring_cb, "NEXAFS scans: scale every point to the mean ring "
+                          "current of its scan (I × mean / ring current), "
+                          "which keeps the unit of the signal. Saved with the "
+                          "workbook; other spectra are not affected.")
+        ctl2.add(self.ring_cb)
 
         self.ke_var = tk.BooleanVar(value=bool(cfg.get("ke_top", False)))
         self.ke_cb = ttk.Checkbutton(ctl2, text="KE top axis",
@@ -2295,13 +2309,19 @@ class Workspace:
         shift = (ann.shift_for(fid, r.sample, r.name, r.calibration_shift)
                  if viewdata.is_binding(r) else 0.0)
         e0 = self._iss_e0(r, fid)       # the ion scattering energy-ratio axis
-        if dn == r.name and ds == r.sample and not shift and not e0:
+        ring = self._ring_scaled(r)     # NEXAFS scaled to the mean ring current
+        if (dn == r.name and ds == r.sample and not shift and not e0
+                and ring is None):
             q = r
         else:
             q = copy.copy(r)
             q.name, q.sample = dn, ds
             if e0:
                 q.extra = dict(r.extra, iss_e0=e0)
+            if ring is not None:
+                q.counts, mean = ring
+                q.count_label = "Normalised current"
+                q.extra = dict(q.extra, ring_norm=mean)
             if shift:
                 q.energy = [e + shift for e in r.energy]
                 q.shift_applied = shift
@@ -2309,6 +2329,30 @@ class Workspace:
                     q.photon_energy = r.photon_energy + shift
         self._disp_cache[id(r)] = q
         return q
+
+    def _ring_scaled(self, r):
+        """``(counts scaled to the mean ring current, that mean)`` for a NEXAFS
+        spectrum when the user chose the scaling and the file recorded the
+        ring current, else None (see ``nexafs.py``)."""
+        if not (self.ann.nexafs_ring and r.is_nexafs):
+            return None
+        ring = nexafs.ring_points(r)
+        if ring is None:
+            return None
+        counts, mean = nexafs.scale_to_mean(r.counts, ring)
+        return None if counts is None else (counts, mean)
+
+    def set_nexafs_ring(self):
+        """The Ring-current scaling box / View menu entry: saved in the
+        annotations (so in the workbook), applied by ``_display``."""
+        self.ann.nexafs_ring = bool(self.nexafs_ring_var.get())
+        self._ann_changed(relabel=False)
+        self._update_metadata()
+        if self.ann.nexafs_ring and not any(
+                r.is_nexafs and nexafs.ring_points(r) for p in self.docs
+                for r in p.regions):
+            self.status.config(text="No NEXAFS spectrum with a recorded ring "
+                                    "current is loaded: nothing to scale.")
 
     def _iss_e0(self, r, fid):
         """The beam energy (eV) of an ion scattering spectrum for the energy
@@ -2348,6 +2392,7 @@ class Workspace:
         there)."""
         self._disp_cache.clear()
         self._ann_serial += 1
+        self.nexafs_ring_var.set(bool(self.ann.nexafs_ring))
         for p in self.docs:
             p.annotations = self.ann
             p.file_id = self.file_ids.get(id(p), "")

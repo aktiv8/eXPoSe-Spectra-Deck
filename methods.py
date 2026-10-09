@@ -192,10 +192,19 @@ def _nexafs_paragraph(rows):
         s += (", with " if spans else " with ") + sett
     s += "." if (spans or sett) else ""
     names = _unique(rows, "Region")
+    scaled = [r for r in rows if r.get("Normalisation")]
+    if len(scaled) == len(rows):
+        how = ("; each point was scaled to the mean ring current of its scan "
+               "(current × mean ring current / ring current)")
+    elif scaled:
+        how = (f"; {len(scaled)} of {len(rows)} spectra were scaled point by "
+               "point to the mean ring current of their scan")
+    else:
+        how = "; the spectra are not normalised"
     if names:
         s += (f" The current of {len(names)} channel"
               f"{'s' if len(names) != 1 else ''} ({', '.join(names)}) was "
-              "recorded; the spectra are not normalised.")
+              f"recorded{how}.")
     return s.strip()
 
 

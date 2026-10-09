@@ -20,6 +20,7 @@ from dataclasses import dataclass, field
 
 import columntext
 import elements
+import nexafs
 import nexus_settings
 import sputter as sputter_mod
 
@@ -79,6 +80,7 @@ class Annotations:
     instrument: dict = field(default_factory=dict)       # file id -> NeXus settings
     iss: dict = field(default_factory=dict)              # file id -> {ion, e0, theta}
     imports: dict = field(default_factory=dict)          # file id -> how a column-text file is read
+    nexafs_ring: bool = False                            # NEXAFS scaled to the mean ring current
     extra: dict = field(default_factory=dict)            # unknown keys kept
 
     # -- names -----------------------------------------------------------------
@@ -147,6 +149,12 @@ class Annotations:
                 for k, v in sputter_mod.metadata_rows(
                         sset, region.etch_time).items():
                     out[k] = v
+        if self.nexafs_ring and getattr(region, "is_nexafs", False):
+            mean = nexafs.mean_ring(nexafs.ring_points(region) or [])
+            if mean is not None:
+                out["Normalisation"] = (
+                    f"scaled to the mean ring current ({mean:.1f}; the unit "
+                    "is not recorded)")
         iss = self.iss_for(fid) if getattr(region, "is_iss", False) else {}
         if iss.get("ion"):
             out["ISS ion"] = iss["ion"]
@@ -287,7 +295,7 @@ class Annotations:
                     or self.shifts or self.calibration or self.markers
                     or self.calibration_statement or self.experiment_notes
                     or self.sputter or self.reels or self.instrument
-                    or self.iss or self.imports)
+                    or self.iss or self.imports or self.nexafs_ring)
 
     def copy(self):
         return copy.deepcopy(self)
@@ -299,6 +307,8 @@ class Annotations:
                      "calibration_statement", "markers", "experiment_notes",
                      "sputter", "reels", "instrument", "iss", "imports"):
             d[name] = copy.deepcopy(getattr(self, name))
+        if self.nexafs_ring:
+            d["nexafs_ring"] = True
         d.update(self.extra)
         return d
 
@@ -311,7 +321,8 @@ class Annotations:
         known = {"version", "sample_names", "region_names", "sample_notes",
                  "region_notes", "md_edits", "shifts", "calibration",
                  "calibration_statement", "markers", "experiment_notes",
-                 "sputter", "reels", "instrument", "iss", "imports"}
+                 "sputter", "reels", "instrument", "iss", "imports",
+                 "nexafs_ring"}
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes"):
             v = data.get(name)
@@ -358,6 +369,8 @@ class Annotations:
             a.sputter = {str(k): sputter_mod.sanitise(x) for k, x in v.items()
                          if isinstance(x, dict)
                          and not sputter_mod.is_empty(x)}
+        if data.get("nexafs_ring") is True:
+            a.nexafs_ring = True
         v = data.get("instrument")
         if isinstance(v, dict):
             for k, x in v.items():

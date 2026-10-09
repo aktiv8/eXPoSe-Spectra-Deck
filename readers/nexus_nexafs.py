@@ -220,6 +220,8 @@ class NexusNexafsFile(SpectrumFile):
                 if utc0:
                     reg.extra["tz"] = "UTC"
             reg.extra["nexafs_group"] = group
+            if ring is not None and len(ring) == n:
+                reg.extra["ring_current_points"] = [float(v) for v in ring]
             reg.extra["acq_metadata"] = self._rows(entry, ch, grp, ring, info)
             reg.extra["nexafs"] = dict(
                 info, channel=ch,
