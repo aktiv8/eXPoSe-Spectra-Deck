@@ -369,6 +369,7 @@ def fit_notes(rows):
     if any(r["approximate"] for r in rows):
         out.append("LA / LF (or a tail-modified GL / SGL) line shapes are "
                    "reconstructed")
+    out.extend(n for r in rows for n in r.get("shape_notes", ()))
     unknown = sorted({r["background"] for r in rows
                       if not r["background_known"]})
     if unknown:

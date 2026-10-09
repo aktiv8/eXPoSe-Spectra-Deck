@@ -608,9 +608,10 @@ class TestCurves(unittest.TestCase):
         self.assertLessEqual(float(diff.max()), 1e-6 * float(counts.max()))
 
     def test_tail_modified_component_is_marked_approximate(self):
-        """A GL/SGL component with a CasaXPS tail suffix reconstructs as its
-        plain base shape (the tail itself is not modelled) but must be
-        flagged approximate, not silently treated as exact."""
+        """A GL/SGL component with a CasaXPS tail suffix is drawn with its
+        exponential tail (see tests/test_tailshape.py) but must be flagged
+        approximate, not silently treated as exact: no real Casa curve of
+        it has been checked."""
         reg = casafit.FitRegion(name="Tail", background="none",
                                 start_ke=1025.0, end_ke=1029.0)
         comp = casafit.FitComponent(name="Tail", shape="GL(30)T(1.5)",

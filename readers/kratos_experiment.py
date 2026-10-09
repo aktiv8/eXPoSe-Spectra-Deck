@@ -3,6 +3,8 @@ container; reverse-engineered, best effort)."""
 
 from __future__ import annotations
 
+import bisect
+import math
 import os
 import re
 import struct
@@ -22,6 +24,14 @@ class EscapeParser(SpectrumFile):
     SAMPLE_MARKER = b"ProcessData.SampleAnalysis"
     SETTINGS_MARKER = b"NICPU.Acquisition.Spectrum.SpectroscopySettings"
     LOCATION_MARKER = b"SampleHandling.InstrumentAnalysisLocation"
+    # Per-acquisition records, each read from the last one before a spectrum
+    # (the same rule as the settings above). Checked on all 144 regions of
+    # MI-LD-20264066-26-21 against HarwellXPS's own export of it (see
+    # tests/test_experiment_settings.py): neutraliser, emission current and
+    # stage x / y / z all agree 144 of 144.
+    NEUTRALISER_MARKER = b"NICPU.AxisChargeNeutraliser+Setup"
+    XRAY_MARKER = b"Ultra.Devices.XpsMonochromatic+Setup"
+    ANALYSIS_PAIR = b"\x08Analysis\x08Analysis"      # then x, y, z (metres)
     PASS_ENERGIES = (2, 5, 10, 20, 40, 80, 160, 224, 280)
 
     def __init__(self):
@@ -205,6 +215,10 @@ class EscapeParser(SpectrumFile):
                      and not s.startswith("MI-")
                      and len(s) <= 14), "")
         neutraliser = b"AxisChargeNeutraliser" in raw
+        # the operator is "MACHINE\\user" (e.g. 600-71-HP\\600-71)
+        operator = next((s for _, s in self.strings
+                         if re.fullmatch(r"[A-Za-z0-9\-]+\\[A-Za-z0-9\-.]+", s)),
+                        "")
         ion_gun = any(t in raw for t in
                       (b"Sputter", b"IonGun", b"Ion Gun", b"Minibeam",
                        b"MiniBeam", b"GasCluster", b"Etch"))
@@ -225,12 +239,65 @@ class EscapeParser(SpectrumFile):
             "Instrument": instrument or "(unknown)",
             "Acquisition software": "Kratos ESCApe",     # what writes .experiment
             "Acquisition computer": host or "(unknown)",
+            "Operator": operator,
             "X-ray source": source or "(unknown)",
             "Lens mode": lens,
             "Aperture": aperture,
             "Charge neutraliser": "Yes" if neutraliser else "No",
             "Ion gun / sputtering": "Used" if ion_gun else "Not used",
         }
+
+    def _offsets(self, marker):
+        """Sorted offsets of a marker, found once."""
+        cache = self.__dict__.setdefault("_offset_cache", {})
+        if marker not in cache:
+            cache[marker] = self._find_all(marker)
+        return cache[marker]
+
+    def _record_before(self, marker, off):
+        """The end of the last ``marker`` before ``off`` (None when there is
+        none): where that record's own fields begin."""
+        offs = self._offsets(marker)
+        i = bisect.bisect_left(offs, off) - 1
+        return offs[i] + len(marker) if i >= 0 else None
+
+    def _doubles(self, pos, n):
+        """``n`` float64 at ``pos`` when they are all finite, else None."""
+        if pos is None or pos < 0 or pos + 8 * n > len(self.raw):
+            return None
+        vals = struct.unpack_from(f"<{n}d", self.raw, pos)
+        return vals if all(math.isfinite(v) for v in vals) else None
+
+    def _acquisition_records(self, reg, off):
+        """The neutraliser, the X-ray emission current and the stage position
+        recorded for the acquisition of the spectrum at ``off``. A record that
+        is missing or implausible leaves its field out."""
+        if self.corruption["corrupted"]:
+            return
+        # neutraliser: int32 1, a flag byte, then filament current (A),
+        # charge balance (V) and bias (V) as float64
+        j = self._record_before(self.NEUTRALISER_MARKER, off)
+        v = self._doubles(None if j is None else j + 5, 3)
+        if (v is not None and self.raw[j + 4] == 1
+                and all(0.0 <= x < 100.0 for x in v)):
+            reg.extra["neutraliser"] = (
+                f"on (filament current {v[0]:g} A, charge balance {v[1]:g} V, "
+                f"bias {v[2]:g} V)")
+        # X-ray source: the emission current (A), 18 bytes into its record
+        # (225 W goes with 0.015 A and 180 W with 0.012 A, i.e. 15 kV)
+        j = self._record_before(self.XRAY_MARKER, off)
+        v = self._doubles(None if j is None else j + 18, 1)
+        if v is not None and 0.0005 < v[0] < 0.1:
+            reg.conditions["Emission current (mA)"] = f"{v[0] * 1000:.3g}"
+        # stage position: x, y, z (metres) after the record's two "Analysis"
+        # strings
+        j = self._record_before(self.ANALYSIS_PAIR, off)
+        v = self._doubles(j, 3)
+        if v is not None and abs(v[0]) < 0.1 and abs(v[1]) < 0.1 \
+                and abs(v[2]) < 0.05 and any(abs(x) > 1e-7 for x in v):
+            reg.pos_x, reg.pos_y = v[0] * 1000.0, v[1] * 1000.0
+            reg.extra["pos_z"] = v[2] * 1000.0
+            reg.extra["stage_own"] = True       # not the sample's first spot
 
     def _settings_tokens(self, ss_off, span=60):
         """Short strings right after a SpectroscopySettings marker."""
@@ -279,6 +346,7 @@ class EscapeParser(SpectrumFile):
         reg.sample = self._sample_for(off)
         reg.pass_energy = self._pass_energy_for(off)
         reg.aperture, reg.lens_mode = self._settings_for(off)
+        self._acquisition_records(reg, off)
         self._decode_spectrum(reg, off, end)
         start = self._start_for(off)
         if start:
@@ -582,7 +650,7 @@ class EscapeParser(SpectrumFile):
         self._locations = loc
         self._sample_pos = rep
         for r in self.regions:
-            if r.sample in rep:
+            if r.sample in rep and not r.extra.get("stage_own"):
                 r.pos_x, r.pos_y = rep[r.sample]
 
 

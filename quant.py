@@ -133,6 +133,7 @@ def fit_rows(r, curves=False, prefer_csv=False):
             "avg": getattr(reg, "avg", 1), "rms": cv.residual_rms,
             "chi2_red": cv.chi2_red,
             "approximate": bool(cv.approximate),
+            **({"shape_notes": list(cv.notes)} if cv.notes else {}),
             "background_known": bool(cv.background_known),
             "scale_known": bool(cv.scale_known),
             "components": comps}

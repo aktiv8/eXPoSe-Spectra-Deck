@@ -298,6 +298,9 @@ def _state_sentence(rows, key, noun, used, unused):
         return f"{noun}: {v}."
     if all(f is True for f in flags.values()):
         return used
+    if len(vals) > 3:             # a list that long is not a sentence
+        return (f"{noun}: {len(vals)} different settings were used (listed "
+                "in the metadata).")
     return f"{noun}: {join_and(vals)}."
 
 

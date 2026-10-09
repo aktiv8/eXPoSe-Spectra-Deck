@@ -3777,6 +3777,8 @@ class Workspace:
         if any(c.approximate for c in cvs):
             notes.append("fit: LA / LF (or a tail-modified GL / SGL) "
                         "shapes are reconstructed")
+        for c in cvs:
+            notes.extend("fit: " + n for n in c.notes)
         unknown = sorted({c.background_type for c in cvs
                           if not c.background_known})
         if unknown:
@@ -5538,7 +5540,8 @@ class Workspace:
                     "BE start (eV)", "BE end (eV)", "KE start (eV)",
                     "KE end (eV)", "Step (eV)", "Dwell (s)",
                     "Points", "Scans", "Counting time", "Quality",
-                    "Position X (mm)", "Position Y (mm)", "Sample tilt (°)",
+                    "Position X (mm)", "Position Y (mm)", "Position Z (mm)",
+                    "Sample tilt (°)",
                     "Take-off angle (°)", "Ion gun beam HT (V)",
                     "Ion gun emission current (mA)", "ISS ion",
                     "ISS beam energy (eV)", "ISS calibrated beam energy (eV)",

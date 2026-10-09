@@ -337,6 +337,8 @@ class Curves:
     background_known: bool = True   # False: this background type is not
                                     # reproduced (components only)
     fit_region: object = None       # the FitRegion these curves belong to
+    notes: list = field(default_factory=list)   # components left out of the
+                                    # envelope for an invalid lineshape
 
 
 @dataclass
@@ -410,6 +412,7 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
             continue
         kx, y = ke[sel], cps[sel]
         region_comps = fit.region_components(reg)
+        notes = []
         csv_map = None
         if prefer_csv and reg.csv_curves is not None:
             csv_map = {id(c): v for c, v in reg.csv_curves.components}
@@ -439,6 +442,16 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
             comps, total = [], (np.zeros(len(sel)) if bg is None else bg.copy())
             approx = False
             for c in region_comps:
+                bad = lineshapes.check_shape(c.shape)
+                if bad:
+                    # an invalid shape string is not drawn as whatever the
+                    # arithmetic gives: the component keeps its place (zeros)
+                    # and the region says why it is missing
+                    notes.append(f"{c.name or 'component'} ({c.shape}): "
+                                 + "; ".join(bad) + "; left out of the fit")
+                    comps.append((c, np.zeros(len(sel))))
+                    approx = True
+                    continue
                 v = lineshapes.component_curve(kx, c.shape, c.pos_ke + cshift,
                                                c.fwhm, c.area)
                 comps.append((c, v))
@@ -469,7 +482,7 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
             envelope=full(total) if comps and bg is not None else None,
             approximate=approx, scale_known=scale is not None,
             residual_rms=rms, chi2_red=chi2, background_known=bg is not None,
-            fit_region=reg))
+            fit_region=reg, notes=notes))
     return out
 
 

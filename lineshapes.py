@@ -1,4 +1,4 @@
-"""Line shapes and backgrounds for reconstructing CasaXPS fits.
+r"""Line shapes and backgrounds for reconstructing CasaXPS fits.
 
 All curves are computed on an **ascending kinetic-energy grid** (the frame in
 which CasaXPS stores positions) and scaled to the stored *area* (intensity
@@ -338,15 +338,48 @@ gamma`` -- distinct from both ``T(k)``/``PHI(j,k)`` above and the Gelius
 Gaussian convolution on top of the base pseudo-Voigt that this module's own
 ``GL``/``SGL``/``VOIGT`` branch of ``parse_shape`` would today silently
 truncate to plain ``GL(m)``, reading only ``ps[0]``, if a string like that
-ever appeared. None of ``T(k)``/``PHI(j,k)``, ``ST(mu,gamma)``, or a
-2-argument ``GL(m,n)``/``SGL(m,n)`` turned up anywhere in the ~700-file
-local corpus scan that found the real 2-argument ``LA`` file above, nor in
-any of the individually-named real files elsewhere in this module -- so
-none of the three is implemented; an affected component still draws as its
-plain base shape and is flagged ``approximate`` by ``is_exact`` (honestly
+ever appeared. None of ``PHI(j,k)``, ``ST(mu,gamma)``, or a 2-argument
+``GL(m,n)``/``SGL(m,n)`` turned up anywhere in the ~700-file local corpus
+scan that found the real 2-argument ``LA`` file above, nor in any of the
+individually-named real files elsewhere in this module -- so none of those
+three is implemented; an affected component still draws as its plain base
+shape and is flagged ``approximate`` by ``is_exact`` (honestly
 unreconstructed, the same treatment ``QF``/``H``/``F`` get below), rather
-than silently wrong. Implement whichever one a real fitted file turns up
-first.
+than silently wrong.
+
+**``GL(m)T(k)`` / ``SGL(m)T(k)`` is now drawn** (``_raw_values``): the
+Cookbook formula above for a one-argument shape, no Gaussian convolution,
+with ``x`` in units of the component's FWHM and ``x < 0`` the low-KE
+(high-binding-energy) side, ``F = base + (1 - base) * exp(k x)`` there and
+the plain base above the position, so it is the base peak with an
+exponential tail added on the high-BE side (continuous at the position,
+larger ``k`` fades faster). **Evidence, honestly:** the formula is
+Casa's own (Cookbook p.67), and HarwellXPS's Lineshape Tester (Armoury 0.9.5,
+read as text only, never run) independently implements ``GL(m)T(k)`` as "GL
+with an exponential tail on the high binding energy side; larger k fades
+faster" and says it measured it against Casa's own curves on ``GL(m)`` only
+(1 Oct 2026), not on other shapes. **No real CasaXPS fit that uses a ``T(k)``
+shape is known on disk here**, so nothing in this repository has checked the
+curve against a Casa one: ``is_exact`` stays False and the fit is flagged
+approximate, and a ``T()`` on any shape but ``GL``/``SGL`` is still drawn as
+the plain base.
+
+**LF's ``w`` is in eV, not in line widths (checked, rejected).** The tester's
+help text says LF's tails "steepen beyond about w line widths", while this
+module takes ``w`` in eV straight from the MATLAB listing (whose own ``F`` is
+1, so the two readings only coincide at FWHM = 1). Tested on every real LF
+region (5: Ti 2p of the titanium depth profile; Cl 2p, Pt 4d and Pt 4f x2 of
+PtCl2_quantified), evaluating ``w * fwhm`` instead of ``w``: ``residual_rms``
+got **worse on all five** (Ti 2p 0.0303 -> 0.0312, Cl 2p 0.0523 -> 0.0539,
+Pt 4d 0.0686 -> 0.1401, Pt 4f 0.0491 -> 0.0530, Pt 4f area2 0.0607 ->
+0.0652), so ``w`` stays in eV and the tester's wording is loose.
+
+**Invalid parameters** (``check_shape``): the tester refuses shapes with
+non-finite numbers, LA exponents <= 0 or a negative Gaussian index, a negative
+LF ``m``, a DS asymmetry outside [0, 1) or a negative ``n``, and a ``T(k)``
+with ``k <= 0``; ``check_shape`` reports the same (plus a few from the
+Cookbook's own ranges) and ``casafit.curves`` leaves such a component out of
+the envelope and says so, rather than drawing whatever the arithmetic gives.
 
 **Unrecognised shape names.** A shape name CasaXPS writes that this module
 does not implement (``QF``, or CasaXPS's own undocumented ``H``/``F``
@@ -427,7 +460,7 @@ GAUSS_P = {"DS": 0.5737, "LA": 0.60, "A": 1.0, "TLA": 1.0}  # exponent on
 _LN2_4 = 2.772588722239781               # 4 ln 2
 
 
-_TAIL_SUFFIX_RE = re.compile(r"^(.*\))\s*T\(\s*[^()]*\s*\)\s*$", re.IGNORECASE)
+_TAIL_SUFFIX_RE = re.compile(r"^(.*\))\s*T\(\s*([^()]*?)\s*\)\s*$", re.IGNORECASE)
 _SHAPE_RE = re.compile(r"^\s*([A-Za-z]+)\s*\(([^()]*)\)\s*(.*)$")
 _A_BASE_RE = re.compile(r"(?i)^(SGL|GL)\(([^()]*)\)")
 
@@ -440,8 +473,8 @@ def parse_shape(text) -> dict:
     peaks) or a compound shape naming a second one in its own parentheses
     (``H(0.09,250)SGL(90)``, or the documented ``DS(a,n)GL(m)``/
     ``DS(a,n)SGL(m)`` blend). ``tail`` is True when the ``T(k)`` suffix was
-    present -- the base shape's own parameters still parse correctly, but
-    the tail itself is not reconstructed (see the module docstring).
+    present and ``tk`` is its ``k`` (None when unreadable); the tail is drawn
+    for ``GL``/``SGL`` only (see the module docstring).
     ``suffix`` holds a compound name's second shape verbatim, unparsed. A
     name this module does not implement (``QF``, CasaXPS's own ``H``/``F``
     families, ...) keeps its real ``kind`` and stores its raw numeric tokens
@@ -449,15 +482,19 @@ def parse_shape(text) -> dict:
     see the module docstring. An unreadable string (no ``NAME(...)`` at all)
     is a symmetric Lorentzian-Gaussian mix ("GL(30)")."""
     text = str(text or "")
-    tail = False
+    tail, tk = False, None
     tm = _TAIL_SUFFIX_RE.match(text)
     if tm:
         text = tm.group(1)
         tail = True
+        try:
+            tk = float(tm.group(2))       # T(k): the decay (None if unreadable)
+        except ValueError:
+            tk = None
     m = _SHAPE_RE.match(text)
     if not m:
         return {"kind": "GL", "mix": 30.0, "a": 1.0, "b": 1.0, "w": 0.0,
-                "m": 0.0, "tail": tail, "suffix": "", "params": []}
+                "m": 0.0, "tail": tail, "tk": tk, "suffix": "", "params": []}
     kind = m.group(1).upper()
     ps = []
     for tok in m.group(2).split(","):
@@ -467,7 +504,7 @@ def parse_shape(text) -> dict:
             pass
     suffix = m.group(3).strip()
     out = {"kind": kind, "a": 1.0, "b": 1.0, "w": 0.0, "m": 0.0, "mix": 0.0,
-           "tail": tail, "suffix": suffix, "params": ps}
+           "tail": tail, "tk": tk, "suffix": suffix, "params": ps}
     if kind == "LF":
         out.update(a=ps[0] if ps else 1.0, b=ps[1] if len(ps) > 1 else 1.0,
                    w=ps[2] if len(ps) > 2 else 0.0,
@@ -517,6 +554,70 @@ def is_exact(shape) -> bool:
     """True for shapes that are exact rather than reconstructed."""
     ps = parse_shape(shape)
     return ps["kind"] in ("GL", "SGL") and not ps["tail"]
+
+
+def check_shape(shape) -> list:
+    """What is wrong with a shape string's parameters, as short sentences
+    ([] when nothing is). Pure, never raises: file content is not rejected at
+    parse time; ``casafit.curves`` uses this to leave a component out of the
+    envelope instead of drawing arithmetic nonsense. The rules are the ones
+    HarwellXPS's Lineshape Tester refuses (non-finite numbers, LA exponents
+    <= 0 or a negative Gaussian index, a negative LF ``m``, a DS asymmetry
+    outside [0, 1) or a negative ``n``, a ``T(k)`` with ``k <= 0``) plus the
+    Cookbook's own ranges for ``GL``/``SGL`` (0-100) and ``TLA`` (alpha, mu >
+    0). A name this module does not implement has nothing to check."""
+    ps = parse_shape(shape)
+    kind, vals, bad = ps["kind"], ps["params"], []
+    if any(not math.isfinite(v) for v in vals):
+        return ["a parameter is not a finite number"]
+    n = len(vals)
+    if kind == "LA":
+        if n not in (1, 2, 3):
+            bad.append("LA needs one, two or three parameters")
+        elif n >= 2 and (ps["a"] <= 0 or ps["b"] <= 0):
+            bad.append("LA's exponents must be positive")
+        if n >= 2 and ps["m"] < 0:
+            bad.append("LA's Gaussian index cannot be negative")
+    elif kind == "LF":
+        if n < 4:
+            bad.append("LF needs four (or five) parameters")
+        else:
+            if ps["a"] <= 0 or ps["b"] <= 0:
+                bad.append("LF's exponents must be positive")
+            if ps["w"] < 0:
+                bad.append("LF's tail width cannot be negative")
+            if ps["m"] < 0:
+                bad.append("LF's Gaussian parameter m cannot be negative")
+    elif kind == "DS":
+        if n < 2:
+            bad.append("DS needs two parameters")
+        else:
+            if not 0 <= ps["a"] < 1:
+                bad.append("DS's asymmetry must be at least 0 and below 1")
+            if ps["m"] < 0:
+                bad.append("DS's Gaussian index cannot be negative")
+    elif kind in ("GL", "SGL"):
+        if n < 1:
+            bad.append(f"{kind} needs one parameter")
+        elif not 0 <= vals[0] <= 100:
+            bad.append(f"{kind}'s mix must be between 0 and 100")
+    elif kind == "A":
+        if n < 3:
+            bad.append("A() needs three parameters")
+        elif ps["a"] < 0 or ps["b"] < 0 or ps["m"] < 0:
+            bad.append("A()'s parameters cannot be negative")
+    elif kind == "TLA":
+        if n < 3:
+            bad.append("TLA needs three parameters")
+        elif ps["a"] <= 0 or ps["b"] <= 0 or ps["m"] < 0:
+            bad.append("TLA's alpha and mu must be positive and n not negative")
+    if ps["tail"]:
+        tk = ps["tk"]
+        if tk is None or not math.isfinite(tk) or tk <= 0:
+            bad.append("T(k) needs a positive decay k")
+        elif kind not in ("GL", "SGL"):
+            bad.append("T(k) is only reconstructed for GL and SGL")
+    return bad
 
 
 def _np():
@@ -661,7 +762,14 @@ def _raw_values(x, sp, pos, fwhm):
     separate wide grid, for area normalisation."""
     np = _np()
     if sp["kind"] in ("GL", "SGL"):
-        return _gl_sgl_values(x, sp["kind"], sp["mix"], pos, fwhm)
+        base = _gl_sgl_values(x, sp["kind"], sp["mix"], pos, fwhm)
+        tk = sp.get("tk")
+        if sp.get("tail") and tk is not None and math.isfinite(tk) and tk > 0:
+            # Cookbook p.67: base + (1 - base) * E(1, k), E = exp(k x) for
+            # x < 0 (x in FWHM, low KE = high binding energy), else 0
+            t = np.minimum((x - pos) / fwhm, 0.0)
+            return base + (1.0 - base) * np.where(t < 0, np.exp(tk * t), 0.0)
+        return base
     if sp["kind"] == "VOIGT":
         return _voigt_values(x, pos, fwhm, sp["mix"])
     if sp["kind"] == "DS":
@@ -740,6 +848,14 @@ def component_curve(ke, shape, pos, fwhm, area):
         # fwhm=1.3 component leaves only ~2 points across the peak's own
         # FWHM, giving a component ~1.3% too tall).
         newspan = 20.0 * sp["w"]
+        n_points = min(200001, int(_NORM_POINTS * newspan / span))
+        span = newspan
+    tk = sp.get("tk")
+    if (sp.get("tail") and sp["kind"] in ("GL", "SGL") and tk and tk > 0
+            and 15.0 * fwhm / tk > span):
+        # a slow T(k) tail (small k) reaches past the default grid: widen it,
+        # with the points in proportion, so its area is not cut off
+        newspan = 15.0 * fwhm / tk
         n_points = min(200001, int(_NORM_POINTS * newspan / span))
         span = newspan
     wide = np.linspace(pos - span, pos + span, n_points)
