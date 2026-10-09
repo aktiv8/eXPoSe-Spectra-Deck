@@ -8,7 +8,7 @@ from .base import Region, ImageBlob, TreeNode, SpectrumFile
 from .kratos_experiment import EscapeParser
 from . import (vamas, thermo_avg, thermo_vgd, phi_spe, scienta_txt,
                kratos_kal, kratos_dset, thermo_vgx, khervefitting_kfit,
-               column_text)
+               column_text, nexus_nexafs)
 from .thermo_experiment import (ThermoExperiment, LoadCancelled,
                                 looks_like_experiment, experiment_roots)
 
@@ -41,6 +41,9 @@ READERS = [
      ("*.dset",)),
     ("Kratos ESCApe (.experiment)", _sniff_experiment, EscapeParser,
      ("*.experiment",)),
+    # before .kfit: its sniff accepts any HDF5 signature
+    ("NeXus NEXAFS (.nxs)", nexus_nexafs.sniff, nexus_nexafs.NexusNexafsFile,
+     ("*.nxs",)),
     ("KherveFitting (.kfit)", khervefitting_kfit.sniff,
      khervefitting_kfit.KherveFittingKfitFile, ("*.kfit",)),
     # last: any other file of numbers in columns (see readers/column_text.py)

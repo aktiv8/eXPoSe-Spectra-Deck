@@ -69,6 +69,11 @@ def is_survey(md):
     return a is not None and b is not None and abs(a - b) > SURVEY_SPAN
 
 
+def is_nexafs(md):
+    """True for a NEXAFS scan (photon energy against a current)."""
+    return str(md.get("Technique", "")).strip().upper() == "NEXAFS"
+
+
 def is_iss(md):
     """True for an ion scattering spectrum (technique ISS, or the ISS lens
     of a Kratos file whose export lost the technique)."""
@@ -156,6 +161,42 @@ def _iss_paragraph(rows):
             [f"a beam HT of {ht[0]} V" if ht else "",
              f"an emission current of {emis[0]} mA" if emis else ""]) + ". ")
     return (s + _analyser_paragraph(rows, "Ion scattering spectra")).strip()
+
+
+def _nexafs_paragraph(rows):
+    """NEXAFS scans: where they were recorded, the photon-energy range, step
+    and counting time per point, and the channels. Which channel is electron
+    or fluorescence yield is not recorded, so none is claimed."""
+    inst = _instrument_names(rows)
+    operator = _unique(rows, "Operator")
+    s = ("Near-edge X-ray absorption fine structure (NEXAFS) spectra were "
+         "recorded " + (f"at {join_and(inst)}" if inst
+                        else "at the beamline recorded in the data files"))
+    if operator:
+        s += f" (operator: {join_and(operator)})"
+    s += "."
+    spans = sorted({(round(_num(r.get("Photon energy start (eV)")) or 0),
+                     round(_num(r.get("Photon energy end (eV)")) or 0))
+                    for r in rows
+                    if _num(r.get("Photon energy start (eV)")) is not None
+                    and _num(r.get("Photon energy end (eV)")) is not None})
+    if len(spans) == 1:
+        s += (f" The photon energy was scanned from {spans[0][0]} to "
+              f"{spans[0][1]} eV")
+    elif spans:
+        s += (f" The photon energy was scanned over {len(spans)} ranges "
+              f"({min(a for a, _b in spans)} to {max(b for _a, b in spans)} "
+              "eV overall)")
+    sett = _settings(rows)
+    if sett:
+        s += (", with " if spans else " with ") + sett
+    s += "." if (spans or sett) else ""
+    names = _unique(rows, "Region")
+    if names:
+        s += (f" The current of {len(names)} channel"
+              f"{'s' if len(names) != 1 else ''} ({', '.join(names)}) was "
+              "recorded; the spectra are not normalised.")
+    return s.strip()
 
 
 def _analyser_paragraph(rows, noun="Spectra"):
@@ -425,20 +466,24 @@ def generate(rows, calibration="", timing_summary=None):
     if not rows:
         return ""
     paras = []
-    inst = _instrument_names(rows)
-    operator = _unique(rows, "Operator")
-    iss_rows = [r for r in rows if is_iss(r)]
-    rows_x = [r for r in rows if not is_iss(r)]     # the X-ray measurements
-    techniques = ([] if not rows_x else
-                  ["X-ray photoelectron spectroscopy (XPS)"]) + (
-        ["ion scattering spectroscopy (ISS)"] if iss_rows else [])
-    intro = (f"{join_and(techniques)} measurements were made "
-             + (f"on a {join_and(inst)} spectrometer" if inst
-                else "on the instrument recorded in the data files"))
-    intro = intro[0].upper() + intro[1:]
-    if operator:
-        intro += f" (operator: {join_and(operator)})"
-    paras.append(intro + ". " + (_source_sentence(rows_x) if rows_x else ""))
+    nex_rows = [r for r in rows if is_nexafs(r)]
+    lab_rows = [r for r in rows if not is_nexafs(r)]   # on a spectrometer
+    inst = _instrument_names(lab_rows)
+    operator = _unique(lab_rows, "Operator")
+    iss_rows = [r for r in lab_rows if is_iss(r)]
+    rows_x = [r for r in lab_rows if not is_iss(r)]  # the X-ray measurements
+    if lab_rows:
+        techniques = ([] if not rows_x else
+                      ["X-ray photoelectron spectroscopy (XPS)"]) + (
+            ["ion scattering spectroscopy (ISS)"] if iss_rows else [])
+        intro = (f"{join_and(techniques)} measurements were made "
+                 + (f"on a {join_and(inst)} spectrometer" if inst
+                    else "on the instrument recorded in the data files"))
+        intro = intro[0].upper() + intro[1:]
+        if operator:
+            intro += f" (operator: {join_and(operator)})"
+        paras.append(intro + ". "
+                     + (_source_sentence(rows_x) if rows_x else ""))
     spectra = [r for r in rows_x if r.get("Acquisition mode") != MAP_MODE]
     maps = [r for r in rows_x if r.get("Acquisition mode") == MAP_MODE]
     ana = _analyser_paragraph(spectra) if spectra else ""
@@ -448,6 +493,8 @@ def generate(rows, calibration="", timing_summary=None):
         paras.append(_iss_paragraph(iss_rows))
     if maps:
         paras.append(_map_paragraph(maps))
+    if nex_rows:
+        paras.append(_nexafs_paragraph(nex_rows))
     extra = [s for s in (
         _state_sentence(rows, "Charge neutraliser", "Charge neutraliser",
                         "Charge neutralisation was used.",

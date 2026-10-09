@@ -77,7 +77,7 @@ def is_survey_region(r) -> bool:
     naming, methods text, quantification tagging and the cover-page choice
     (see ``Region.is_survey``). An ion scattering spectrum is wide by nature
     and is never a survey."""
-    if is_iss_region(r):
+    if is_iss_region(r) or is_nexafs_region(r):
         return False
     return is_survey_name(r.name) or is_survey_span(r.energy)
 
@@ -87,6 +87,12 @@ def is_iss_region(r) -> bool:
     it is a Kratos ISS-lens spectrum whose technique a VAMAS export lost."""
     return ((r.technique or "").strip().upper() == "ISS"
             or is_iss_lens(r.lens_mode))
+
+
+def is_nexafs_region(r) -> bool:
+    """True for a NEXAFS scan: photon energy on the x axis, a current (or
+    yield) on y, no analyser."""
+    return (r.technique or "").strip().upper() == "NEXAFS"
 
 
 CAE = "Constant analyser energy (CAE)"
@@ -181,6 +187,11 @@ class Region:
         """True for a survey/wide scan: named so, or its own energy axis
         spans more than ``SURVEY_SPAN`` eV (see ``is_survey_region``)."""
         return is_survey_region(self)
+
+    @property
+    def is_nexafs(self) -> bool:
+        """True for a NEXAFS scan (see ``is_nexafs_region``)."""
+        return is_nexafs_region(self)
 
     @property
     def is_iss(self) -> bool:
@@ -539,7 +550,8 @@ class SpectrumFile:
         md["Operator"] = self.instrument.get("Operator", "")
         md["Acquisition computer"] = self.instrument.get("Acquisition computer", "")
         md["X-ray source"] = self.instrument.get("X-ray source", "")
-        md["Anode"] = r.anode or self.instrument.get("X-ray source", "")
+        md["Anode"] = ("" if r.is_nexafs else
+                       r.anode or self.instrument.get("X-ray source", ""))
         md["Photon energy (eV)"] = fmt(r.photon_energy, "", 2)
         md["Source power (W)"] = (r.conditions.get("X-ray Power", "")
                                   .replace("W", "").strip())
@@ -561,7 +573,9 @@ class SpectrumFile:
             md["Analyser mode"] = r.extra["analyser_mode"]
         if r.extra.get("acq_mode"):
             md["Acquisition mode"] = r.extra["acq_mode"]
-        axis = "KE" if "kinetic" in (r.energy_label or "").lower() else "BE"
+        label = (r.energy_label or "").lower()
+        axis = ("Photon energy" if label.startswith("photon")
+                else "KE" if "kinetic" in label else "BE")
         md[f"{axis} start (eV)"] = fmt(be0, "", 2)
         md[f"{axis} end (eV)"] = fmt(be1, "", 2)
         md["Step (eV)"] = fmt(r.step, "", 3)
@@ -602,6 +616,8 @@ class SpectrumFile:
                 "stored positions -- not applied again here)")
         if r.extra.get("kf_sample_axis"):
             md["Sample axis (KherveFitting)"] = r.extra["kf_sample_axis"]
+        for k, v in (r.extra.get("acq_metadata") or {}).items():
+            md.setdefault(k, v)            # rows a reader has of its own
         for k, v in (r.extra.get("preserved_metadata") or {}).items():
             if not md.get(k):              # restored from a VAMAS comment
                 md[k] = v

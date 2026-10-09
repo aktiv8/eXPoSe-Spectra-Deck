@@ -94,6 +94,20 @@ def export_csv(regions, path, include_fits=True, prefer_csv=False,
     return len(usable)
 
 
+def regular_grid(xs):
+    """``(start, step)`` of the straight line through an axis that is nearly
+    regular (least squares on the point number), and the largest distance of
+    a point from it. A beamline readback scatters around its set points."""
+    n = len(xs)
+    if n < 2:
+        return (xs[0] if xs else 0.0), 1.0, 0.0
+    mi, mx = (n - 1) / 2.0, sum(xs) / n
+    sii = sum((i - mi) ** 2 for i in range(n))
+    b = sum((i - mi) * (x - mx) for i, x in enumerate(xs)) / sii
+    a = mx - b * mi
+    return a, b, max(abs(a + b * i - x) for i, x in enumerate(xs))
+
+
 def export_vamas(regions, path, institution="Not specified",
                  instrument="", operator="", experiment_id="",
                  sample_id="Sample", include_transmission=True,
@@ -148,13 +162,19 @@ def export_vamas(regions, path, institution="Not specified",
     for r, md in pairs:
         hv = r.photon_energy if r.photon_energy else 1486.69
         # Kinetic-energy abscissa (matches CasaXPS and the transmission axis).
-        iss = r.is_iss             # no X-ray source: ion scattering
-        if "kinetic" in (r.energy_label or "").lower():
+        nex = r.is_nexafs          # NEXAFS: photon energy, no analyser
+        iss = r.is_iss or nex      # no X-ray source on the analyser side
+        if nex:
+            ke = list(r.energy)    # photon energy, kept in the KE field
+        elif "kinetic" in (r.energy_label or "").lower():
             ke = list(r.energy)    # already kinetic: not a binding energy
         else:
             ke = r.kinetic_energy or [hv - be for be in r.energy]
         ke0 = ke[0]
         dke = (ke[1] - ke[0]) if len(ke) > 1 else 1.0
+        deviation = 0.0
+        if nex:                    # REGULAR needs a start and a step
+            ke0, dke, deviation = regular_grid(ke)
         counts = r.counts
         trans = r.transmission() if include_transmission else None
         n_cv = 2 if trans else 1
@@ -178,6 +198,14 @@ def export_vamas(regions, path, institution="Not specified",
             # Calib line (the CasaXPS convention), not in the axis
             comment.insert(0, casafit.calib_line(cc["measured"],
                                                  cc["assigned"]))
+        if nex:
+            comment += [
+                "Technique : NEXAFS (written with technique AES dir so the "
+                "abscissa is plotted unchanged)",
+                "Abscissa : photon energy in eV, stored in the "
+                "kinetic-energy field",
+                "Abscissa regularised from the recorded readback, largest "
+                f"difference {deviation:.3g} eV"]
         if r.etch_level is not None:
             comment.append(f"Etch level : {r.etch_level}")
         if r.etch_time is not None:
@@ -189,7 +217,7 @@ def export_vamas(regions, path, institution="Not specified",
         a(str(len(comment)))      # lines in block comment
         for c in comment:
             a(c)
-        a("ISS" if iss else "XPS")  # technique
+        a("AES dir" if nex else "ISS" if iss else "XPS")  # technique
         a("" if iss else anode)   # analysis source label (the ion is not in
                                   # the file, so none is claimed for ISS)
         # A display copy already carries the file's own correction in hv and
@@ -221,7 +249,10 @@ def export_vamas(regions, path, institution="Not specified",
         a(f"{ke0:.10g}")          # abscissa start
         a(f"{dke:.10g}")          # abscissa increment
         a(str(n_cv))              # number of corresponding variables
-        a("Intensity"); a("d")    # corresponding var 1: label, units
+        if nex:                   # corresponding var 1: label, units
+            a(r.count_label or "Signal"); a(r.count_units or "d")
+        else:
+            a("Intensity"); a("d")
         if trans:
             a("Transmission"); a("d")   # corresponding var 2
         a("pulse counting")       # signal mode
@@ -234,7 +265,10 @@ def export_vamas(regions, path, institution="Not specified",
         a("0")                    # additional numerical parameters
 
         def fc(v):                # count: integer when whole, else 8 sig figs
-            return str(int(round(v))) if abs(v - round(v)) < 1e-6 else f"{v:.8g}"
+            # (a current of 1e-10 A is not "whole"; a NEXAFS value keeps 10)
+            if abs(v) >= 0.5 and abs(v - round(v)) < 1e-6:
+                return str(int(round(v)))
+            return f"{v:.10g}" if nex else f"{v:.8g}"
 
         def ft(v):                # transmission: high precision
             return f"{v:.12g}"

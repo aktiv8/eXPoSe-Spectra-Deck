@@ -368,10 +368,15 @@ def export_nexus(regions, path, metadata=None, experiment_metadata=None,
     schemes, detector, resolution, work function, affiliation), written only
     where set and winning over what the file recorded. Only decodable
     regions with counts are written; returns how many."""
+    scans = [r for r in regions if r.decodable and r.counts and r.is_nexafs]
     pairs = [(r, metadata[i] if metadata and i < len(metadata) else None)
-             for i, r in enumerate(regions) if r.decodable and r.counts]
+             for i, r in enumerate(regions)
+             if r.decodable and r.counts and not r.is_nexafs]
     if not pairs:
-        raise ValueError("None of the selected regions contain decodable data.")
+        raise ValueError(
+            "NEXAFS scans cannot be written as NXxps (a photon-energy scan "
+            "is not an analyser spectrum): use CSV or VAMAS for them."
+            if scans else "None of the selected regions contain decodable data.")
     h5py = _h5py()
     import datetime
     import quant

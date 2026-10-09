@@ -494,6 +494,9 @@ class VamasFile(SpectrumFile):
         if casa.get("neutraliser"):
             r.extra["neutraliser"] = casa["neutraliser"]
         vamasmeta.apply_to_region(r, vamasmeta.decode(b["comments"]))
+        if (r.technique.upper() == "NEXAFS" or kv.get("technique", "")
+                .upper().startswith("NEXAFS")) and is_ke and npts:
+            self._as_nexafs(r, native)
         r.extra["expvals"] = list(zip([v[0] for v in h["expvars"]],
                                       b["expvals"]))
         return r
@@ -519,6 +522,19 @@ class VamasFile(SpectrumFile):
         r.photon_energy = None
         r.technique = "ISS"
         r.name = re.sub(r"^I\s+SS\b", "ISS", r.name)
+
+    @staticmethod
+    def _as_nexafs(r, native):
+        """A NEXAFS scan written the way HarwellXPS's NeXus importer and this
+        app write it: technique AES dir, the photon energy in the
+        kinetic-energy field (so CasaXPS plots the abscissa unchanged), named
+        by a ``Technique : NEXAFS`` comment or the metadata block. The axis is
+        a photon energy, not a kinetic one, and there is no analyser."""
+        r.energy = list(native)
+        r.energy_label = "Photon Energy"
+        r.photon_energy = None
+        r.technique = "NEXAFS"
+        r.tf_ke = r.tf_values = None
 
     @staticmethod
     def _region_name(b):

@@ -20,6 +20,7 @@ previewed before it is saved.
 | **Kratos Vision** | `.kal` | Includes the transmission function. Files that don't record the X-ray source stay on a kinetic-energy axis (a warning says so). |
 | **Kratos Vision2 dataset** | `.dset` | The binary Vision2 writes, read directly (no DumpDataset step); gives the regions of its `.kal`. A setting whose Kratos constant has not been met yet is left out with a warning, never guessed; a `.dset` that holds only the index says so. |
 | **Kratos ESCApe** | `.experiment` | Undocumented binary container; best-effort reverse engineering. |
+| **NeXus NEXAFS** | `.nxs` | Needs the optional `h5py`. A beamline NEXAFS scan (Diamond B07 / GDA): one spectrum per detector channel, photon energy against current, named by detector (which channel is electron or fluorescence yield is not in the file, so none is claimed). Not normalised; an analyser (NXxps) `.nxs` is not read. |
 | **Numbers in columns** | `.csv` `.asc` `.txt` `.dat` `.tsv` | Any spectrum saved as plain columns (what *Surface Science Spectra* asks for, and most programs export). Tab, comma, semicolon or space separated, with or without a header; an *Import* dialog checks the columns before loading: see [Columns of numbers](#columns-of-numbers-csv--asc--txt). |
 
 Files are recognised by **content**, not only by extension, so renamed files

@@ -305,6 +305,12 @@ FORMATS_ROWS = [
      "Includes the transmission function. Files that do not record the X-ray "
      "source stay on a kinetic-energy axis (a warning says so)."),
     ("Kratos ESCApe", ".experiment", "Undocumented binary container; best-effort reverse engineering."),
+    ("NeXus NEXAFS scan", ".nxs",
+     "Needs the optional h5py. A beamline photon-energy scan (Diamond B07 / GDA): one spectrum "
+     "per detector channel, photon energy against current, named by detector. Nothing is "
+     "normalised or guessed (which channel is total electron yield is not in the file). VAMAS "
+     "export writes technique AES dir with the photon energy in the kinetic-energy field, as "
+     "HarwellXPS does, and reads it back; NeXus export leaves these scans out."),
     ("KherveFitting project", ".kfit",
      "HDF5 project file (needs the optional h5py). Loads the spectra with the fits, "
      "backgrounds and sensitivity factors KherveFitting stored. A standalone Peaks "
@@ -1271,7 +1277,7 @@ def build_chapters(doc):
         "can be silently corrupted; the application detects this and refuses "
         "to export noise.",
         "Some libraries are optional and a feature that needs a missing one "
-        "says so instead of failing: h5py (NeXus export, .kfit files), "
+        "says so instead of failing: h5py (NeXus export, .nxs and .kfit files), "
         "PyMuPDF (the in-app PDF preview), python-pptx (the slides), Pillow "
         "(icons, camera pictures and cover pictures) and matplotlib (plots).",
         "A Kratos file records when each run started but not when it ended, "
