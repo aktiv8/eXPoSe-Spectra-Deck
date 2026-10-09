@@ -570,7 +570,7 @@ class TestRingScalingInTheWindow(unittest.TestCase):
                    decodable=True)
         r.extra["ring_current_points"] = [300.0, 100.0]     # never used
         self.ws.ann.nexafs_ring = True
-        self.assertIsNone(self.ws._ring_scaled(r))
+        self.assertIsNone(self.ws._nexafs_result(r, ""))
 
 
 @unittest.skipUnless(HAVE_H5 and os.environ.get("XPS_NEXAFS_CORPUS"),

@@ -200,11 +200,21 @@ def _nexafs_paragraph(rows):
         how = (f"; {len(scaled)} of {len(rows)} spectra were scaled point by "
                "point to the mean ring current of their scan")
     else:
+        how = ""
+    edge_rows = [r for r in rows if r.get("Edge normalisation")]
+    if not scaled and not edge_rows:
         how = "; the spectra are not normalised"
     if names:
         s += (f" The current of {len(names)} channel"
               f"{'s' if len(names) != 1 else ''} ({', '.join(names)}) was "
               f"recorded{how}.")
+    if edge_rows:
+        texts = _unique(edge_rows, "Edge normalisation")
+        who = ("The spectra were" if len(edge_rows) == len(rows)
+               else f"{len(edge_rows)} of {len(rows)} spectra were")
+        s += (f" {who} normalised ({texts[0]})." if len(texts) == 1
+              else f" {who} normalised with the windows listed in the "
+                   f"metadata ({len(texts)} different settings).")
     return s.strip()
 
 

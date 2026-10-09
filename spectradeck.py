@@ -127,6 +127,7 @@ import pdfstyle
 import importplan
 import workbook_ui
 import iss_ui
+import nexafs_ui
 import plotstyle_ui
 import sputter_ui
 import instrument_ui
@@ -584,7 +585,7 @@ WORKBOOK_NEEDS_DATA = frozenset((
     "Hand-over package (ZIP)…", "Interactive data browser (HTML)…"))
 TOOLS_NEEDS_DATA = frozenset((
     "Calibrate binding energy…", "Identify peaks…", "Sputter settings…",
-    "Instrument settings (NeXus)…", "ISS / REELS…",
+    "Instrument settings (NeXus)…", "ISS / REELS…", "NEXAFS edge step…",
     "SnapMap / image map viewer…", "Rename…", "Notes…"))
 VIEW_NEEDS_DATA = frozenset((
     "Expand all", "Collapse all", "Untick all",
@@ -835,6 +836,8 @@ class Workspace:
         tm.add_command(label="Instrument settings (NeXus)…",
                        command=self.open_instrument_settings)
         tm.add_command(label="ISS / REELS…", command=self.open_iss_reels)
+        tm.add_command(label="NEXAFS edge step…",
+                       command=self.open_nexafs_edge)
         tm.add_command(label="SnapMap / image map viewer…",
                        command=self.open_snapmap)
         tm.add_command(label="Import KherveFitting peak model…",
@@ -2309,19 +2312,25 @@ class Workspace:
         shift = (ann.shift_for(fid, r.sample, r.name, r.calibration_shift)
                  if viewdata.is_binding(r) else 0.0)
         e0 = self._iss_e0(r, fid)       # the ion scattering energy-ratio axis
-        ring = self._ring_scaled(r)     # NEXAFS scaled to the mean ring current
+        nex = self._nexafs_result(r, fid)   # ring-current scaling, edge step
         if (dn == r.name and ds == r.sample and not shift and not e0
-                and ring is None):
+                and nex is None):
             q = r
         else:
             q = copy.copy(r)
             q.name, q.sample = dn, ds
             if e0:
                 q.extra = dict(r.extra, iss_e0=e0)
-            if ring is not None:
-                q.counts, mean = ring
+            if nex is not None:
+                q.counts = nex.counts
+                q.extra = dict(q.extra, ring_norm=nex.mean,
+                               edge_norm=nex.edge)
                 q.count_label = "Normalised current"
-                q.extra = dict(q.extra, ring_norm=mean)
+                if nex.edge is not None:
+                    q.count_label = "Normalised intensity"
+                    q.count_units = ("edge step = 1"
+                                     if nex.edge["mode"] == "step"
+                                     else "0 to 1")
             if shift:
                 q.energy = [e + shift for e in r.energy]
                 q.shift_applied = shift
@@ -2330,17 +2339,43 @@ class Workspace:
         self._disp_cache[id(r)] = q
         return q
 
-    def _ring_scaled(self, r):
-        """``(counts scaled to the mean ring current, that mean)`` for a NEXAFS
-        spectrum when the user chose the scaling and the file recorded the
-        ring current, else None (see ``nexafs.py``)."""
-        if not (self.ann.nexafs_ring and r.is_nexafs):
+    def _nexafs_result(self, r, fid):
+        """The ring-current scaling and the saved edge normalisation of a
+        NEXAFS spectrum (``nexafs.process``), or None when neither applies."""
+        if not r.is_nexafs:
             return None
-        ring = nexafs.ring_points(r)
-        if ring is None:
-            return None
-        counts, mean = nexafs.scale_to_mean(r.counts, ring)
-        return None if counts is None else (counts, mean)
+        return nexafs.process(r, self.ann.nexafs_ring,
+                              self.ann.edge_for(fid, r.sample, r.name))
+
+    # -- NEXAFS edge normalisation (the dialog's seam) -------------------------
+    def nexafs_regions(self):
+        """The NEXAFS spectra the edge dialog works on: what is selected, else
+        what is ticked."""
+        return [r for r in self.spectrum_regions() if r.is_nexafs]
+
+    def nexafs_base(self, r):
+        """``(energy, counts)`` of a NEXAFS spectrum before any edge
+        normalisation (ring-current scaled when that is chosen)."""
+        res = nexafs.process(r, self.ann.nexafs_ring, None)
+        return list(r.energy), (res.counts if res is not None else r.counts)
+
+    def nexafs_edge_get(self, r):
+        return self.ann.edge_for(*self._marker_key(r))
+
+    def nexafs_edge_set(self, regions, params):
+        """Save ``params`` (or remove them with {}) for every spectrum of
+        ``regions``."""
+        for r in regions:
+            self.ann.set_edge(*self._marker_key(r), params)
+        self._ann_changed(relabel=False)
+        self._update_metadata()
+
+    def open_nexafs_edge(self):
+        if not self.nexafs_regions():
+            messagebox.showinfo("NEXAFS edge step", "Select or tick a NEXAFS "
+                                                    "spectrum first.")
+            return
+        nexafs_ui.NexafsEdgeDialog(self.root, self)
 
     def set_nexafs_ring(self):
         """The Ring-current scaling box / View menu entry: saved in the

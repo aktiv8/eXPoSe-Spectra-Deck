@@ -81,6 +81,7 @@ class Annotations:
     iss: dict = field(default_factory=dict)              # file id -> {ion, e0, theta}
     imports: dict = field(default_factory=dict)          # file id -> how a column-text file is read
     nexafs_ring: bool = False                            # NEXAFS scaled to the mean ring current
+    nexafs_edge: dict = field(default_factory=dict)      # region key -> edge normalisation (nexafs.py)
     extra: dict = field(default_factory=dict)            # unknown keys kept
 
     # -- names -----------------------------------------------------------------
@@ -149,12 +150,18 @@ class Annotations:
                 for k, v in sputter_mod.metadata_rows(
                         sset, region.etch_time).items():
                     out[k] = v
-        if self.nexafs_ring and getattr(region, "is_nexafs", False):
-            mean = nexafs.mean_ring(nexafs.ring_points(region) or [])
-            if mean is not None:
+        if getattr(region, "is_nexafs", False):
+            edge = self.edge_for(fid, region.sample, region.name)
+            res = nexafs.process(region, self.nexafs_ring, edge)
+            if res is not None and res.mean is not None:
                 out["Normalisation"] = (
-                    f"scaled to the mean ring current ({mean:.1f}; the unit "
-                    "is not recorded)")
+                    f"scaled to the mean ring current ({res.mean:.1f}; the "
+                    "unit is not recorded)")
+            if res is not None and res.edge is not None:
+                out["Edge normalisation"] = nexafs.edge_text(edge)
+                if "step" in res.edge:
+                    out["Edge step"] = (f"{res.edge['step']:.6g} "
+                                        f"{region.count_units}".strip())
         iss = self.iss_for(fid) if getattr(region, "is_iss", False) else {}
         if iss.get("ion"):
             out["ISS ion"] = iss["ion"]
@@ -251,6 +258,22 @@ class Annotations:
         else:
             self.sputter[key] = sputter_mod.sanitise(settings)
 
+    # -- NEXAFS edge normalisation (per spectrum) -----------------------------------
+    def edge_for(self, fid, sample, name):
+        """The saved edge normalisation of a NEXAFS spectrum (``nexafs``), or
+        {} when the user set none."""
+        return nexafs.sanitise_edge(
+            self.nexafs_edge.get(region_key(fid, sample, name)))
+
+    def set_edge(self, fid, sample, name, params):
+        """Save (or, with {} / invalid parameters, remove) the edge
+        normalisation of one spectrum."""
+        key, clean = region_key(fid, sample, name), nexafs.sanitise_edge(params)
+        if clean:
+            self.nexafs_edge[key] = clean
+        else:
+            self.nexafs_edge.pop(key, None)
+
     # -- instrument settings for NeXus (per file) ------------------------------------
     def instrument_for(self, fid):
         """The file's instrument settings (only what is set), or {}."""
@@ -295,7 +318,8 @@ class Annotations:
                     or self.shifts or self.calibration or self.markers
                     or self.calibration_statement or self.experiment_notes
                     or self.sputter or self.reels or self.instrument
-                    or self.iss or self.imports or self.nexafs_ring)
+                    or self.iss or self.imports or self.nexafs_ring
+                    or self.nexafs_edge)
 
     def copy(self):
         return copy.deepcopy(self)
@@ -309,6 +333,8 @@ class Annotations:
             d[name] = copy.deepcopy(getattr(self, name))
         if self.nexafs_ring:
             d["nexafs_ring"] = True
+        if self.nexafs_edge:
+            d["nexafs_edge"] = copy.deepcopy(self.nexafs_edge)
         d.update(self.extra)
         return d
 
@@ -322,7 +348,7 @@ class Annotations:
                  "region_notes", "md_edits", "shifts", "calibration",
                  "calibration_statement", "markers", "experiment_notes",
                  "sputter", "reels", "instrument", "iss", "imports",
-                 "nexafs_ring"}
+                 "nexafs_ring", "nexafs_edge"}
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes"):
             v = data.get(name)
@@ -371,6 +397,12 @@ class Annotations:
                          and not sputter_mod.is_empty(x)}
         if data.get("nexafs_ring") is True:
             a.nexafs_ring = True
+        v = data.get("nexafs_edge")
+        if isinstance(v, dict):
+            for k, x in v.items():
+                clean = nexafs.sanitise_edge(x)
+                if clean:
+                    a.nexafs_edge[str(k)] = clean
         v = data.get("instrument")
         if isinstance(v, dict):
             for k, x in v.items():
