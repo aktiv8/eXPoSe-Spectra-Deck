@@ -305,8 +305,10 @@ FORMATS_ROWS = [
      "Includes the transmission function. Files that do not record the X-ray "
      "source stay on a kinetic-energy axis (a warning says so)."),
     ("Kratos ESCApe", ".experiment", "Undocumented binary container; best-effort reverse engineering."),
-    ("NeXus NEXAFS scan", ".nxs",
-     "Needs the optional h5py. A beamline photon-energy scan (Diamond B07 / GDA): one spectrum "
+    ("NeXus", ".nxs",
+     "Needs the optional h5py. Analyser spectra in NXxps / NXmpes layout (one per entry; "
+     "checked on files this application wrote, not on an instrument's own; fits are not read "
+     "back) and beamline NEXAFS scans. A beamline photon-energy scan (Diamond B07 / GDA): one spectrum "
      "per detector channel, photon energy against current, named by detector. Nothing is "
      "guessed (which channel is total electron yield is not in the file) and nothing is "
      "normalised unless you tick Ring-current scaling, which scales every point to the mean "

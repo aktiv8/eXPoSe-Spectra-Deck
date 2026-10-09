@@ -383,7 +383,10 @@ def export_nexus(regions, path, metadata=None, experiment_metadata=None,
     tmp = f"{path}.part"
     names, taken = [], set()
     try:
-        with h5py.File(tmp, "w") as f:
+        # track_order: the entries stay in the order they were written (HDF5
+        # lists a group's members alphabetically otherwise) so the reader
+        # gives the spectra back in the same order
+        with h5py.File(tmp, "w", track_order=True) as f:
             for r, md in pairs:
                 rows = []
                 if include_fits and getattr(r, "fit", None) is not None:

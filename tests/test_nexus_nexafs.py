@@ -167,8 +167,8 @@ class TestSyntheticFile(unittest.TestCase):
         head = b"\x89HDF\r\n\x1a\n" + b"\0" * 100
         self.assertTrue(nexus_nexafs.sniff(head, ".nxs"))
         self.assertFalse(nexus_nexafs.sniff(head, ".kfit"))
-        self.assertIs(readers.reader_for(self.path),
-                      nexus_nexafs.NexusNexafsFile)
+        self.assertTrue(issubclass(readers.reader_for(self.path),
+                                   nexus_nexafs.NexusNexafsFile))
 
     def test_hdf5_that_is_not_a_scan_says_so(self):
         p = os.path.join(self.dir, "other.nxs")
@@ -178,7 +178,8 @@ class TestSyntheticFile(unittest.TestCase):
             g["title"] = b"nothing to see"
         with self.assertRaises(ValueError) as cm:
             readers.load_file(p)
-        self.assertIn("holds no photon-energy scan", str(cm.exception))
+        self.assertIn("holds no NXxps spectrum or photon-energy scan",
+                      str(cm.exception))
         q = os.path.join(self.dir, "plain.nxs")
         with h5py.File(q, "w") as f:
             f["x"] = [1, 2, 3]

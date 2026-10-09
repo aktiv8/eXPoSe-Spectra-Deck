@@ -138,6 +138,15 @@ def _is_scan(entry):
 
 class NexusNexafsFile(SpectrumFile):
     format_name = "NeXus NEXAFS (.nxs)"
+    _what = "photon-energy scan"       # said when an entry is neither
+
+    def _accepts(self, entry):
+        """True for an entry this class can read besides a NEXAFS scan (the
+        NXxps reader, ``nexus_xps.NexusFile``, adds the analyser spectra)."""
+        return False
+
+    def _add_other(self, name, entry, stem):          # pragma: no cover
+        raise NotImplementedError
 
     def load(self, path: str):
         self.path = path
@@ -155,20 +164,27 @@ class NexusNexafsFile(SpectrumFile):
                 raise ValueError(
                     f"{os.path.basename(path)} has no NXentry: it is HDF5 but "
                     "not NeXus.")
-            scans = [(n, g) for n, g in entries if _is_scan(g)]
+            scans = [(n, g) for n, g in entries
+                     if _is_scan(g) or self._accepts(g)]
             if not scans:
                 raise ValueError(
                     f"{os.path.basename(path)} is NeXus but holds no "
-                    "photon-energy scan this reader recognises (NEXAFS scans "
-                    "of Diamond beamlines only).")
+                    f"{self._what} this reader recognises.")
             stem = os.path.splitext(os.path.basename(path))[0]
             for n, g in scans:
-                self._add_entry(n, g, stem if len(scans) == 1
-                                else f"{stem} {n}")
+                if _is_scan(g):
+                    self._add_entry(n, g, stem if len(scans) == 1
+                                    else f"{stem} {n}")
+                else:
+                    self._add_other(n, g, stem)
+            self._after_entries(entries, scans)
         if not self.regions:
-            raise ValueError(f"{os.path.basename(path)}: no detector channel "
-                             "matches the length of the photon-energy scan.")
+            raise ValueError(f"{os.path.basename(path)}: no spectrum could "
+                             "be read from it.")
         return self._finish()
+
+    def _after_entries(self, entries, used):
+        """Hook: the entries that were not used (a note for the user)."""
 
     # -- one NXentry --------------------------------------------------------
     def _add_entry(self, name, entry, sample):
