@@ -678,9 +678,6 @@ class Workspace:
         self.blank_img = self.swatches.blank
         self.trace_color = {}       # id(region) -> colour used on the plot
         self.color_slot = {}        # id(region) -> stable palette slot
-        self.fit_state_colour = {}  # CasaXPS fit state name -> colour, kept
-                                    # across panels/pages so the same state
-                                    # is always the same colour (plots.draw_fit)
         self.leaf_region = {}       # tree iid -> its Region (leaf rows)
         # experiment workbook (.xpscontainer) session
         self.details = {k: "" for k in wbk.DETAIL_FIELDS}
@@ -2291,7 +2288,6 @@ class Workspace:
 
     def _recompute_colours(self):
         self.color_slot = colour_slots(self.docs)
-        self.fit_state_colour = {}
 
     # -- annotations: what the user changed, applied on the way out -------------
     def _display(self, r):
@@ -3837,9 +3833,9 @@ class Workspace:
         """The CasaXPS fit to draw under a panel that shows one spectrum (or
         None): reconstructed on that spectrum's own points, with the panel's
         three toggles (``show``) applied. ``notes`` gets a line about
-        approximated shapes. ``self.fit_state_colour`` is passed through so a
-        chemical state gets the same colour on every panel/page it appears
-        on (``plots.draw_fit``)."""
+        approximated shapes. A component's colour is its CasaXPS INDEX
+        (``casafit.colour_slots``), so a chemical state has the same colour
+        on every panel/page it appears on (``plots.draw_fit``)."""
         if len(disp) != 1 or getattr(disp[0], "fit", None) is None:
             return None
         show = {k: bool(show.get(k, True)) for k in panelview.FIT_LAYERS}
@@ -3866,9 +3862,11 @@ class Workspace:
                          "reproduced, components only")
         if not all(c.scale_known for c in cvs):
             notes.append("fit: dwell time unknown, curves in counts/s")
-        return {"curves": cvs, "show": show,
-                "colours": list(base["cycle"])[1:] or list(base["cycle"]),
-                "state_colour": self.fit_state_colour}
+        cols = list(base["cycle"])[1:] or list(base["cycle"])
+        if any(c.index >= len(cols) for cv in cvs for c, _v in cv.components):
+            notes.append("fit: INDEX groups beyond %d reuse colours "
+                         "(the legend tells them apart)" % len(cols))
+        return {"curves": cvs, "show": show, "colours": cols}
 
     def displayed_be(self, event):
         """Binding energy under the pointer *as drawn* (after any shift, the

@@ -255,16 +255,34 @@
     if (!reg || !reg.fit) return [];
     return (V.fitSource.csv && reg.fit.csv_rows ? reg.fit.csv_notes : reg.fit.notes) || [];
   };
-  /* the chemical states of a spectrum's fit, by display name, in
-     first-appearance order (what the app's legend shows): two components
-     with the same name -- even from different fit regions of this
-     spectrum -- are one state here, mirroring plots.draw_fit. Colour is a
-     page-level concern (redrawFit/fitLegend/updateFitBox), not this. */
-  V.fitStates = function (reg) {
+  /* palette slot of each component of ONE fit region from its CasaXPS INDEX
+     numbers, in order (mirrors casafit.colour_slots; stateless, so INDEX n is
+     the same colour in every region and panel): INDEX >= 0 takes index % n,
+     the k-th ungrouped component the k-th slot no INDEX group uses. */
+  V.fitSlots = function (indexes, n) {
+    var used = {}, free = [], out = [], k = 0, s;
+    if (n < 1) return indexes.map(function () { return 0; });
+    indexes.forEach(function (i) { if (i !== null && i !== undefined && i >= 0) used[i % n] = true; });
+    for (s = 0; s < n; s++) if (!used[s]) free.push(s);
+    if (!free.length) for (s = 0; s < n; s++) free.push(s);
+    indexes.forEach(function (i) {
+      if (i !== null && i !== undefined && i >= 0) out.push(i % n);
+      else { out.push(free[k % free.length]); k++; }
+    });
+    return out;
+  };
+  /* the chemical states of a spectrum's fit in first-appearance order (what
+     the app's legend shows), for a fit palette of n colours: components
+     sharing an INDEX >= 0 are one state (per fit region); an ungrouped one is
+     its own, whatever its name -- mirroring plots.draw_fit. Colour (slot) is
+     the INDEX; turning it into a colour is the page's job. */
+  V.fitStates = function (reg, n) {
     var out = [], seen = {};
     V.fitRows(reg).forEach(function (row) {
-      row.components.forEach(function (c) {
-        if (!(c.state in seen)) { seen[c.state] = out.length; out.push({ name: c.state, slot: out.length }); }
+      var slots = V.fitSlots(row.components.map(function (c) { return c.index; }), n);
+      row.components.forEach(function (c, j) {
+        var key = String(row.region || '').toLowerCase() + '|' + (c.index !== null && c.index !== undefined && c.index >= 0 ? 'i' + c.index : 'c' + j);
+        if (!(key in seen)) { seen[key] = out.length; out.push({ key: key, name: c.state, slot: slots[j] }); }
       });
     });
     return out;
@@ -1152,8 +1170,7 @@
             norm: 'none', offset: 0.6, scale: 'Binding', iss: 'kinetic', levelOn: false, levelIdx: 0, levels: [],
             panels: new Map(), theme: 'auto', printing: false, nodes: [], holderIdx: 0,
             holderHot: null, tab: 'plot', filter: '', camIdx: 0, mapById: {}, camById: {},
-            fit: { components: true, envelope: true, background: true, residual: false, hidden: {},
-                  colour: {} },   // state name -> colour, kept across every panel on the page
+            fit: { components: true, envelope: true, background: true, residual: false, hidden: {} },
             q: { include: {}, seeded: {}, transmission: false, level: {}, rsfLibrary: '' },
             d: { sample: null, mode: 'element', axis: null, last: null },
             ident: { on: false, win: 2, auto: false, secondary: false, auger: false, split: false,
@@ -1443,19 +1460,13 @@
     var c = cycle();
     return c.length > 1 ? c.slice(1) : c;
   }
-  /* the colour for a fit state name, stable across every panel on the page
-     (S.fit.colour), assigning the next unused colour the first time a name
-     is seen -- so 'V2p(II)' is always the same colour, and the same legend
-     entry, wherever it is drawn (mirrors Workspace.fit_state_colour). */
-  function fitStateColour(name) {
-    var map = S.fit.colour, cols = fitColours();
-    if (!(name in map)) map[name] = cols[Object.keys(map).length % cols.length];
-    return map[name];
-  }
-  function fitSlotMap(reg) {
-    var slot = {};
-    V.fitStates(reg).forEach(function (x) { slot[x.name] = fitStateColour(x.name); });
-    return slot;
+  /* the colour of each component of a fit row: its CasaXPS INDEX slot in the
+     page's fit palette, so INDEX n is the same colour on every panel (mirrors
+     plots.draw_fit, which takes the same slots from casafit.colour_slots) */
+  function rowColours(row) {
+    var cols = fitColours();
+    return V.fitSlots(row.components.map(function (c) { return c.index; }), cols.length)
+      .map(function (s) { return cols[s % cols.length]; });
   }
   /* the fit's curves on every point of the spectrum, scaled like the data */
   function fitCurves(s, f) {
@@ -1474,7 +1485,7 @@
     var s = singleFit(p.group);
     if (!s) { if (p.fitbox) { p.wrap.removeChild(p.fitbox); p.fitbox = null; } return; }
     if (!p.fitbox) { p.fitbox = h('div', { class: 'fitbox' }); p.wrap.appendChild(p.fitbox); }
-    var box = clear(p.fitbox), slot = fitSlotMap(s.reg), kin = S.scale === 'Kinetic' && s.reg.hv;
+    var box = clear(p.fitbox), kin = S.scale === 'Kinetic' && s.reg.hv;
     var rows = V.fitRows(s.reg), shown = 0;
     rows.forEach(function (row, ri) {
       if (shown >= 8) return;
@@ -1487,14 +1498,14 @@
       box.appendChild(h('div', { class: 'fit-head', text: head.join('  ·  ') }));
       if (!row.components.length) return;
       var tot = row.components.reduce(function (a, c) { return a + Math.max(0, c.area || 0); }, 0);
-      var tb = h('tbody');
+      var tb = h('tbody'), rcol = rowColours(row);
       row.components.forEach(function (c, j) {
         var key = ri + ':' + j, off = !!S.fit.hidden[key];
         var cb = h('input', { type: 'checkbox', 'aria-label': 'Show ' + c.name });
         cb.checked = !off;
         var tr = h('tr', { class: off ? 'off' : '' },
           h('td', null, cb),
-          h('td', null, h('span', { class: 'sw', style: 'background:' + (slot[c.state] || '#888') })),
+          h('td', null, h('span', { class: 'sw', style: 'background:' + (rcol[j] || '#888') })),
           h('td', { text: c.name }),
           h('td', { class: 'num', text: fmtN(kin ? s.reg.hv - c.be : c.be, 2) }),
           h('td', { class: 'num', text: fmtN(c.fwhm, 2) }),
@@ -1917,9 +1928,9 @@
     }
   }
   function drawFit(ctx, C, lay, X, Y, xs, fit, s, resBase, rr, font) {
-    var slot = fitSlotMap(s.reg);
     ctx.lineJoin = 'round';
     fit.forEach(function (fr) {
+      var rcol = rowColours(fr.row);
       var zero = xs.map(function () { return 0; });
       if (S.fit.background && fr.bg) {
         ctx.strokeStyle = C.muted; ctx.lineWidth = 1; ctx.setLineDash([5, 3]);
@@ -1928,7 +1939,7 @@
       if (S.fit.components) {
         fr.comps.forEach(function (cv, j) {
           if (!cv || S.fit.hidden[fr.ri + ':' + j]) return;
-          var c = fr.row.components[j], col = slot[c.state] || '#888888';
+          var col = rcol[j] || '#888888';
           var lo = fr.bg || zero, top = cv.map(function (v, k) { return v === null || lo[k] === null ? null : lo[k] + v; });
           ctx.fillStyle = col; ctx.globalAlpha = 0.35; fillBetween(ctx, xs, top, lo, X, Y); ctx.globalAlpha = 1;
           ctx.strokeStyle = col; ctx.lineWidth = 1; strokeCurve(ctx, xs, top, X, Y);
@@ -1950,12 +1961,12 @@
   }
   /* the states of the fit, top left of the plot; a long list is left to the table */
   function fitLegend(ctx, C, lay, s, font) {
-    var st = V.fitStates(s.reg);
+    var cols = fitColours(), st = V.fitStates(s.reg, cols.length);
     if (!st.length || st.length > 6) return;
     ctx.font = font(11); ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     st.forEach(function (x, i) {
       var y = lay.t + 12 + i * 15;
-      ctx.fillStyle = fitStateColour(x.name); ctx.globalAlpha = 0.5; ctx.fillRect(lay.l + 8, y - 5, 10, 10); ctx.globalAlpha = 1;
+      ctx.fillStyle = cols[x.slot % cols.length]; ctx.globalAlpha = 0.5; ctx.fillRect(lay.l + 8, y - 5, 10, 10); ctx.globalAlpha = 1;
       ctx.fillStyle = C.fg;
       ctx.fillText(x.name.length > 22 ? x.name.slice(0, 21) + '…' : x.name, lay.l + 24, y);
     });

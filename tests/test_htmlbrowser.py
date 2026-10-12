@@ -1159,10 +1159,29 @@ class TestJavaScript(unittest.TestCase):
                                                           [True]]),
               "excluded_keys": {"g0e1": False},
               "trans": quant.csv_rows(groups, transmission=True)}
+        import casafit
+        comps = (payload["samples"][0]["regions"][0]["fit"]["rows"][0]
+                 ["components"])
+        row_region = payload["samples"][0]["regions"][0]["fit"]["rows"][0]["region"]
+        states = {}
+        for n in (1, 2, 6, 7):
+            idx = [c["index"] for c in comps]
+            slots = casafit.colour_slots(idx, n)
+            out, seen = [], set()
+            for c, sl, k in zip(comps, slots, casafit.state_keys(idx)):
+                if k not in seen:
+                    seen.add(k)
+                    out.append({"name": c["state"], "slot": sl})
+            states[str(n)] = out
+        cases = [{"indexes": ix, "n": n, "slots": casafit.colour_slots(ix, n)}
+                 for ix in ([0, 1, 2], [3, -1, -1], [-1, -1, -1, -1],
+                            [0, 1, 2, 3, 4, 5, 6], [7, -1, 0, -1],
+                            [-1, 5, -1, 5], [])
+                 for n in (1, 2, 6, 7)]
         return {"quant": qx, "payload_b64": hb.encode_payload(payload), "csv": text,
-                "states": [{"gk": c["gk"], "name": c["state"]}
-                           for c in payload["samples"][0]["regions"][0]
-                           ["fit"]["rows"][0]["components"]]}
+                "states": [{"gk": c["gk"], "name": c["state"]} for c in comps],
+                "slot_cases": cases, "state_slots": states,
+                "row_region": row_region}
 
     def iss_fixture(self):
         """An ion scattering spectrum as the page receives it, and what the

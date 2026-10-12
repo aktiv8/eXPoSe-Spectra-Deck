@@ -666,6 +666,65 @@ class TestFitLegend(unittest.TestCase):
                         texts[1].startswith("Pt 4f ("))
         self.assertNotEqual(texts[0], texts[1])
 
+    @staticmethod
+    def index_lines(region, indexes, tag=None):
+        """A fit region with one component per INDEX number (-1: ungrouped),
+        spread over KE 1022..1033, each tagged ``tag`` (default: the region)."""
+        tag = tag or region
+        out = [f"CASA region (*{region}*) (*Shirley*) 1020 1035 1 1 "
+               f"(*{region}*) 12.011", str(len(indexes))]
+        for k, ix in enumerate(indexes):
+            out.append(f"CASA comp (*{region} c{k}*) (*GL(30)*) Area "
+                       f"{500 - 20 * k} 0 900 -1 1 MFWHM 1 0 2 -1 1 Position "
+                       f"{1022 + 2 * k} 0 0 -1 1 RSF 1 MASS 12.011 INDEX {ix} "
+                       f"(*{tag}*)")
+        return out
+
+    def fills(self, lines, cols):
+        fit = casafit.parse(lines)
+        be, counts = model_data(fit, HV, 0.27, 25)
+        cvs = casafit.curves(fit, be, counts, HV, 0.27, 25)
+        ax = Figure().add_subplot()
+        plots.draw_fit(ax, be, {"curves": cvs, "colours": cols,
+                                "show": {"components": True}}, 1.0, "grey",
+                       "red")
+        return ([tuple(c.get_facecolor()[0]) for c in ax.collections],
+                [t.get_text() for t in ax.get_legend().get_texts()])
+
+    COLS = ["#aa0000", "#00aa00", "#0000aa", "#aaaa00"]
+
+    def test_components_sharing_an_index_share_one_colour_and_legend_entry(self):
+        """The colour is the CasaXPS INDEX: three peaks of INDEX 0 are one
+        chemical state -- one colour, one legend entry -- even when CasaXPS
+        tagged the group with the region's own label (as it does in most
+        real files)."""
+        fills, texts = self.fills(self.index_lines("C 1s", [0, 0, 0, 1]),
+                                  self.COLS)
+        self.assertEqual(len(fills), 4)
+        self.assertEqual(len(set(fills[:3])), 1)
+        self.assertNotEqual(fills[0], fills[3])
+        self.assertEqual(len(texts), 2)
+
+    def test_an_index_is_the_same_colour_in_every_region(self):
+        """Stateless: INDEX 1 gets the same palette slot whatever else is in
+        the region, in another region, or on the next call."""
+        a, _ = self.fills(self.index_lines("C 1s", [0, 1]), self.COLS)
+        b, _ = self.fills(self.index_lines("O 1s", [3, 2, 1]), self.COLS)
+        c, _ = self.fills(self.index_lines("C 1s", [0, 1]), self.COLS)
+        self.assertEqual(a[1], b[2])
+        self.assertEqual(a, c)
+
+    def test_ungrouped_components_avoid_the_colours_of_index_groups(self):
+        fills, _ = self.fills(self.index_lines("C 1s", [0, -1, 1, -1]),
+                              self.COLS)
+        self.assertEqual(len(set(fills)), 4)
+
+    def test_more_index_groups_than_colours_reuse_a_colour(self):
+        fills, texts = self.fills(self.index_lines("C 1s", [0, 1, 2]),
+                                  self.COLS[:2])
+        self.assertEqual(fills[0], fills[2])
+        self.assertEqual(len(texts), 3)          # legend still tells them apart
+
     def test_residual_rms_is_noted_on_the_panel(self):
         fit = casafit.parse(CASA)
         be, counts = model_data(fit, HV, 0.27, 25)

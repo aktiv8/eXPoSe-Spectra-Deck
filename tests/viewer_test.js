@@ -183,9 +183,14 @@ function near(a, b, msg, tol) {
     eq(full, [null, null, 5, 6, null, null], 'curveFull places a curve at its first point');
     eq(V.curveFull(null, [1], 3), null, 'no curves, no curve');
     eq(V.residual([10, 20, 30], [9, null, 33]), [1, null, -3], 'residual is data - envelope');
-    eq(V.fitStates(fspecs[0].reg).map((x) => x.name + '|' + x.slot),
-       fx.fit.states.filter((x, i, a) => a.findIndex((y) => y.name === x.name) === i)
-         .map((x, i) => x.name + '|' + i), 'chemical states in order of appearance, merged by name');
+    // colour = the CasaXPS INDEX, computed by casafit.colour_slots on the same cases
+    for (const c of fx.fit.slot_cases) {
+      eq(V.fitSlots(c.indexes, c.n), c.slots, 'fitSlots(' + JSON.stringify(c.indexes) + ', ' + c.n + ') matches casafit.colour_slots');
+    }
+    for (const n of Object.keys(fx.fit.state_slots)) {
+      eq(V.fitStates(fspecs[0].reg, +n).map((x) => x.name + '|' + x.slot),
+         fx.fit.state_slots[n].map((x) => x.name + '|' + x.slot), 'chemical states and their INDEX slots for a palette of ' + n);
+    }
     eq(V.fitRows({}).length, 0, 'a spectrum without a fit has no rows');
   }
 

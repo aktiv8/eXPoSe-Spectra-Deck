@@ -120,6 +120,48 @@ class Fit:
         return f"i{comp.index}" if comp.index >= 0 else f"c{id(comp)}"
 
 
+def colour_slots(indexes, n):
+    """Palette slot (``0 <= slot < n``) of each component of ONE region, from
+    their CasaXPS INDEX numbers in order. Stateless, so the same INDEX has the
+    same colour in every region, file, page and theme (the slot is resolved
+    against the palette at draw time): INDEX >= 0 takes ``index % n``; the
+    k-th ungrouped (INDEX < 0) component takes the k-th slot that no INDEX
+    group of this region uses (every slot when none is free), wrapping. Two
+    components sharing an INDEX share a colour on purpose. Mirrored by
+    ``V.fitSlots`` in viewer.js (``tests/test_htmlbrowser.py`` /
+    ``viewer_test.js`` compare them)."""
+    if n < 1:
+        return [0] * len(indexes)
+    used = {int(i) % n for i in indexes if i is not None and i >= 0}
+    free = [s for s in range(n) if s not in used] or list(range(n))
+    out, k = [], 0
+    for i in indexes:
+        if i is not None and i >= 0:
+            out.append(int(i) % n)
+        else:
+            out.append(free[k % len(free)])
+            k += 1
+    return out
+
+
+def state_name(comp, region):
+    """Legend name of a component's chemical state: the group's own tag unless
+    that is empty or only CasaXPS's label for the region, then the component's
+    own name. The same rule as ``quant.state_of`` (a test compares them)."""
+    grp = (comp.group or "").strip()
+    if comp.index >= 0 and grp and grp.lower() != (region or "").strip().lower():
+        return grp
+    return (comp.name or "").strip()
+
+
+def state_keys(indexes):
+    """Key of each component's chemical state within one region: components
+    sharing an INDEX >= 0 share a key (one legend entry, one colour); an
+    ungrouped component is its own state, told apart by its position."""
+    return [("i", int(i)) if i is not None and i >= 0 else ("c", p)
+            for p, i in enumerate(indexes)]
+
+
 def region_windows(fit, hv):
     """``[(be, name)]`` for a Fit's own named regions (CasaXPS's Regions
     tool), whether or not each has fitted components -- the file's own

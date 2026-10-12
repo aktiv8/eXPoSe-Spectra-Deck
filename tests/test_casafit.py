@@ -1670,5 +1670,48 @@ class TestRegionWindows(unittest.TestCase):
         self.assertEqual(casafit.region_windows(fit, 0), [])
 
 
+class TestColourSlots(unittest.TestCase):
+    """The component colour is the CasaXPS INDEX, stateless."""
+
+    def test_an_index_group_takes_index_mod_n(self):
+        self.assertEqual(casafit.colour_slots([0, 1, 2], 6), [0, 1, 2])
+        self.assertEqual(casafit.colour_slots([0, 0, 0], 6), [0, 0, 0])
+        self.assertEqual(casafit.colour_slots([7, 6], 6), [1, 0])      # wraps
+
+    def test_ungrouped_components_take_the_free_slots_in_turn(self):
+        self.assertEqual(casafit.colour_slots([-1, -1], 6), [0, 1])
+        self.assertEqual(casafit.colour_slots([0, -1, 1, -1], 6), [0, 2, 1, 3])
+        self.assertEqual(casafit.colour_slots([-1, -1, -1], 2), [0, 1, 0])
+
+    def test_when_no_slot_is_free_ungrouped_components_still_get_one(self):
+        self.assertEqual(casafit.colour_slots([0, 1, -1, -1], 2), [0, 1, 0, 1])
+
+    def test_it_does_not_depend_on_earlier_calls(self):
+        a = casafit.colour_slots([3, -1, 1], 6)
+        casafit.colour_slots([0, 1, 2, 4, 5], 6)
+        self.assertEqual(casafit.colour_slots([3, -1, 1], 6), a)
+
+    def test_empty_and_degenerate_palettes(self):
+        self.assertEqual(casafit.colour_slots([], 6), [])
+        self.assertEqual(casafit.colour_slots([0, -1], 0), [0, 0])
+
+    def test_state_keys_merge_an_index_and_separate_the_ungrouped(self):
+        self.assertEqual(casafit.state_keys([2, 2, -1, -1, 0]),
+                         [("i", 2), ("i", 2), ("c", 2), ("c", 3), ("i", 0)])
+
+    def test_state_name_is_the_same_rule_as_quant_state_of(self):
+        import quant
+        cases = [(0, "Metal", "Ti 2p"), (0, "Ti 2p", "Ti 2p"),
+                 (3, " ti 2P ", "Ti 2p"), (-1, "Metal", "Ti 2p"),
+                 (2, "", "Ti 2p"), (-1, "", "")]
+        for idx, grp, region in cases:
+            comp = casafit.FitComponent(name="Ti 2p3/2 a", index=idx,
+                                        group=grp, region=region)
+            d = {"index": idx, "group": grp, "name": comp.name}
+            want = quant.state_of(d, region)[1]
+            self.assertEqual(casafit.state_name(comp, region), want.strip(),
+                             (idx, grp, region))
+
+
 if __name__ == "__main__":
     unittest.main()

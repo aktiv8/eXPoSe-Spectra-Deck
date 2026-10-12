@@ -453,9 +453,8 @@ def draw_fit(ax, x, fit, scale, muted, accent):
     """Overlay a reconstructed CasaXPS fit on a single-spectrum panel.
 
     ``fit`` is ``{"curves": [casafit.Curves], "show": {"envelope", "components",
-    "background"}, "colours": [...], "state_colour": {key: colour}}``; ``x``
-    are the panel's x values (one per data point) and ``scale`` multiplies
-    every curve (normalisation).
+    "background"}, "colours": [...]}``; ``x`` are the panel's x values (one
+    per data point) and ``scale`` multiplies every curve (normalisation).
 
     A component's own drawn fill/line stops once it falls below
     ``_COMPONENT_VISIBLE_FLOOR`` of its own peak height on this panel (see the
@@ -463,33 +462,20 @@ def draw_fit(ax, x, fit, scale, muted, accent):
     from the untouched curves) is not affected, so it still shows the real,
     unclipped reconstruction.
 
-    Components are named the same way CasaXPS shows them (a group's own tag,
-    unless that is just the region's label, in which case the first
-    component names it -- ``named`` below). Two components that share a
-    real, distinct CasaXPS ``INDEX`` group tag -- whether on this panel, a
-    different region on it, or (via ``state_colour``, a dict the caller
-    keeps across panels) another panel of the same page or report -- are one
-    chemical state and get one legend entry and one colour. A component with
-    no such tag (no ``INDEX`` group, or one CasaXPS left tagged with the
-    region's own label) is never merged this way even if it happens to share
-    its *display* name with another such component (real files do this --
-    see ``tests/test_casacalib.py``'s ``TestFitLegend`` -- e.g. two
-    components of one asymmetric line shape both left named after the
-    region): each keeps its own colour, identified internally by the
-    component object itself rather than by its (possibly duplicate) display
-    text, mirroring ``casafit.Fit.group_of``'s real-group-or-``id(comp)``
-    split. Without ``state_colour`` the mapping is local to this call only.
-    The residual
-    RMS of each curve with one to show (see
-    ``casafit.Curves.residual_rms``) is noted in the top-right corner, since a
-    number for how well the fit reproduces the data is otherwise only in the
-    report's quantification table, not visible while looking at the plot."""
-    import math
+    **Colour is the CasaXPS INDEX** (``casafit.colour_slots``): components
+    sharing an INDEX >= 0 are one chemical state -- one colour, one legend
+    entry -- whatever their group tag says, and INDEX n has the same palette
+    slot in every region, file, page and theme. An ungrouped component
+    (INDEX -1) is its own state with its own colour (it never merges, even
+    when it shares its display name with another: real files leave two
+    components of one asymmetric line shape both named after the region).
+    The legend names a state by its group tag, unless that is only the
+    region's label, then by its first component (``casafit.state_name``).
+    The residual RMS of each curve with one to show (see
+    ``casafit.Curves.residual_rms``) is noted in the top-right corner."""
+    import casafit
     show = fit.get("show", {})
     cols = fit.get("colours") or ["#888888"]
-    state_colour = fit.get("state_colour")
-    if state_colour is None:
-        state_colour = {}
     names, peak_at = {}, {}
     for cv in fit["curves"]:
         base = ([(b * scale) if b == b else b for b in cv.background]
@@ -497,31 +483,20 @@ def draw_fit(ax, x, fit, scale, muted, accent):
         if show.get("background") and base is not None:
             ax.plot(x, base, color=muted, lw=1.0, ls="--", zorder=2.2)
         if show.get("components"):
-            for comp, vals in cv.components:
-                # a group's own name, unless CasaXPS just tagged it with
-                # the region's label: then the first component names it
-                grp = comp.group.strip()
-                named = (comp.index >= 0 and grp and grp.lower()
-                         != (cv.region or "").strip().lower())
-                name = (grp if named else comp.name).strip()
-                # a real, distinct group tag (``named``) merges into one
-                # colour/legend entry; anything that fell back to the
-                # component's own name -- no INDEX group, or one CasaXPS
-                # tagged with the region's own label -- never does, even if
-                # that display text collides with another's (see the module
-                # docstring)
-                key = name if named else (name, id(comp))
-                if key not in state_colour:
-                    n = len(state_colour)
-                    state_colour[key] = cols[n % len(cols)]
+            region = (cv.region or "").strip()
+            idxs = [c.index for c, _v in cv.components]
+            slots = casafit.colour_slots(idxs, len(cols))
+            keys = casafit.state_keys(idxs)
+            for (comp, vals), slot, sk in zip(cv.components, slots, keys):
+                key = (region.lower(),) + sk
+                col = cols[slot % len(cols)]
                 if key not in names:
-                    names[key] = (state_colour[key], name)
+                    names[key] = (col, casafit.state_name(comp, region))
                     # where the component peaks on this panel: told apart in
                     # the legend from another that shares its text
                     top_i = max(range(len(vals)), key=lambda i: (
                         abs(vals[i]) if vals[i] == vals[i] else -1.0))
                     peak_at[key] = x[top_i]
-                col = names[key][0]
                 y = [v * scale for v in vals]
                 lo = base if base is not None else [0.0] * len(y)
                 peak = max((abs(v) for v in vals if v == v), default=0.0)
@@ -537,30 +512,41 @@ def draw_fit(ax, x, fit, scale, muted, accent):
             ax.plot(x, [v * scale for v in cv.envelope],
                     color=ax.xaxis.label.get_color(), lw=1.3, zorder=2.6)
     if names and show.get("components"):
-        from matplotlib.patches import Patch
-        # components that share a display name (real CasaXPS files leave
-        # several named after the region, or "Pt 4f" twice for a doublet)
-        # keep their own colours; the legend adds where each one peaks so
-        # the swatches can be matched to the curves
-        count = {}
-        for _c, n in names.values():
-            count[n] = count.get(n, 0) + 1
-        handles = [Patch(facecolor=c, alpha=0.5,
-                         label=(f"{n[:16]} ({peak_at[k]:.1f})" if count[n] > 1
-                                else n[:22]))
-                   for k, (c, n) in names.items()]
-        many = len(handles) > 6           # a long list would cover the data:
-        fs = max(6, int(ax.xaxis.label.get_fontsize()) - 2)   # put it below
-        if many:
-            ax.legend(handles=handles, frameon=False, handlelength=1.0,
-                      loc="upper center", bbox_to_anchor=(0.5, -0.2),
-                      ncol=3, fontsize=fs - 1, columnspacing=1.2)
-        else:
-            ax.legend(handles=handles, loc="upper left", fontsize=fs,
-                      frameon=False, handlelength=1.0)
-    rms_bits = [(f"{cv.region}: " if len(fit["curves"]) > 1 else "")
-               + f"{100 * cv.residual_rms:.1f}%"
-               for cv in fit["curves"] if cv.residual_rms is not None]
+        _fit_legend(ax, names, peak_at)
+    _fit_rms_text(ax, fit["curves"], muted)
+
+
+def _fit_legend(ax, names, peak_at):
+    """The chemical-state legend of a fit: ``names`` is ``{key: (colour,
+    text)}`` in first-appearance order, ``peak_at`` where each one peaks."""
+    from matplotlib.patches import Patch
+    # states that share a display name (real CasaXPS files leave several
+    # named after the region, or "Pt 4f" twice for a doublet) keep their own
+    # colours; the legend adds where each one peaks so the swatches can be
+    # matched to the curves
+    count = {}
+    for _c, n in names.values():
+        count[n] = count.get(n, 0) + 1
+    handles = [Patch(facecolor=c, alpha=0.5,
+                     label=(f"{n[:16]} ({peak_at[k]:.1f})" if count[n] > 1
+                            else n[:22]))
+               for k, (c, n) in names.items()]
+    many = len(handles) > 6           # a long list would cover the data:
+    fs = max(6, int(ax.xaxis.label.get_fontsize()) - 2)   # put it below
+    if many:
+        ax.legend(handles=handles, frameon=False, handlelength=1.0,
+                  loc="upper center", bbox_to_anchor=(0.5, -0.2),
+                  ncol=3, fontsize=fs - 1, columnspacing=1.2)
+    else:
+        ax.legend(handles=handles, loc="upper left", fontsize=fs,
+                  frameon=False, handlelength=1.0)
+
+
+def _fit_rms_text(ax, curves, muted):
+    """Note the residual RMS of the curves that have one, top right."""
+    rms_bits = [(f"{cv.region}: " if len(curves) > 1 else "")
+                + f"{100 * cv.residual_rms:.1f}%"
+                for cv in curves if cv.residual_rms is not None]
     if rms_bits:
         fs = max(6, int(ax.xaxis.label.get_fontsize()) - 2)
         ax.text(0.98, 0.98, "RMS " + ", ".join(rms_bits),
