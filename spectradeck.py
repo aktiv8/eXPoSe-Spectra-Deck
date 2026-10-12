@@ -461,6 +461,39 @@ class CalibrationPanel(ttk.LabelFrame):
             self._show()
 
 
+def _monitor_bounds(widget, x, y):
+    """``(left, top, right, bottom)`` of the monitor holding the screen point
+    ``(x, y)`` (the nearest one if it is on none). Windows asks the system,
+    which knows every monitor; elsewhere, and if that fails, the whole
+    virtual screen Tk reports."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MonitorInfo(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.DWORD),
+                            ("rcMonitor", wintypes.RECT),
+                            ("rcWork", wintypes.RECT),
+                            ("dwFlags", wintypes.DWORD)]
+            user32 = ctypes.windll.user32
+            user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
+            user32.MonitorFromPoint.restype = wintypes.HANDLE
+            user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE,
+                                               ctypes.POINTER(MonitorInfo)]
+            mon = user32.MonitorFromPoint(wintypes.POINT(int(x), int(y)), 2)
+            info = MonitorInfo()
+            info.cbSize = ctypes.sizeof(MonitorInfo)
+            if mon and user32.GetMonitorInfoW(mon, ctypes.byref(info)):
+                r = info.rcMonitor
+                return r.left, r.top, r.right, r.bottom
+        except Exception:
+            pass
+    vx, vy = widget.winfo_vrootx(), widget.winfo_vrooty()
+    return (vx, vy, vx + max(widget.winfo_vrootwidth(), 1),
+            vy + max(widget.winfo_vrootheight(), 1))
+
+
 class Tooltip:
     """Small hover hint for a widget (Tk has none built in). Coloured from the
     live theme via ``palette_fn``; shown after a short pause, hidden on leave,
@@ -496,16 +529,19 @@ class Tooltip:
         screen, and above the widget when there is no room below."""
         wd = self.widget
         top = wd.winfo_toplevel()
-        left = max(0, top.winfo_rootx())
-        right = min(wd.winfo_screenwidth(),
-                    top.winfo_rootx() + top.winfo_width())
-        x = min(wd.winfo_rootx(), right - w - gap)
+        wx, wy = wd.winfo_rootx(), wd.winfo_rooty()
+        # the monitor the widget is on (not the primary one: a second
+        # monitor can sit left of or above it, with negative coordinates)
+        m_left, m_top, m_right, m_bottom = _monitor_bounds(wd, wx, wy)
+        left = max(m_left, top.winfo_rootx())
+        right = min(m_right, top.winfo_rootx() + top.winfo_width())
+        x = min(wx, right - w - gap)
         x = max(x, left)
         # a tip wider than its window still has to stay on the screen
-        x = max(0, min(x, wd.winfo_screenwidth() - w))
-        y = wd.winfo_rooty() + wd.winfo_height() + gap
-        if y + h > wd.winfo_screenheight():
-            y = max(0, wd.winfo_rooty() - h - gap)
+        x = max(m_left, min(x, m_right - w))
+        y = wy + wd.winfo_height() + gap
+        if y + h > m_bottom:
+            y = max(m_top, wy - h - gap)
         return x, y
 
     def set_text(self, text):
