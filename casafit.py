@@ -162,6 +162,40 @@ def state_keys(indexes):
             for p, i in enumerate(indexes)]
 
 
+def _add_values(a, b):
+    """Element-wise sum of two curves; NaN (outside the fit region) is
+    missing data, so it only stays NaN where both are."""
+    return [y if x != x else x if y != y else x + y for x, y in zip(a, b)]
+
+
+def drawn_components(cv, ncolours, merge=False):
+    """What to draw for the components of one fit region (``Curves``): one
+    entry per component, or -- with ``merge`` -- one per chemical state, the
+    members of an INDEX >= 0 group summed into a single curve (just the
+    outline of the group's shape). Display only: the areas, the quantification
+    and the exports keep every component. Each entry is ``{"key", "name",
+    "slot", "first_comp", "members", "values"}`` in first-appearance order,
+    ``values`` the peak-only counts (the background is added by the caller,
+    as for any component). An ungrouped component (INDEX < 0) is never merged;
+    nor is a group of one (its values are copied unchanged)."""
+    region = (cv.region or "").strip()
+    idxs = [c.index for c, _v in cv.components]
+    slots = colour_slots(idxs, ncolours)
+    keys = state_keys(idxs)
+    out, at = [], {}
+    for (comp, vals), slot, key in zip(cv.components, slots, keys):
+        if merge and key[0] == "i" and key in at:
+            e = out[at[key]]
+            e["members"].append(comp)
+            e["values"] = _add_values(e["values"], vals)
+            continue
+        at[key] = len(out)
+        out.append({"key": key, "name": state_name(comp, region),
+                    "slot": slot, "first_comp": comp, "members": [comp],
+                    "values": list(vals)})
+    return out
+
+
 def region_windows(fit, hv):
     """``[(be, name)]`` for a Fit's own named regions (CasaXPS's Regions
     tool), whether or not each has fitted components -- the file's own

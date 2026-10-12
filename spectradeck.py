@@ -1253,6 +1253,7 @@ class Workspace:
         for k, v in self.fit_vars.items():
             cfg["fit_" + k] = bool(v.get())
         cfg["fit_use_csv_curves"] = bool(self.csv_curves_var.get())
+        cfg["fit_merge"] = bool(self.fit_merge_var.get())
         for k, v in self.ident_vars.items():
             cfg["ident_" + k] = bool(v.get())
         cfg["axis_colour"] = self.axis_choice
@@ -1513,6 +1514,18 @@ class Workspace:
             cb.pack(side="left", padx=(0, 6))
             tip(cb, tipt + " Shown on a panel with one spectrum that has a "
                            "fit; LA and LF shapes are reconstructions.")
+        self.fit_merge_var = tk.BooleanVar(
+            value=bool(cfg.get("fit_merge", False)))
+        cb = ttk.Checkbutton(self.fit_frame, text="Merge INDEX groups",
+                             variable=self.fit_merge_var,
+                             command=self._schedule_render)
+        cb.pack(side="left", padx=(0, 6))
+        tip(cb, "Draw the components that share a CasaXPS INDEX as one "
+                "component -- the outline of their sum -- so a chemical "
+                "state built from several peaks reads as one shape. Display "
+                "only: the table, the quantification and the exports keep "
+                "every component. Components with no INDEX group are never "
+                "merged. A panel can override this (right-click ▸ Fit layers).")
         self.csv_curves_var = tk.BooleanVar(
             value=bool(cfg.get("fit_use_csv_curves", False)))
         self._csv_curves_cb = ttk.Checkbutton(
@@ -3386,6 +3399,7 @@ class Workspace:
                 "reverse": bool(self.reverse.get()),
                 "fit_show": {k: bool(v.get())
                              for k, v in self.fit_vars.items()},
+                "fit_merge": bool(self.fit_merge_var.get()),
                 "ident_show": {k: bool(v.get())
                               for k, v in self.ident_vars.items()}}
 
@@ -3792,7 +3806,8 @@ class Workspace:
             reels_arg = (self.ann.reels_for(*self._marker_key(vis[0]))
                          if len(vis) == 1 else None)
             fit_arg = self._fit_overlay(vis, disp, base, notes,
-                                        look["fit_show"])
+                                        look["fit_show"],
+                                        bool(look.get("fit_merge")))
             if view == "Fit" and fit_arg is None and not any(
                     getattr(r, "fit", None) is not None for r in disp):
                 notes.append(f"{key}: no fit stored, shown as a plain trace")
@@ -3829,7 +3844,7 @@ class Workspace:
             ax.set_position([b.x0, b.y0, max(0.05, b.width - gutter), b.height])
         return axmap
 
-    def _fit_overlay(self, vis, disp, base, notes, show):
+    def _fit_overlay(self, vis, disp, base, notes, show, merge=False):
         """The CasaXPS fit to draw under a panel that shows one spectrum (or
         None): reconstructed on that spectrum's own points, with the panel's
         three toggles (``show``) applied. ``notes`` gets a line about
@@ -3866,7 +3881,7 @@ class Workspace:
         if any(c.index >= len(cols) for cv in cvs for c, _v in cv.components):
             notes.append("fit: INDEX groups beyond %d reuse colours "
                          "(the legend tells them apart)" % len(cols))
-        return {"curves": cvs, "show": show, "colours": cols}
+        return {"curves": cvs, "show": show, "colours": cols, "merge": merge}
 
     def displayed_be(self, event):
         """Binding energy under the pointer *as drawn* (after any shift, the
@@ -3983,6 +3998,12 @@ class Workspace:
                 label=mark(on, layer.capitalize()),
                 command=lambda layer=layer, on=on: self._set_panel_view(
                     key, "fit_show", (layer, not on)))
+        merged = bool(look.get("fit_merge"))
+        pm["fit"].add_separator()
+        pm["fit"].add_command(
+            label=mark(merged, "Merge INDEX groups"),
+            command=lambda: self._set_panel_view(key, "fit_merge",
+                                                 not merged))
         for layer in panelview.IDENT_LAYERS:
             on = look["ident_show"].get(layer, False)
             pm["ident"].add_command(
@@ -4244,6 +4265,7 @@ class Workspace:
             "colour_reverse": bool(self.colrev_var.get()),
             "fit_show": {k: bool(v.get()) for k, v in self.fit_vars.items()},
             "csv_curves": bool(self.csv_curves_var.get()),
+            "fit_merge": bool(self.fit_merge_var.get()),
             "quant_rsf": self.quant_panel.rsf_choice(),
             "quant_transmission": bool(self.quant_panel.view.transmission),
             "quant_casa": bool(self.quant_panel.view.casa_numbers),
@@ -4303,6 +4325,9 @@ class Workspace:
             for k, v in self.fit_vars.items():
                 if isinstance(fs.get(k), bool):
                     v.set(fs[k])
+        # a figure saved before the choice existed drew every component, so a
+        # missing key is "off", never whatever the live window has now
+        self.fit_merge_var.set(bool(st.get("fit_merge", False)))
         if isinstance(st.get("csv_curves"), bool):
             self.csv_curves_var.set(st["csv_curves"])
         self._refresh_csv_curves_availability()   # open_workbook re-matches

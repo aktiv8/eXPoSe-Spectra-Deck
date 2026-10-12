@@ -752,7 +752,8 @@ class TestPage(unittest.TestCase):
         # +4_000: the spin-orbit merge and the photon-reach rule in V.candidates
         # +30_000: the Image maps tab (Kratos imaging maps: blur, sharpness,
         # series, canvas drawing and controls) in viewer.js
-        self.assertLess(len(page), 187_000 + raw)     # far below plain JSON
+        # +2_000: colour by CasaXPS INDEX and the merge of INDEX groups
+        self.assertLess(len(page), 189_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR
@@ -1178,9 +1179,35 @@ class TestJavaScript(unittest.TestCase):
                             [0, 1, 2, 3, 4, 5, 6], [7, -1, 0, -1],
                             [-1, 5, -1, 5], [])
                  for n in (1, 2, 6, 7)]
+        # what casafit.drawn_components makes of the same curves, to be matched
+        # by V.drawnCurves (None = NaN, the point is outside the fit region)
+        from types import SimpleNamespace
+        nan = float("nan")
+        merges = []
+        for ix, vals in (
+                ([0, 0, 1, -1, 0], [[1, 2, nan, 4], [0.5, nan, 3, 1],
+                                    [7, 7, 7, 7], [1, 1, 1, 1],
+                                    [nan, 1, 2, nan]]),
+                ([-1, -1], [[1, 2], [3, 4]]),
+                ([2, 2, 2], [[1, 1], [2, 2], [4, 4]]),
+                ([3, 1, 3, 1], [[1, 1], [2, 2], [4, 4], [8, 8]])):
+            fcs = [casafit.FitComponent(name=f"c{k}", index=i, region="R",
+                                        group="G" if i >= 0 else "")
+                   for k, i in enumerate(ix)]
+            pos = {id(c): k for k, c in enumerate(fcs)}
+            cv = SimpleNamespace(region="R", components=list(zip(fcs, vals)))
+            ents = casafit.drawn_components(cv, 6, merge=True)
+            merges.append({
+                "indexes": ix,
+                "curves": [[None if x != x else x for x in v] for v in vals],
+                "expect": [{"j": pos[id(e["first_comp"])],
+                            "members": [pos[id(m)] for m in e["members"]],
+                            "values": [None if x != x else x
+                                       for x in e["values"]]} for e in ents]})
         return {"quant": qx, "payload_b64": hb.encode_payload(payload), "csv": text,
                 "states": [{"gk": c["gk"], "name": c["state"]} for c in comps],
                 "slot_cases": cases, "state_slots": states,
+                "merge_cases": merges,
                 "row_region": row_region}
 
     def iss_fixture(self):

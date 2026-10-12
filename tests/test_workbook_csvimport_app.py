@@ -141,6 +141,7 @@ class TestCsvImportAndQuantRsfPersistence(unittest.TestCase):
                         casacsv.summarise(report))
         self.assertTrue(ws._any_csv_curves())
         ws.csv_curves_var.set(True)
+        ws.fit_merge_var.set(True)
         ws.quant_panel.rsf_var.set(quant_ui.RSF_LABELS["scofield"])
         self.assertEqual(len(ws.casa_csv_imports), 1)
 
@@ -156,6 +157,7 @@ class TestCsvImportAndQuantRsfPersistence(unittest.TestCase):
         self.assertIsNot(ws2.docs[0].regions[0], ws.docs[0].regions[0])
         self.assertTrue(ws2._any_csv_curves())
         self.assertTrue(ws2.csv_curves_var.get())
+        self.assertTrue(ws2.fit_merge_var.get())
         self.assertEqual(len(ws2.casa_csv_imports), 1)
         self.assertEqual(ws2.quant_panel.rsf_choice(), "scofield")
 
@@ -170,6 +172,7 @@ class TestCsvImportAndQuantRsfPersistence(unittest.TestCase):
         ws2.open_workbook(path)
         self.assertFalse(ws2._any_csv_curves())
         self.assertFalse(ws2.csv_curves_var.get())
+        self.assertFalse(ws2.fit_merge_var.get())
         self.assertEqual(ws2.casa_csv_imports, [])
         self.assertEqual(ws2.quant_panel.rsf_choice(), "off")
 

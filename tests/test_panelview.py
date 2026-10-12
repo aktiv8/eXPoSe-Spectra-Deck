@@ -139,6 +139,36 @@ class TestArrange(unittest.TestCase):
         self.assertEqual(rs, [1, 2, 3])
 
 
+class TestFitMerge(unittest.TestCase):
+    """``fit_merge``: draw each INDEX group as one component (a bool key)."""
+
+    def test_only_a_bool_is_kept(self):
+        self.assertEqual(pv.sanitise({"fit_merge": True}), {"fit_merge": True})
+        self.assertEqual(pv.sanitise({"fit_merge": False}),
+                         {"fit_merge": False})      # off can override an on
+        self.assertEqual(pv.sanitise({"fit_merge": "yes"}), {})
+        self.assertEqual(pv.sanitise({"fit_merge": 1}), {})
+
+    def test_resolve_puts_the_override_over_the_page_default(self):
+        page = dict(DEFAULTS, fit_merge=False)
+        self.assertTrue(pv.resolve(page, {"fit_merge": True})["fit_merge"])
+        self.assertTrue(
+            pv.resolve(dict(page, fit_merge=True), {})["fit_merge"])
+        self.assertFalse(pv.resolve(dict(page, fit_merge=True),
+                                    {"fit_merge": False})["fit_merge"])
+
+    def test_with_value_sets_one_panels_choice(self):
+        out = pv.with_value({}, "A", "fit_merge", True)
+        self.assertEqual(out, {"A": {"fit_merge": True}})
+
+    def test_describe_says_so(self):
+        self.assertIn("INDEX groups merged",
+                      pv.describe({"fit_merge": True}, DEFAULTS))
+        self.assertIn("drawn separately",
+                      pv.describe({"fit_merge": False}, DEFAULTS))
+        self.assertNotIn("INDEX", pv.describe({"view": "Heatmap"}, DEFAULTS))
+
+
 class TestDescribe(unittest.TestCase):
     def test_empty_override_says_nothing(self):
         self.assertEqual(pv.describe({}, DEFAULTS), "")

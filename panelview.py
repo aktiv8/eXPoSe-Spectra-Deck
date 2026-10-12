@@ -15,7 +15,7 @@ NORMS = ("None", "Max = 1", "Area = 1", "At cursor")
 FIT_LAYERS = ("components", "envelope", "background")
 IDENT_LAYERS = ("secondary", "auger")
 KEYS = ("view", "norm", "offset", "z_axis", "reverse", "fit_show",
-        "ident_show")
+        "fit_merge", "ident_show")
 OFFSET_RANGE = (0.0, 3.0)
 
 
@@ -37,6 +37,8 @@ def sanitise(d):
         out["z_axis"] = d["z_axis"]
     if isinstance(d.get("reverse"), bool):
         out["reverse"] = d["reverse"]
+    if isinstance(d.get("fit_merge"), bool):    # INDEX groups drawn as one
+        out["fit_merge"] = d["fit_merge"]
     v = d.get("offset")
     if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v:
         lo, hi = OFFSET_RANGE
@@ -128,6 +130,9 @@ def describe(override, defaults=None):
         parts.append(f"offset {ov['offset']:g}×")
     if ov.get("reverse"):
         parts.append("reversed")
+    if "fit_merge" in ov:
+        parts.append("INDEX groups merged" if ov["fit_merge"]
+                     else "INDEX groups drawn separately")
     if view == "Fit":
         on = [k for k in FIT_LAYERS if look.get("fit_show", {}).get(k, True)]
         if len(on) < len(FIT_LAYERS):

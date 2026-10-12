@@ -64,6 +64,14 @@ class TestHelpers(unittest.TestCase):
         self.assertIn("Stack", pptx_export.look_notes({}))
         self.assertNotIn("own view", pptx_export.look_notes({}))
 
+    def test_look_notes_say_when_components_are_merged_by_index(self):
+        self.assertIn("merged by CasaXPS INDEX",
+                      pptx_export.look_notes({"fit_merge": True}))
+        self.assertNotIn("INDEX", pptx_export.look_notes({}))
+        text = pptx_export.look_notes({
+            "panel_views": {"C 1s": {"view": "Fit", "fit_merge": True}}})
+        self.assertIn("C 1s: Fit, INDEX groups merged", text)
+
     def test_look_notes_name_panels_with_their_own_view(self):
         text = pptx_export.look_notes({
             "view_mode": "Stack", "z_axis": "Auto",

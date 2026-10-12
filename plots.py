@@ -472,7 +472,11 @@ def draw_fit(ax, x, fit, scale, muted, accent):
     The legend names a state by its group tag, unless that is only the
     region's label, then by its first component (``casafit.state_name``).
     The residual RMS of each curve with one to show (see
-    ``casafit.Curves.residual_rms``) is noted in the top-right corner."""
+    ``casafit.Curves.residual_rms``) is noted in the top-right corner.
+
+    ``fit["merge"]`` draws each INDEX group as one component -- the sum of
+    its members, a single outline (``casafit.drawn_components``); the
+    visible-floor clip below then applies to the merged peak."""
     import casafit
     show = fit.get("show", {})
     cols = fit.get("colours") or ["#888888"]
@@ -484,14 +488,13 @@ def draw_fit(ax, x, fit, scale, muted, accent):
             ax.plot(x, base, color=muted, lw=1.0, ls="--", zorder=2.2)
         if show.get("components"):
             region = (cv.region or "").strip()
-            idxs = [c.index for c, _v in cv.components]
-            slots = casafit.colour_slots(idxs, len(cols))
-            keys = casafit.state_keys(idxs)
-            for (comp, vals), slot, sk in zip(cv.components, slots, keys):
-                key = (region.lower(),) + sk
-                col = cols[slot % len(cols)]
+            for ent in casafit.drawn_components(cv, len(cols),
+                                                bool(fit.get("merge"))):
+                key = (region.lower(),) + ent["key"]
+                vals = ent["values"]
+                col = cols[ent["slot"] % len(cols)]
                 if key not in names:
-                    names[key] = (col, casafit.state_name(comp, region))
+                    names[key] = (col, ent["name"])
                     # where the component peaks on this panel: told apart in
                     # the legend from another that shares its text
                     top_i = max(range(len(vals)), key=lambda i: (

@@ -725,6 +725,73 @@ class TestFitLegend(unittest.TestCase):
         self.assertEqual(fills[0], fills[2])
         self.assertEqual(len(texts), 3)          # legend still tells them apart
 
+    def draw(self, lines, merge, cols=None, show=None):
+        fit = casafit.parse(lines)
+        be, counts = model_data(fit, HV, 0.27, 25)
+        cvs = casafit.curves(fit, be, counts, HV, 0.27, 25)
+        ax = Figure().add_subplot()
+        plots.draw_fit(ax, be, {"curves": cvs, "colours": cols or self.COLS,
+                                "show": show or {"components": True},
+                                "merge": merge}, 1.0, "grey", "red")
+        return ax, cvs
+
+    def test_merging_draws_one_outline_per_index_group(self):
+        lines = self.index_lines("C 1s", [0, 0, 0, 1])
+        sep, _ = self.draw(lines, False)
+        mrg, cvs = self.draw(lines, True)
+        self.assertEqual(len(sep.lines), 4)
+        self.assertEqual(len(mrg.lines), 2)
+        self.assertEqual(len(mrg.collections), 2)
+        # the merged outline is the background plus the sum of the members
+        cv = cvs[0]
+        top = list(mrg.lines[0].get_ydata())
+        n = 0
+        for i, t in enumerate(top):
+            want = cv.background[i] + sum(v[i] for _c, v in cv.components[:3])
+            if t == t and want == want:
+                n += 1
+                self.assertAlmostEqual(t, want, 6)
+        self.assertGreater(n, 5)
+
+    def test_merging_changes_neither_legend_nor_colours(self):
+        lines = self.index_lines("C 1s", [0, 0, 1])
+        a = self.fills(lines, self.COLS)
+        ax, _cvs = self.draw(lines, True)
+        b = ([tuple(c.get_facecolor()[0]) for c in ax.collections],
+             [t.get_text() for t in ax.get_legend().get_texts()])
+        self.assertEqual(a[1], b[1])
+        self.assertEqual(a[0][0], b[0][0])
+        self.assertEqual(a[0][2], b[0][1])
+
+    def test_ungrouped_components_are_drawn_whether_or_not_merging(self):
+        lines = self.index_lines("C 1s", [-1, -1, -1])
+        ax, _c = self.draw(lines, True)
+        self.assertEqual(len(ax.lines), 3)
+
+    def test_the_envelope_and_background_are_not_merged(self):
+        lines = self.index_lines("C 1s", [0, 0])
+        every = {"components": True, "envelope": True, "background": True}
+        a, _ = self.draw(lines, False, show=every)
+        b, _ = self.draw(lines, True, show=every)
+        # background + 2 components + envelope  vs  background + 1 + envelope
+        self.assertEqual(len(a.lines), 4)
+        self.assertEqual(len(b.lines), 3)
+        np.testing.assert_array_equal(a.lines[-1].get_ydata(),
+                                      b.lines[-1].get_ydata())
+
+    def test_the_visible_floor_applies_to_the_merged_peak(self):
+        """Merged, the clip is 1 % of the merged peak, not of each member."""
+        lines = self.index_lines("C 1s", [0, 0])
+        ax, cvs = self.draw(lines, True)
+        cv = cvs[0]
+        total = [a + b for a, b in zip(cv.components[0][1], cv.components[1][1])
+                 if a == a and b == b]
+        floor = 0.01 * max(abs(v) for v in total)
+        shown = [t - cv.background[i]
+                 for i, t in enumerate(ax.lines[0].get_ydata()) if t == t]
+        self.assertTrue(shown)
+        self.assertTrue(all(abs(v) >= floor - 1e-9 for v in shown))
+
     def test_residual_rms_is_noted_on_the_panel(self):
         fit = casafit.parse(CASA)
         be, counts = model_data(fit, HV, 0.27, 25)

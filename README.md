@@ -555,8 +555,13 @@ comments (regions, backgrounds, components, INDEX chemical-state groups, the
 panel that holds **one spectrum**: tick *Components*, *Envelope* and/or
 *Background* in the **Fit** row under the plot controls. A depth profile keeps
 one fit per level (each block its own), so stepping through levels shows each
-level's fit where it has one. Components that share an INDEX are one chemical
-state and one colour.
+level's fit where it has one. Components are coloured by their CasaXPS INDEX:
+INDEX 0 is the same colour in every region and report, and components that share
+an INDEX are one chemical state and one colour (an ungrouped component gets a
+colour of its own). Tick **Merge INDEX groups** (or right-click a panel ▸ Fit
+layers ▸ Merge INDEX groups) to draw each INDEX group as a single component, the
+outline of the sum of its peaks, so a state made of several peaks reads as one
+shape; the table, the quantification and the exports still list every peak.
 
 * **Charge correction carried over.** CasaXPS records its binding-energy
   correction in each block as `Calib M = 281.7289 A = 282 BE ADD` (measured

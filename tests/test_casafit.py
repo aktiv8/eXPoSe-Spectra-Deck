@@ -1713,5 +1713,70 @@ class TestColourSlots(unittest.TestCase):
                              (idx, grp, region))
 
 
+class TestDrawnComponents(unittest.TestCase):
+    """Merging the components of an INDEX group is display only."""
+
+    @staticmethod
+    def cv(indexes, vals, region="C 1s"):
+        comps = [(casafit.FitComponent(name=f"{region} c{k}", index=ix,
+                                       group="Metal" if ix >= 0 else "",
+                                       region=region), v)
+                 for k, (ix, v) in enumerate(zip(indexes, vals))]
+        return casafit.Curves(region=region, background_type="Linear",
+                              background=[10.0] * 4, components=comps,
+                              envelope=None, approximate=False,
+                              scale_known=True)
+
+    NAN = float("nan")
+
+    def test_without_merge_every_component_is_its_own_entry(self):
+        cv = self.cv([0, 0, -1], [[1, 2, 3, 4], [1, 1, 1, 1], [0, 1, 0, 1]])
+        ents = casafit.drawn_components(cv, 6)
+        self.assertEqual([e["values"] for e in ents], [v for _c, v in
+                                                       cv.components])
+        self.assertEqual([e["slot"] for e in ents], [0, 0, 1])
+        self.assertEqual([len(e["members"]) for e in ents], [1, 1, 1])
+
+    def test_merge_sums_the_members_of_an_index_group(self):
+        cv = self.cv([0, 1, 0, 0], [[1, 2, 3, 4], [5, 5, 5, 5],
+                                    [1, 1, 1, 1], [0, 0, 1, 1]])
+        ents = casafit.drawn_components(cv, 6, merge=True)
+        self.assertEqual(len(ents), 2)                  # INDEX 0 and INDEX 1
+        self.assertEqual(ents[0]["values"], [2, 3, 5, 6])
+        self.assertEqual(ents[0]["members"], [cv.components[0][0],
+                                              cv.components[2][0],
+                                              cv.components[3][0]])
+        self.assertEqual(ents[1]["values"], [5, 5, 5, 5])
+        self.assertEqual([e["slot"] for e in ents], [0, 1])
+        self.assertEqual(ents[0]["name"], "Metal")
+
+    def test_ungrouped_components_and_groups_of_one_are_never_merged(self):
+        cv = self.cv([-1, -1, 4], [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]])
+        ents = casafit.drawn_components(cv, 6, merge=True)
+        self.assertEqual([e["values"] for e in ents],
+                         [[1, 1, 1, 1], [2, 2, 2, 2], [3, 3, 3, 3]])
+
+    def test_merging_keeps_the_region_mask_and_the_inputs(self):
+        n = self.NAN
+        cv = self.cv([2, 2], [[n, 1.0, 2.0, n], [n, 2.0, 3.0, n]])
+        ents = casafit.drawn_components(cv, 6, merge=True)
+        vals = ents[0]["values"]
+        self.assertTrue(vals[0] != vals[0] and vals[3] != vals[3])
+        self.assertEqual(vals[1:3], [3.0, 5.0])
+        self.assertEqual(cv.components[0][1][1], 1.0)   # the curves are untouched
+
+    def test_entries_come_in_order_of_first_appearance(self):
+        cv = self.cv([3, 1, 3, 1], [[1] * 4, [2] * 4, [4] * 4, [8] * 4])
+        ents = casafit.drawn_components(cv, 6, merge=True)
+        self.assertEqual([e["values"][0] for e in ents], [5, 10])
+        self.assertEqual([e["slot"] for e in ents], [3, 1])
+
+    def test_a_nan_in_one_member_does_not_hide_the_others(self):
+        n = self.NAN
+        cv = self.cv([0, 0], [[1.0, n, 3.0, 4.0], [1.0, 2.0, n, 4.0]])
+        vals = casafit.drawn_components(cv, 6, merge=True)[0]["values"]
+        self.assertEqual(vals, [2.0, 2.0, 3.0, 8.0])
+
+
 if __name__ == "__main__":
     unittest.main()

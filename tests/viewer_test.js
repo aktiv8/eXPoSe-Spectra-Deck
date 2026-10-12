@@ -187,6 +187,24 @@ function near(a, b, msg, tol) {
     for (const c of fx.fit.slot_cases) {
       eq(V.fitSlots(c.indexes, c.n), c.slots, 'fitSlots(' + JSON.stringify(c.indexes) + ', ' + c.n + ') matches casafit.colour_slots');
     }
+    // merging the components of an INDEX group: the same sums as casafit.drawn_components
+    for (const c of fx.fit.merge_cases) {
+      const comps = c.indexes.map((i) => ({ index: i }));
+      const got = V.drawnCurves(comps, c.curves, true, null);
+      eq(got.map((e) => ({ j: e.j, members: e.members, values: e.values })), c.expect,
+         'drawnCurves merges ' + JSON.stringify(c.indexes) + ' like casafit.drawn_components');
+      const plain = V.drawnCurves(comps, c.curves, false, null);
+      eq(plain.map((e) => e.values), c.curves, 'without merge every component is drawn on its own');
+      eq(plain.map((e) => e.members.length), c.curves.map(() => 1), 'one member each without merge');
+    }
+    {
+      const comps = [{ index: 0 }, { index: 0 }, { index: 0 }, { index: -1 }];
+      const curves = [[1, 1], [2, 2], null, [5, 5]];
+      eq(V.drawnCurves(comps, curves, true, (j) => j === 1).map((e) => e.values), [[1, 1], [5, 5]],
+         'a component the user unticked is left out of the merged sum');
+      eq(V.drawnCurves(comps, curves, true, null).map((e) => e.members), [[0, 1], [3]],
+         'a component with no curve is skipped, an ungrouped one stands alone');
+    }
     for (const n of Object.keys(fx.fit.state_slots)) {
       eq(V.fitStates(fspecs[0].reg, +n).map((x) => x.name + '|' + x.slot),
          fx.fit.state_slots[n].map((x) => x.name + '|' + x.slot), 'chemical states and their INDEX slots for a palette of ' + n);

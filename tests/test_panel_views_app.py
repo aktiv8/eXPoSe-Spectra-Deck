@@ -246,6 +246,39 @@ class TestPanelViewsInApp(unittest.TestCase):
         self.ws.reset_panel_views()
         self.assertEqual(self.ws.panel_views, {})
 
+    def test_fit_merge_is_a_per_panel_choice(self):
+        depth, bulk = self.keys
+        self.ws._set_panel_view(depth, "fit_merge", True)
+        self.assertEqual(self.ws.panel_views, {depth: {"fit_merge": True}})
+        self.assertTrue(self.ws._look_for(depth)["fit_merge"])
+        self.assertFalse(self.ws._look_for(bulk)["fit_merge"])
+
+    def test_fit_merge_round_trips_and_a_missing_key_is_off(self):
+        """CLAUDE.md: a saved figure applies its own state, so one saved
+        before the choice existed must not inherit the live window's."""
+        self.addCleanup(self.ws.fit_merge_var.set, False)
+        self.ws.fit_merge_var.set(True)
+        st = self.ws.capture_state()
+        self.assertIs(st["fit_merge"], True)
+        self.ws.fit_merge_var.set(False)
+        self.ws.apply_state(st, render=False)
+        self.assertTrue(self.ws.fit_merge_var.get())
+        old = {k: v for k, v in st.items() if k != "fit_merge"}
+        self.ws.apply_state(old, render=False)
+        self.assertFalse(self.ws.fit_merge_var.get())
+        # drawing a saved figure leaves the live choice as it was
+        self.ws.fit_merge_var.set(True)
+        with self.ws._temp_state(old):
+            self.assertFalse(self.ws.fit_merge_var.get())
+        self.assertTrue(self.ws.fit_merge_var.get())
+
+    def test_fit_merge_is_part_of_the_page_look_and_the_signature(self):
+        self.addCleanup(self.ws.fit_merge_var.set, False)
+        before = self.ws._signature()
+        self.ws.fit_merge_var.set(True)
+        self.assertTrue(self.ws._page_defaults()["fit_merge"])
+        self.assertNotEqual(before, self.ws._signature())
+
     def test_menu_edits_ident_show_per_panel(self):
         depth, _bulk = self.keys
         self.ws._set_panel_view(depth, "ident_show", ("secondary", True))

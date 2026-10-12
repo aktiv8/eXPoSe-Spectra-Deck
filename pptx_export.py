@@ -140,10 +140,14 @@ def look_notes(state):
                 "offset": st.get("offset", 0.6),
                 "z_axis": st.get("z_axis", "Auto"),
                 "reverse": bool(st.get("reverse")),
-                "fit_show": st.get("fit_show") or {}}
+                "fit_show": st.get("fit_show") or {},
+                "fit_merge": bool(st.get("fit_merge"))}
     own = [f"{label}: {panelview.describe(ov, defaults)}"
            for label, ov in panelview.sanitise_all(
                st.get("panel_views")).items()]
+    if st.get("fit_merge"):
+        text += ("\nFitted components are merged by CasaXPS INDEX (one "
+                 "outline per chemical state).")
     if own:
         text += "\nPanels with their own view: " + "; ".join(own) + "."
     if ticked:

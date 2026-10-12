@@ -234,7 +234,7 @@
      and, per row, curves from the region's first point on (`i0`): background,
      envelope and one curve per component, in the spectrum's own counts. The
      numbers were worked out by the desktop app; the page only draws them. */
-  V.FIT_LAYERS = ['components', 'envelope', 'background', 'residual'];
+  V.FIT_LAYERS = ['components', 'envelope', 'background', 'residual', 'merge'];
   V.curveFull = function (cur, curve, n) {      /* a curve on every point, null outside */
     if (!cur || !curve) return null;
     var out = new Array(n);
@@ -284,6 +284,30 @@
         var key = String(row.region || '').toLowerCase() + '|' + (c.index !== null && c.index !== undefined && c.index >= 0 ? 'i' + c.index : 'c' + j);
         if (!(key in seen)) { seen[key] = out.length; out.push({ key: key, name: c.state, slot: slots[j] }); }
       });
+    });
+    return out;
+  };
+  /* what to draw for the components of one fit row: one entry per component
+     or, with merge, one per CasaXPS INDEX group (INDEX >= 0), the members'
+     curves summed into one outline (mirrors casafit.drawn_components; display
+     only, the table and the exports keep every component). `comps` are the
+     per-component curves (null: nothing to draw), `hidden(j)` says whether the
+     user unticked component j (a hidden member is left out of the sum).
+     Returns [{j: first member, members: [j...], values}] in order. */
+  V.drawnCurves = function (components, comps, merge, hidden) {
+    var out = [], at = {};
+    comps.forEach(function (cv, j) {
+      if (!cv || (hidden && hidden(j))) return;
+      var c = components[j], ix = c ? c.index : null;
+      var grouped = merge && ix !== null && ix !== undefined && ix >= 0;
+      if (grouped && (ix in at)) {
+        var e = out[at[ix]];
+        e.members.push(j);
+        e.values = e.values.map(function (a, k) { var b = cv[k]; return a === null ? b : b === null ? a : a + b; });
+        return;
+      }
+      if (grouped) at[ix] = out.length;
+      out.push({ j: j, members: [j], values: cv.slice() });
     });
     return out;
   };
@@ -1170,7 +1194,7 @@
             norm: 'none', offset: 0.6, scale: 'Binding', iss: 'kinetic', levelOn: false, levelIdx: 0, levels: [],
             panels: new Map(), theme: 'auto', printing: false, nodes: [], holderIdx: 0,
             holderHot: null, tab: 'plot', filter: '', camIdx: 0, mapById: {}, camById: {},
-            fit: { components: true, envelope: true, background: true, residual: false, hidden: {} },
+            fit: { components: true, envelope: true, background: true, residual: false, merge: false, hidden: {} },
             q: { include: {}, seeded: {}, transmission: false, level: {}, rsfLibrary: '' },
             d: { sample: null, mode: 'element', axis: null, last: null },
             ident: { on: false, win: 2, auto: false, secondary: false, auger: false, split: false,
@@ -1937,9 +1961,8 @@
         strokeCurve(ctx, xs, fr.bg, X, Y); ctx.setLineDash([]);
       }
       if (S.fit.components) {
-        fr.comps.forEach(function (cv, j) {
-          if (!cv || S.fit.hidden[fr.ri + ':' + j]) return;
-          var col = rcol[j] || '#888888';
+        V.drawnCurves(fr.row.components, fr.comps, S.fit.merge, function (j) { return S.fit.hidden[fr.ri + ':' + j]; }).forEach(function (e) {
+          var cv = e.values, col = rcol[e.j] || '#888888';
           var lo = fr.bg || zero, top = cv.map(function (v, k) { return v === null || lo[k] === null ? null : lo[k] + v; });
           ctx.fillStyle = col; ctx.globalAlpha = 0.35; fillBetween(ctx, xs, top, lo, X, Y); ctx.globalAlpha = 1;
           ctx.strokeStyle = col; ctx.lineWidth = 1; strokeCurve(ctx, xs, top, X, Y);
