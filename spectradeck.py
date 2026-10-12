@@ -119,6 +119,7 @@ import rsf as rsf_lib
 import xpslines
 import report
 import reportspec
+import screenfit
 import resultspages
 import reportgen_ui
 import pptx_export
@@ -461,37 +462,7 @@ class CalibrationPanel(ttk.LabelFrame):
             self._show()
 
 
-def _monitor_bounds(widget, x, y):
-    """``(left, top, right, bottom)`` of the monitor holding the screen point
-    ``(x, y)`` (the nearest one if it is on none). Windows asks the system,
-    which knows every monitor; elsewhere, and if that fails, the whole
-    virtual screen Tk reports."""
-    if sys.platform == "win32":
-        try:
-            import ctypes
-            from ctypes import wintypes
-
-            class MonitorInfo(ctypes.Structure):
-                _fields_ = [("cbSize", wintypes.DWORD),
-                            ("rcMonitor", wintypes.RECT),
-                            ("rcWork", wintypes.RECT),
-                            ("dwFlags", wintypes.DWORD)]
-            user32 = ctypes.windll.user32
-            user32.MonitorFromPoint.argtypes = [wintypes.POINT, wintypes.DWORD]
-            user32.MonitorFromPoint.restype = wintypes.HANDLE
-            user32.GetMonitorInfoW.argtypes = [wintypes.HANDLE,
-                                               ctypes.POINTER(MonitorInfo)]
-            mon = user32.MonitorFromPoint(wintypes.POINT(int(x), int(y)), 2)
-            info = MonitorInfo()
-            info.cbSize = ctypes.sizeof(MonitorInfo)
-            if mon and user32.GetMonitorInfoW(mon, ctypes.byref(info)):
-                r = info.rcMonitor
-                return r.left, r.top, r.right, r.bottom
-        except Exception:
-            pass
-    vx, vy = widget.winfo_vrootx(), widget.winfo_vrooty()
-    return (vx, vy, vx + max(widget.winfo_vrootwidth(), 1),
-            vy + max(widget.winfo_vrootheight(), 1))
+_monitor_bounds = screenfit.monitor_bounds      # tests replace this name
 
 
 class Tooltip:
@@ -6447,7 +6418,7 @@ class ExportDialog(tk.Toplevel):
         super().__init__(master)
         self.app = app
         self.title("Export data")
-        self.geometry("470x640")
+        screenfit.place_dialog(self, master, 470, 640)
         self.transient(master)
         self.grab_set()
 

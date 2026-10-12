@@ -9,6 +9,7 @@ import webbrowser
 from tkinter import ttk
 
 import appinfo
+import screenfit
 
 PICTURE_SIDE = 220          # px: the longest side of the picture shown
 
@@ -91,10 +92,8 @@ class AboutDialog(tk.Toplevel):
         app.themes.recolor_tk(self)
         self.link.configure(fg=pal["accent"], bg=pal["bg"])
         self.update_idletasks()
-        w, h = self.winfo_reqwidth(), self.winfo_reqheight()
-        x = master.winfo_rootx() + max(0, (master.winfo_width() - w) // 2)
-        y = master.winfo_rooty() + max(0, (master.winfo_height() - h) // 3)
-        self.geometry(f"+{x}+{y}")
+        screenfit.place_dialog(self, master, self.winfo_reqwidth(),
+                               self.winfo_reqheight())
         self.copy_btn.focus_set()
 
     def copy_info(self):

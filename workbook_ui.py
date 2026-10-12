@@ -15,18 +15,17 @@ import appinfo
 import importplan
 import panelview
 import plotstyle
+import screenfit
 import workbook as wbk
 
 
 def _finish(dialog, app, width, height):
-    """Theme a dialog like the main window and centre it over it."""
+    """Theme a dialog like the main window and centre it over it, no bigger
+    than its monitor can show and wholly on it (``screenfit``)."""
     dialog.configure(bg=app.palette["bg"])
     app.themes.recolor_tk(dialog)
     dialog.update_idletasks()
-    root = app.root
-    x = root.winfo_rootx() + max(0, (root.winfo_width() - width) // 2)
-    y = root.winfo_rooty() + max(0, (root.winfo_height() - height) // 3)
-    dialog.geometry(f"{width}x{height}+{x}+{y}")
+    screenfit.place_dialog(dialog, app.root, width, height)
 
 
 def keep_in_front(dialog, master):
