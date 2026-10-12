@@ -513,8 +513,9 @@ def build_chapters(doc):
         ("Offset", "The gap between stacked traces (0 overlays them). Reverse stack "
          "flips the order."),
         ("View", "Stack (the default); Waterfall 3D (a rotatable 3-D plot); "
-         "Heatmap (intensity as colour, with a colour bar); or Fit (one trace "
-         "with its CasaXPS fit forced on, Chapter 20)."),
+         "Heatmap (intensity as colour, with a colour bar); Fit (one trace "
+         "with its CasaXPS fit forced on, Chapter 20); or Fit stack (up to eight "
+         "traces, each with its own fit, offset like a stack)."),
         ("Z axis", "What the trace axis shows in a waterfall or heatmap: Auto (etch "
          "time, else etch level, else acquisition time, else trace order), or pick one."),
         ("Colour", "Theme default, or a named scale (Viridis, Plasma, Magma, …) "
@@ -1035,7 +1036,11 @@ def build_chapters(doc):
         "the regions you ticked or unticked in the Quantification tab, and the "
         "reader can change them. Fits are drawn on single-spectrum panels "
         "(components, envelope, background and a residual band) with a "
-        "per-component table. When you imported a CasaXPS CSV export "
+        "per-component table; components are coloured by their CasaXPS INDEX, "
+        "a “Merge INDEX groups” box draws each group as one outline, and a "
+        "“Fits on stacks” box draws each trace's own fit on a stack of up to "
+        "eight spectra (the table and residual stay with the "
+        "one-spectrum panel). When you imported a CasaXPS CSV export "
         "(Chapter 20), a “CasaXPS exported curves” box, ticked by default, "
         "switches the plot, tables, quantification and CSVs between CasaXPS’s "
         "own curves and the reconstruction. An Identify peaks mode lists the "
@@ -1123,6 +1128,42 @@ def build_chapters(doc):
         "the Fit row under the plot controls. A depth profile keeps one fit "
         "per level."
     )
+    h2(doc, "Colours, merged groups and stacked fits")
+    para(doc,
+        "Components are coloured by their CasaXPS INDEX, the number CasaXPS "
+        "gives a chemical-state group. INDEX 0 is the same colour in every "
+        "region, file, report and theme, and components that share an INDEX "
+        "are one chemical state: one colour and one legend entry, whatever "
+        "group name CasaXPS gave them (most files name every group after the "
+        "region). A component with no INDEX group is its own state and gets a "
+        "colour of its own; with more groups than the palette has colours, "
+        "colours repeat and the legend tells them apart (the status bar says "
+        "so)."
+    )
+    para(doc,
+        "A state built from several peaks, such as a doublet or a shake-up "
+        "structure, can be drawn as one component: tick Merge INDEX groups in "
+        "the Fit row (or right-click a panel, Fit layers, Merge INDEX groups, "
+        "for that panel alone). Each INDEX group is then drawn as the outline of "
+        "the sum of its peaks. Only the drawing changes: the fit table, the "
+        "areas, the quantification and the exports still list every peak, and "
+        "components with no INDEX group are never merged."
+    )
+    para(doc,
+        "To compare fits across a depth profile, or several refits of the same "
+        "region, choose View, Fit stack. Each trace is drawn with its own fit, "
+        "offset and normalised like its data, up to eight at a time (the "
+        "Traces slider moves the window along a longer group, and a report "
+        "shows the first window); one legend names the chemical states of the "
+        "whole panel. A spectrum without a fit is drawn plain and the status "
+        "bar says how many have none. The data are drawn in a single colour so "
+        "they do not clash with the state colours, unless you pick a colour "
+        "scale. The offline data browser has the same through its Fits on "
+        "stacks box."
+    )
+    add_figure(doc, "A Fit stack of three depth levels. Left: every peak, coloured by its INDEX. "
+                    "Right: Merge INDEX groups draws the two O-C=O peaks (one INDEX) as one outline.",
+              image_path=os.path.join(FIGDIR, "fig_fitstack.png"))
     para(doc,
         "CasaXPS's own binding-energy charge correction is carried over "
         "automatically and appears in Details (“BE calibration "

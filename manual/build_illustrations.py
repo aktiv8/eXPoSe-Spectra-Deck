@@ -374,6 +374,71 @@ def fig_casafit():
 
 
 # ----------------------------------------------------------------------
+# 8b: a stack of fitted spectra (Fit stack), colour by INDEX, merged groups
+# ----------------------------------------------------------------------
+
+def fig_fitstack():
+    import casafit
+    import lineshapes as ls
+    import plots
+    import themes
+
+    hv = HV
+    lo_be, hi_be = 281.0, 292.0
+    n = 221
+    be = [hi_be - i * (hi_be - lo_be) / (n - 1) for i in range(n)]
+    ke = np.array([hv - b for b in be])
+    # (name, binding energy, FWHM, INDEX, group tag): the two carboxyl peaks
+    # are one chemical state (INDEX 2)
+    layout = [("C-C / C-H", 284.8, 1.1, 0, "C-C"),
+              ("C-O", 286.4, 1.2, 1, "C-O"),
+              ("O-C=O", 288.6, 1.0, 2, "O-C=O"),
+              ("O-C=O (2)", 289.5, 1.0, 2, "O-C=O")]
+    # peak areas at three depth levels: the oxide grows towards the surface
+    areas = [[7000.0, 900.0, 250.0, 180.0],
+             [5200.0, 1700.0, 800.0, 600.0],
+             [3000.0, 2300.0, 1500.0, 1100.0]]
+    regs, per_trace = [], []
+    for lvl, ar in enumerate(areas):
+        comps = [casafit.FitComponent(name=nm, shape="GL(30)", area=a,
+                                      fwhm=w, pos_ke=hv - b, index=ix,
+                                      group=tag, region="C 1s")
+                 for (nm, b, w, ix, tag), a in zip(layout, ar)]
+        fit_region = casafit.FitRegion(name="C 1s", background="Shirley",
+                                       start_ke=float(ke.min()),
+                                       end_ke=float(ke.max()))
+        fit = casafit.Fit(regions=[fit_region], components=comps)
+        peaks = sum(ls.component_curve(ke, c.shape, c.pos_ke, c.fwhm, c.area)
+                    for c in comps)
+        step = 120.0 + 260.0 / (1.0 + np.exp((np.array(be) - 284.8) / 0.5))
+        counts = (peaks + step).tolist()
+        reg = region("C 1s", sample="Depth profile", etch_level=lvl + 1,
+                     etch_time=30.0 * lvl, extra_energy=be, extra_counts=counts)
+        reg.fit = fit
+        regs.append(reg)
+        per_trace.append(casafit.curves(fit, be, counts, hv))
+    pal = themes.PALETTES["Light"]
+    fit_cols = list(pal["cycle"])[1:]
+    with matplotlib.rc_context(themes.mpl_rc(pal)):
+        fig = Figure(figsize=(11, 5.4), dpi=150)
+        for k, (merge, sub) in enumerate((
+                (False, "every peak, coloured by its INDEX"),
+                (True, "Merge INDEX groups: one outline per state"))):
+            ax = fig.add_subplot(1, 2, k + 1)
+            fit = {"curves": [c for one in per_trace for c in one],
+                   "per_trace": per_trace, "colours": fit_cols,
+                   "show": {"envelope": True, "components": True,
+                            "background": False}, "merge": merge}
+            plots.draw_stack(ax, regs, 0.62, "None", None,
+                             [pal["cycle"][0]] * len(regs), "C 1s", sub, (),
+                             False, first_col=(k == 0), fit=fit)
+        # the application reserves a gutter for the end labels; here we do
+        fig.subplots_adjust(left=0.05, right=0.93, bottom=0.12, top=0.92,
+                            wspace=0.3)
+        save_fig(fig, os.path.join(OUT, "fig_fitstack.png"))
+
+
+# ----------------------------------------------------------------------
 # 9: ISS peak identification
 # ----------------------------------------------------------------------
 
@@ -492,6 +557,7 @@ def main():
     fig_report_page()
     fig_quant_table()
     fig_casafit()
+    fig_fitstack()
     fig_iss()
     fig_reels()
     build_demo_browser_html()
