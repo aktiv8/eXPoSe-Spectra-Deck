@@ -16,6 +16,7 @@ import functools
 import tkinter as tk
 from tkinter import ttk
 
+import appinfo
 import externalapps
 import themes
 
@@ -179,6 +180,7 @@ class Ribbon(ttk.Frame):
             rb.pack(side="left")
             rb.bind("<Double-Button-1>", lambda e: self._set_collapsed(True))
             self.tab_buttons[name] = rb
+        self.fold_tip = None
         self.fold = ttk.Button(strip, style="Tool.TButton",
                                command=self._toggle_collapsed)
         self.fold.pack(side="right", padx=(0, 6))
@@ -187,7 +189,8 @@ class Ribbon(ttk.Frame):
                                 command=app.show_about)
         self.about.pack(side="right")
         self._track(self.about, "about", False)
-        app.tooltip(self.about, "About this program.")
+        app.tooltip(self.about, f"About {appinfo.NAME}\n"
+                                "Version, libraries and credits")
         self._launchers = []            # buttons for CasaXPS / KherveFitting
         self._launch_images = []        # PhotoImages must stay referenced
         self._strip = strip
@@ -250,9 +253,10 @@ class Ribbon(ttk.Frame):
                 b.configure(text=info["name"])
             b.pack(side="right", after=anchor, padx=(0, 2))
             b.bind("<Button-3>", lambda e, k=key: self._launcher_menu(e, k))
-            app.tooltip(b, f"{info['tip']}\n{path}" if path else
-                        f"{info['name']} was not found. Click to show where "
-                        f"{info['exe']} is (remembered).")
+            app.tooltip(b, f"{info['tip']}\n{externalapps.shorten_path(path)}"
+                        "\nRight-click: another copy, forget or hide" if path
+                        else f"{info['name']} was not found\nClick to choose "
+                             f"{info['exe']} (remembered)")
             self._launchers.append((b, img is not None))
             anchor = b
         self.refresh_icons()
@@ -384,8 +388,12 @@ class Ribbon(ttk.Frame):
             return
         name = "expand" if self.collapsed else "collapse"
         self.fold.configure(image=self.icons.get(name))
-        self.app.tooltip(self.fold, "Show the buttons" if self.collapsed
-                         else "Hide the buttons (double-click a tab)")
+        text = ("Show the ribbon buttons" if self.collapsed else
+                "Hide the ribbon buttons\nDouble-clicking a tab does the same")
+        if self.fold_tip is None:
+            self.fold_tip = self.app.tooltip(self.fold, text)
+        else:
+            self.fold_tip.set_text(text)
 
     def save_state(self, cfg):
         cfg["ribbon_tab"] = self.tab_var.get()

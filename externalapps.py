@@ -31,6 +31,24 @@ APPS = {
                       "hint": "khervefitting", "tip": "Open KherveFitting"},
 }
 
+def shorten_path(path, limit=48):
+    """``path`` cut in the middle to at most ``limit`` characters for a hover
+    hint: the drive (or share) and the last two parts stay, the rest becomes
+    ``…``. A path that fits is returned as it is."""
+    path = path or ""
+    if len(path) <= limit:
+        return path
+    sep = "\\" if "\\" in path else "/"
+    parts = path.split(sep)
+    n = 4 if path.startswith(sep * 2) else 1           # \\server\share
+    head = sep.join(parts[:n])
+    for keep in (2, 1):
+        out = f"{head}{sep}…{sep}{sep.join(parts[-keep:])}"
+        if len(out) <= limit:
+            return out
+    return "…" + out[-(limit - 1):]
+
+
 ICON_DIR = os.path.join(os.path.expanduser("~"), ".spectradeck_icons")
 _SKIP = ("unins", "uninstall", "setup", "update")
 _cache = {}

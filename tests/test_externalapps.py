@@ -122,6 +122,35 @@ class TestIcon(unittest.TestCase):
             self.assertEqual(again.tobytes(), img.tobytes())
 
 
+class TestShortenPath(unittest.TestCase):
+    def test_a_path_that_fits_is_unchanged(self):
+        self.assertEqual(ea.shorten_path("C:\\x\\CasaXPS.exe"),
+                         "C:\\x\\CasaXPS.exe")
+        self.assertEqual(ea.shorten_path(None), "")
+
+    def test_a_long_path_keeps_the_drive_and_the_end(self):
+        p = ("C:\\Program Files\\Some Long Vendor Name\\Spectra\\CasaXPS\\"
+             "CasaXPS 64bit\\CasaXPS.exe")
+        out = ea.shorten_path(p, 48)
+        self.assertLessEqual(len(out), 48)
+        self.assertTrue(out.startswith("C:\\…\\"))
+        self.assertTrue(out.endswith("CasaXPS 64bit\\CasaXPS.exe"))
+
+    def test_posix_and_share_paths(self):
+        out = ea.shorten_path("/opt/vendors/spectra/tools/casaxps/bin/casaxps",
+                              30)
+        self.assertLessEqual(len(out), 30)
+        self.assertTrue(out.startswith("/…/") and out.endswith("bin/casaxps"))
+        out = ea.shorten_path("\\\\server\\share\\a\\b\\c\\d\\CasaXPS.exe", 32)
+        self.assertLessEqual(len(out), 32)
+        self.assertTrue(out.startswith("\\\\server\\share\\…\\"))
+
+    def test_it_never_exceeds_the_limit(self):
+        p = "C:\\" + "x" * 80 + "\\" + "y" * 80 + ".exe"
+        for limit in (20, 48, 60):
+            self.assertLessEqual(len(ea.shorten_path(p, limit)), limit)
+
+
 try:
     import tkinter as tk
     import spectradeck as ee
@@ -207,6 +236,52 @@ class TestLauncherButtons(unittest.TestCase):
             self.assertTrue(all(not own for _b, own in ws.ribbon._launchers))
         finally:
             ws.ribbon.refresh_launchers()
+
+    def test_the_hover_hints_say_what_a_click_and_a_right_click_do(self):
+        ws = self.ws
+        tips = {}
+        orig = ws.tooltip
+
+        def spy(widget, text):
+            tips[widget] = text
+            return orig(widget, text)
+        long = "C:\\Program Files\\Some Long Vendor Name\\Spectra\\CasaXPS\\" \
+               "CasaXPS 64bit\\CasaXPS.exe"
+        with mock.patch.object(ws, "tooltip", spy), \
+                mock.patch.object(ws, "external_path", return_value=long):
+            ws.ribbon.refresh_launchers()
+        try:
+            found = [tips[b] for b, _own in ws.ribbon._launchers]
+            self.assertTrue(found and all(
+                t.startswith("Open ") and "Right-click" in t
+                and max(map(len, t.splitlines())) <= 48 + 8 for t in found),
+                found)
+        finally:
+            ws.ribbon.refresh_launchers()
+        with mock.patch.object(ws, "tooltip", spy), \
+                mock.patch.object(ws, "external_path", return_value=None):
+            ws.ribbon.refresh_launchers()
+        try:
+            self.assertTrue(all("was not found" in tips[b]
+                                for b, _own in ws.ribbon._launchers))
+        finally:
+            ws.ribbon.refresh_launchers()
+
+    def test_folding_the_ribbon_keeps_one_hint_on_the_button(self):
+        ribbon = self.ws.ribbon
+        if ribbon.icons is None:
+            self.skipTest("no icons: the fold button has no hint")
+        tip = ribbon.fold_tip
+        self.assertIsNotNone(tip)
+        was = ribbon.collapsed
+        try:
+            ribbon._set_collapsed(not was)
+            ribbon._set_collapsed(was)
+            ribbon._set_collapsed(not was)
+            self.assertIs(ribbon.fold_tip, tip)
+            self.assertIn("Show" if ribbon.collapsed else "Hide", tip.text)
+        finally:
+            ribbon._set_collapsed(was)
 
     def test_tools_menu_has_open_and_locate_for_both(self):
         import inspect

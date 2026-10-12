@@ -485,10 +485,32 @@ class Tooltip:
         tip.configure(bg=p["border"])
         tk.Label(tip, text=self.text, justify="left", padx=8, pady=4,
                  bg=p["panel"], fg=p["fg"], wraplength=300).pack(padx=1, pady=1)
-        x = self.widget.winfo_rootx()
-        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        tip.update_idletasks()
+        x, y = self._place(tip.winfo_reqwidth(), tip.winfo_reqheight())
         tip.wm_geometry(f"+{x}+{y}")
         self._tip = tip
+
+    def _place(self, w, h, gap=4):
+        """Top-left of a ``w`` x ``h`` tip: under the widget, but pulled back
+        inside the widget's window (so also on a second monitor) and the
+        screen, and above the widget when there is no room below."""
+        wd = self.widget
+        top = wd.winfo_toplevel()
+        left = max(0, top.winfo_rootx())
+        right = min(wd.winfo_screenwidth(),
+                    top.winfo_rootx() + top.winfo_width())
+        x = min(wd.winfo_rootx(), right - w - gap)
+        x = max(x, left)
+        # a tip wider than its window still has to stay on the screen
+        x = max(0, min(x, wd.winfo_screenwidth() - w))
+        y = wd.winfo_rooty() + wd.winfo_height() + gap
+        if y + h > wd.winfo_screenheight():
+            y = max(0, wd.winfo_rooty() - h - gap)
+        return x, y
+
+    def set_text(self, text):
+        """Change what the hint says (the one hint of this widget)."""
+        self.text = text
 
     def _hide(self, _e=None):
         if self._job is not None:
