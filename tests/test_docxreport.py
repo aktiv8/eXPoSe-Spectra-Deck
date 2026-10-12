@@ -42,7 +42,7 @@ class TestDocx(unittest.TestCase):
                         "customer": "Acme", "operator": "J. Bloggs"}
 
     def figs(self, n):
-        return [{"name": f"Fig {i}", "caption": f"Caption {i}", "state": {}}
+        return [{"name": f"Plot {i}", "caption": f"Caption {i}", "state": {}}
                 for i in range(1, n + 1)]
 
     def png(self, number, fig):
@@ -120,8 +120,8 @@ class TestDocx(unittest.TestCase):
         spec = rs.with_on(rs.default_spec(), "cover", False)
         doc = self.build(spec, figures=3)
         heads = self.headings(doc)
-        self.assertIn("Figure 1 — Fig 1", heads)
-        self.assertIn("Figure 3 — Fig 3", heads)
+        self.assertIn("Figure 1 — Plot 1", heads)
+        self.assertIn("Figure 3 — Plot 3", heads)
         self.assertEqual(len(doc.inline_shapes), 3)
         self.assertIn("Caption 1", self.all_text(doc))
 

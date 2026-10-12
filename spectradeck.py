@@ -4775,7 +4775,7 @@ class Workspace:
                     if self._zoom_request:
                         self._apply_zoom(axmap, self._zoom_request)
                     if decorate:
-                        head = f"Figure {number} — {fig.get('name', '')}"
+                        head = reportspec.figure_title(number, fig.get("name"))
                         if pg:
                             head += " (continued)"
                         page.text(0.03, 0.975, head, fontsize=12,

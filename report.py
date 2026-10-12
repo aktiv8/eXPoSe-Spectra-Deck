@@ -927,12 +927,10 @@ def build_report(path, details, logo, file_rows, docs, figures,
                 marks, at = [], 1
                 with PdfPages(part) as pdf:
                     for n, fig in enumerate(chosen, 1):
-                        name = (fig.get("name") or "").strip()
                         written = render_figure(pdf, n, fig)
                         if written:
-                            marks.append(("figures", f"Figure {n}"
-                                          + (f" — {name}" if name else ""),
-                                          at))
+                            marks.append(("figures", reportspec.figure_title(
+                                n, fig.get("name")), at))
                             at += written
                 add(k, kind, "figures", at - 1, marks)
         parts = [p for p in parts if p["pages"]]

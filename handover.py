@@ -34,6 +34,7 @@ from dataclasses import dataclass
 import appinfo
 import exporters
 import nexus_export
+import reportspec
 
 TOOL = appinfo.NAME
 
@@ -221,7 +222,7 @@ def figure_parts(figures, pages):
             name = base + (f"_p{i}" if len(pngs) > 1 else "")
             parts.append(Part(
                 f"figures/{unique_name(name, used)}.png",
-                f"Figure {number}: {fig.get('name', '')}"
+                reportspec.figure_title(number, fig.get("name"), ": ")
                 + (f" (page {i} of {len(pngs)})" if len(pngs) > 1 else ""),
                 data=png))
     return parts

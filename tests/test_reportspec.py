@@ -370,6 +370,27 @@ class TestDeckFollowsTheSpec(Tmp):
         self.assertTrue(titles[1].startswith("Figure 2"))
         self.assertEqual(titles[-1], "Data files")
 
+    def test_a_figure_named_like_a_label_is_not_numbered_again(self):
+        self.figs = [{"name": "Figure 1b", "caption": "", "state": {}},
+                     {"name": "Depth", "caption": "", "state": {}},
+                     {"name": "", "caption": "", "state": {}}]
+        titles = [t for t in self.titles(self.build(rs.default_spec()))
+                  if t.startswith(("Figure", "Depth"))]
+        self.assertEqual(titles, ["Figure 1b", "Figure 2 – Depth",
+                                  "Figure 3"])
+
+    def test_figure_title(self):
+        t = rs.figure_title
+        self.assertEqual(t(1, "Figure 1b"), "Figure 1b")
+        self.assertEqual(t(2, "  figure 3 "), "figure 3")
+        self.assertEqual(t(2, "Fig. 2a"), "Fig. 2a")
+        self.assertEqual(t(2, "Fe 2p fits"), "Figure 2 — Fe 2p fits")
+        self.assertEqual(t(2, "Figures of merit"),
+                         "Figure 2 — Figures of merit")
+        self.assertEqual(t(2, "Depth", " – "), "Figure 2 – Depth")
+        self.assertEqual(t(4, ""), "Figure 4")
+        self.assertEqual(t(4, None), "Figure 4")
+
     def test_a_skipped_figure_and_a_skipped_file(self):
         spec = rs.with_child(rs.with_child(rs.default_spec(), "figures",
                                            "fig1", False),

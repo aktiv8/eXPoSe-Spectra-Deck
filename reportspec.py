@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import copy
 import os
+import re
 from dataclasses import dataclass, field
 
 import covers
@@ -344,6 +345,22 @@ def all_presets(user):
 def figure_id(fig, index):
     """A stable id for a saved figure (its workbook id, else its position)."""
     return str((fig or {}).get("id") or f"fig{index}")
+
+
+_OWN_LABEL = re.compile(r"fig(?:ure)?\.?\s*\d", re.IGNORECASE)
+
+
+def figure_title(number, name, sep=" — "):
+    """The heading of a saved figure in a report. A name that already is a
+    figure label ("Figure 1b", "Fig. 2") is the user's own numbering and is
+    used as typed; any other name follows the figure's place in the report
+    ("Figure 2 — Fe 2p fits"); no name gives "Figure 2"."""
+    name = (name or "").strip()
+    if not name:
+        return f"Figure {number}"
+    if _OWN_LABEL.match(name):
+        return name
+    return f"Figure {number}{sep}{name}"
 
 
 def doc_key(doc):

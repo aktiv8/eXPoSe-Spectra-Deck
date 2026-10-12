@@ -55,7 +55,7 @@ class TestDeck(unittest.TestCase):
                         "calibration": "C 1s at 284.8 eV."}
 
     def figs(self, n):
-        return [{"name": f"Fig {i}", "caption": "", "state": {}}
+        return [{"name": f"Plot {i}", "caption": "", "state": {}}
                 for i in range(1, n + 1)]
 
     def png(self, number, fig):
@@ -123,7 +123,7 @@ class TestDeck(unittest.TestCase):
         self.assertFalse(any("6 slides" in " ".join(self.texts(s))
                              for s in slides))
         self.assertEqual(self.title(slides[dict(
-            self.contents_rows(slides))["Figures"] - 1]), "Figure 1 – Fig 1")
+            self.contents_rows(slides))["Figures"] - 1]), "Figure 1 – Plot 1")
 
     def test_footers_say_n_of_n_and_the_cover_and_dividers_have_none(self):
         slides = self.build()
@@ -155,7 +155,7 @@ class TestDeck(unittest.TestCase):
         self.assertEqual(heads, list(range(heads[0], heads[0] + len(heads))))
         rows = self.contents_rows(slides)
         num = next(n for t, n in rows if t.startswith("Figure 40"))
-        self.assertEqual(self.title(slides[num - 1]), "Figure 40 – Fig 40")
+        self.assertEqual(self.title(slides[num - 1]), "Figure 40 – Plot 40")
 
     def test_contents_with_nothing_to_list_makes_no_slide(self):
         spec = rs.with_all(rs.default_spec(), False)

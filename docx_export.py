@@ -390,9 +390,7 @@ def _figures_section(d, figures, render_figure, skip=()):
         images = render_figure(number, fig) or []
         if not images:
             continue
-        name = (fig.get("name") or "").strip()
-        d.heading(f"Figure {number}" + (f" — {name}" if name else ""),
-                 level=2)
+        d.heading(reportspec.figure_title(number, fig.get("name")), level=2)
         for png in images:
             d.picture(png)
         caption = (fig.get("caption") or "").strip()

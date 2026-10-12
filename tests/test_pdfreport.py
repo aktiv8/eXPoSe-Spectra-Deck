@@ -128,7 +128,7 @@ class TestReport(unittest.TestCase):
                         "summary": "Everything worked.",
                         "methods": "Spectra were recorded.",
                         "calibration": "C 1s at 284.8 eV."}
-        self.figs = [{"name": f"Fig {i}", "caption": "", "state": {}}
+        self.figs = [{"name": f"Plot {i}", "caption": "", "state": {}}
                      for i in range(1, 4)]
 
     def render(self, pdf, n, fig):
@@ -154,7 +154,7 @@ class TestReport(unittest.TestCase):
         pages = self.build()
         self.assertIn("Contents", pages[1])
         for token in ("Summary", "Figures", "Methods", "Energy calibration",
-                      "Acquisition metadata", "Data files", "Fig 2"):
+                      "Acquisition metadata", "Data files", "Plot 2"):
             self.assertIn(token, pages[1])
 
     def test_every_entry_points_at_the_page_it_names(self):
@@ -277,7 +277,7 @@ class TestReport(unittest.TestCase):
     # -- divider pages (the deck already had these): a full-bleed page naming
     # a section, before a section that has grown long -----------------------
     def sixfigs(self):
-        return [{"name": f"Fig {i}", "caption": "", "state": {}}
+        return [{"name": f"Plot {i}", "caption": "", "state": {}}
                 for i in range(1, 7)]
 
     def test_a_divider_comes_before_a_long_section_only(self):
@@ -287,7 +287,7 @@ class TestReport(unittest.TestCase):
         self.assertIn("Figures", divider)
         self.assertIn("6 pages", divider)
         self.assertNotIn("report page", divider)      # dividers have no footer
-        self.assertIn("figure 1 Fig 1", pages[toc["Figures"]])   # right after
+        self.assertIn("figure 1 Plot 1", pages[toc["Figures"]])   # right after
         # methods is one page: no divider, the entry is the page itself
         self.assertIn("Spectra were recorded", pages[toc["Methods"] - 1])
 
@@ -296,7 +296,7 @@ class TestReport(unittest.TestCase):
         pages = self.build(spec, figs=self.sixfigs())
         self.assertFalse(any("pages" in p and "•" in p for p in pages))
         toc = {t: p for _l, t, p in self.doc.get_toc()}
-        self.assertIn("figure 1 Fig 1", pages[toc["Figures"] - 1])
+        self.assertIn("figure 1 Plot 1", pages[toc["Figures"] - 1])
 
     def test_a_divider_still_leaves_contents_and_bookmarks_true(self):
         pages = self.build(figs=self.sixfigs())

@@ -545,7 +545,7 @@ def _figure_slides(deck, figures, render_images):
         images = render_images(number, fig)
         caption = (fig.get("caption") or "").strip()
         for pi, png in enumerate(images):
-            title = f"Figure {number} – {fig.get('name', '')}"
+            title = reportspec.figure_title(number, fig.get("name"), " – ")
             if pi:
                 title += " (continued)"
             slide = deck.content_slide(title, None if pi else title)
