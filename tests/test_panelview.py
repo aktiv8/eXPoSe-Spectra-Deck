@@ -139,6 +139,31 @@ class TestArrange(unittest.TestCase):
         self.assertEqual(rs, [1, 2, 3])
 
 
+class TestFitStackView(unittest.TestCase):
+    """The "Fit stack" view: several spectra, each with its own fit."""
+
+    def test_it_is_a_view_beside_stack_and_fit(self):
+        self.assertIn("Fit stack", pv.VIEWS)
+        self.assertEqual(pv.sanitise({"view": "Fit stack"}),
+                         {"view": "Fit stack"})
+        self.assertFalse(pv.is_series("Fit stack"))
+        self.assertEqual(pv.FIT_STACK_MAX, 8)
+        self.assertEqual(pv.FIT_VIEWS, ("Fit", "Fit stack"))
+
+    def test_it_runs_in_file_order_like_a_stack(self):
+        look = dict(DEFAULTS, view="Fit stack")
+        self.assertEqual(pv.arrange([1, 2, 3], look, None), [1, 2, 3])
+        self.assertEqual(pv.arrange([1, 2, 3], dict(look, reverse=True), None),
+                         [3, 2, 1])
+
+    def test_describe_names_the_view_its_offset_and_layers(self):
+        text = pv.describe({"view": "Fit stack", "offset": 1.0,
+                            "fit_show": {"background": False}}, DEFAULTS)
+        self.assertIn("Fit stack", text)
+        self.assertIn("offset 1×", text)
+        self.assertIn("showing components, envelope", text)
+
+
 class TestFitMerge(unittest.TestCase):
     """``fit_merge``: draw each INDEX group as one component (a bool key)."""
 

@@ -562,6 +562,10 @@ colour of its own). Tick **Merge INDEX groups** (or right-click a panel ▸ Fit
 layers ▸ Merge INDEX groups) to draw each INDEX group as a single component, the
 outline of the sum of its peaks, so a state made of several peaks reads as one
 shape; the table, the quantification and the exports still list every peak.
+Choose **View ▸ Fit stack** to stack several fitted spectra (a depth profile, or
+the same region refitted): each trace is drawn with its own fit, offset like a
+normal stack, up to eight at a time (the Traces slider moves the window), with
+one legend of the chemical states.
 
 * **Charge correction carried over.** CasaXPS records its binding-energy
   correction in each block as `Calib M = 281.7289 A = 282 BE ADD` (measured

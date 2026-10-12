@@ -1388,8 +1388,9 @@ class Workspace:
         tip(vb, "Stack: offset traces. Waterfall 3D: energy, trace and "
                 "intensity in a rotatable 3-D plot. Heatmap: intensity as "
                 "colour against energy and trace. Fit: one spectrum with "
-                "its CasaXPS fit. Applies to every panel; right-click a "
-                "panel to give it its own view.")
+                "its CasaXPS fit. Fit stack: up to 8 spectra, each with its "
+                "own fit, offset like a stack. Applies to every panel; "
+                "right-click a panel to give it its own view.")
         ctl2.add(grp)
 
         grp = ttk.Frame(ctl2)
@@ -1513,7 +1514,8 @@ class Workspace:
                                  command=self._schedule_render)
             cb.pack(side="left", padx=(0, 6))
             tip(cb, tipt + " Shown on a panel with one spectrum that has a "
-                           "fit; LA and LF shapes are reconstructions.")
+                           "fit, or on every trace of a Fit stack; LA and LF "
+                           "shapes are reconstructions.")
         self.fit_merge_var = tk.BooleanVar(
             value=bool(cfg.get("fit_merge", False)))
         cb = ttk.Checkbutton(self.fit_frame, text="Merge INDEX groups",
@@ -3537,9 +3539,15 @@ class Workspace:
 
     @staticmethod
     def _panel_limit(limit, look):
-        """Traces shown at once on one panel: a fit panel shows one spectrum
-        (the trace window steps through the group)."""
-        return 1 if look["view"] == "Fit" else limit
+        """Traces shown at once on one panel: a fit panel shows one spectrum,
+        a fit stack at most ``panelview.FIT_STACK_MAX`` (the trace window
+        steps through the group)."""
+        if look["view"] == "Fit":
+            return 1
+        if look["view"] == "Fit stack":
+            return min(limit or panelview.FIT_STACK_MAX,
+                       panelview.FIT_STACK_MAX)
+        return limit
 
     def _trace_span(self, groups, looks, limit):
         """(window, length) of the panel whose window can slide furthest: what
@@ -3807,10 +3815,20 @@ class Workspace:
                          if len(vis) == 1 else None)
             fit_arg = self._fit_overlay(vis, disp, base, notes,
                                         look["fit_show"],
-                                        bool(look.get("fit_merge")))
-            if view == "Fit" and fit_arg is None and not any(
-                    getattr(r, "fit", None) is not None for r in disp):
-                notes.append(f"{key}: no fit stored, shown as a plain trace")
+                                        bool(look.get("fit_merge")),
+                                        stack=(view == "Fit stack"))
+            has_fit = [getattr(r, "fit", None) is not None for r in disp]
+            if view in panelview.FIT_VIEWS and not any(has_fit):
+                notes.append(f"{key}: no fit stored, shown as a plain "
+                             + ("stack" if view == "Fit stack" else "trace"))
+            elif view == "Fit stack" and not all(has_fit):
+                notes.append(f"{key}: {has_fit.count(False)} of {len(disp)} "
+                             "spectra have no fit")
+            if view == "Fit stack" and themes.scale_colours(
+                    cmap_name, reverse, len(vis), base) is None:
+                # the states are drawn in the palette's other colours, so the
+                # data keep the first one rather than clash with them
+                colours = [base["cycle"][0]] * len(vis)
             draw_stack(ax, disp, offset, norm, cur, colours, title, subtitle,
                        selected, multi, first_col=(i % cols == 0),
                        bottom_row=(i + cols >= len(chunk)),
@@ -3844,44 +3862,60 @@ class Workspace:
             ax.set_position([b.x0, b.y0, max(0.05, b.width - gutter), b.height])
         return axmap
 
-    def _fit_overlay(self, vis, disp, base, notes, show, merge=False):
+    def _fit_overlay(self, vis, disp, base, notes, show, merge=False,
+                     stack=False):
         """The CasaXPS fit to draw under a panel that shows one spectrum (or
         None): reconstructed on that spectrum's own points, with the panel's
         three toggles (``show``) applied. ``notes`` gets a line about
         approximated shapes. A component's colour is its CasaXPS INDEX
         (``casafit.colour_slots``), so a chemical state has the same colour
         on every panel/page it appears on (``plots.draw_fit``)."""
-        if len(disp) != 1 or getattr(disp[0], "fit", None) is None:
+        if stack:           # a "Fit stack": every trace with a fit has one
+            if not any(getattr(r, "fit", None) is not None for r in disp):
+                return None
+        elif len(disp) != 1 or getattr(disp[0], "fit", None) is None:
             return None
         show = {k: bool(show.get(k, True)) for k in panelview.FIT_LAYERS}
         if not any(show.values()):
             return None
-        r = disp[0]
+        prefer_csv = bool(self.csv_curves_var.get())
+        per = []
         try:
-            cvs = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
-                                 *r.dwell_and_scans(),
-                                 prefer_csv=bool(self.csv_curves_var.get()))
+            for r in (disp if stack else disp[:1]):
+                per.append(casafit.curves(
+                    r.fit, r.energy, r.counts, r.photon_energy,
+                    *r.dwell_and_scans(), prefer_csv=prefer_csv)
+                    if getattr(r, "fit", None) is not None else None)
         except ImportError:
             return None
+        cvs = [c for one in per for c in (one or [])]
         if not cvs:
             return None
+
+        def note(text):         # a stack has many traces: say each thing once
+            if not stack or text not in notes:
+                notes.append(text)
         if any(c.approximate for c in cvs):
-            notes.append("fit: LA / LF (or a tail-modified GL / SGL) "
-                        "shapes are reconstructed")
+            note("fit: LA / LF (or a tail-modified GL / SGL) "
+                 "shapes are reconstructed")
         for c in cvs:
-            notes.extend("fit: " + n for n in c.notes)
+            for n in c.notes:
+                note("fit: " + n)
         unknown = sorted({c.background_type for c in cvs
                           if not c.background_known})
         if unknown:
-            notes.append("fit: " + ", ".join(unknown) + " background not "
-                         "reproduced, components only")
+            note("fit: " + ", ".join(unknown) + " background not "
+                 "reproduced, components only")
         if not all(c.scale_known for c in cvs):
-            notes.append("fit: dwell time unknown, curves in counts/s")
+            note("fit: dwell time unknown, curves in counts/s")
         cols = list(base["cycle"])[1:] or list(base["cycle"])
         if any(c.index >= len(cols) for cv in cvs for c, _v in cv.components):
-            notes.append("fit: INDEX groups beyond %d reuse colours "
-                         "(the legend tells them apart)" % len(cols))
-        return {"curves": cvs, "show": show, "colours": cols, "merge": merge}
+            note("fit: INDEX groups beyond %d reuse colours "
+                 "(the legend tells them apart)" % len(cols))
+        out = {"curves": cvs, "show": show, "colours": cols, "merge": merge}
+        if stack:
+            out["per_trace"] = per
+        return out
 
     def displayed_be(self, event):
         """Binding energy under the pointer *as drawn* (after any shift, the

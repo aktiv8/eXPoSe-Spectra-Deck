@@ -125,8 +125,8 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
     small = plotstyle.note_size(st)
     end_lbl = st["labels"] == "End labels"
     boxed = st["labels"] == "Legend"
-    normed = [[y / norm_factor(r, norm, cursor) for y in r.counts]
-              for r in regs]
+    nf = [norm_factor(r, norm, cursor) for r in regs]   # data and fit alike
+    normed = [[y / f for y in r.counts] for r, f in zip(regs, nf)]
     n = len(regs)
     stacked = n > 1
     spans = [(max(v) - min(v)) for v in normed if v]
@@ -154,9 +154,28 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
             j = (min if binding else max)(range(len(xs)), key=xs.__getitem__)
             lo, hi = max(0, j - 2), min(len(yoff), j + 3)
             ends.append((sum(yoff[lo:hi]) / (hi - lo), lbl, col))
-    if fit and n == 1:                 # a CasaXPS fit under a single spectrum
-        draw_fit(ax, axes_x[0].x, fit, 1.0 / norm_factor(r0, norm, cursor),
-                 muted, accent)
+    fit_legend = None
+    if fit and fit.get("per_trace") is not None:
+        # a stack of fitted spectra: each trace's own fit, normalised and
+        # offset exactly like its data; one state legend for the panel
+        names, peak_at = {}, {}
+        for i, cvs in enumerate(fit["per_trace"]):
+            if not cvs:
+                continue
+            nm, pk = draw_fit(ax, axes_x[i].x, dict(fit, curves=cvs),
+                              1.0 / nf[i], muted, accent, yoff=i * step,
+                              legend=False, rms=False)
+            for k, v in nm.items():
+                # one entry per swatch + words: another trace's component of
+                # the same colour and name says nothing new
+                if v not in names:
+                    names[v], peak_at[v] = v, pk[k]
+        if names and fit.get("show", {}).get("components"):
+            fit_legend = _fit_legend(ax, names, peak_at, below=boxed)
+        if n == 1 and fit["per_trace"][0]:
+            _fit_rms_text(ax, fit["per_trace"][0], muted)
+    elif fit and n == 1:               # a CasaXPS fit under a single spectrum
+        draw_fit(ax, axes_x[0].x, fit, 1.0 / nf[0], muted, accent)
     if norm == "At cursor" and cursor is not None:
         if a0.e0:                       # cursors are kept as kinetic energy
             cx = cursor / a0.e0
@@ -235,6 +254,8 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
     plotstyle.apply_ranges(ax, st, y=False)
     plotstyle.finish_axes(ax, st, y_ticks=not stacked)
     if boxed:
+        if fit_legend is not None:     # ax.legend() would replace it
+            ax.add_artist(fit_legend)
         ax.legend(loc=st["legend_loc"], fontsize=small,
                   frameon=bool(st["legend_frame"]), labelcolor="linecolor")
     if ke_top and binding and top_row and viewdata.photon_energy(regs):
@@ -449,8 +470,13 @@ def place_marker_labels(ax, artists, hot=(), radius=9):
 _COMPONENT_VISIBLE_FLOOR = 0.01
 
 
-def draw_fit(ax, x, fit, scale, muted, accent):
-    """Overlay a reconstructed CasaXPS fit on a single-spectrum panel.
+def draw_fit(ax, x, fit, scale, muted, accent, yoff=0.0, legend=True,
+             rms=True):
+    """Overlay a reconstructed CasaXPS fit on a panel: the one spectrum of a
+    single panel, or one trace of a stack (``yoff`` is that trace's offset,
+    added to every curve; ``legend=False`` / ``rms=False`` leave the
+    state legend and the RMS note to the caller, which draws one for the whole
+    stack from the ``(names, peak_at)`` this returns).
 
     ``fit`` is ``{"curves": [casafit.Curves], "show": {"envelope", "components",
     "background"}, "colours": [...]}``; ``x`` are the panel's x values (one
@@ -482,7 +508,7 @@ def draw_fit(ax, x, fit, scale, muted, accent):
     cols = fit.get("colours") or ["#888888"]
     names, peak_at = {}, {}
     for cv in fit["curves"]:
-        base = ([(b * scale) if b == b else b for b in cv.background]
+        base = ([(b * scale + yoff) if b == b else b for b in cv.background]
                 if cv.background is not None else None)
         if show.get("background") and base is not None:
             ax.plot(x, base, color=muted, lw=1.0, ls="--", zorder=2.2)
@@ -501,7 +527,7 @@ def draw_fit(ax, x, fit, scale, muted, accent):
                         abs(vals[i]) if vals[i] == vals[i] else -1.0))
                     peak_at[key] = x[top_i]
                 y = [v * scale for v in vals]
-                lo = base if base is not None else [0.0] * len(y)
+                lo = base if base is not None else [yoff] * len(y)
                 peak = max((abs(v) for v in vals if v == v), default=0.0)
                 floor = _COMPONENT_VISIBLE_FLOOR * peak
                 top = [(b + v) if (v == v and b == b
@@ -512,16 +538,20 @@ def draw_fit(ax, x, fit, scale, muted, accent):
                                 lw=0, zorder=1.6)
                 ax.plot(x, top, color=col, lw=0.9, zorder=2.3)
         if show.get("envelope") and cv.envelope is not None:
-            ax.plot(x, [v * scale for v in cv.envelope],
+            ax.plot(x, [v * scale + yoff for v in cv.envelope],
                     color=ax.xaxis.label.get_color(), lw=1.3, zorder=2.6)
-    if names and show.get("components"):
+    if legend and names and show.get("components"):
         _fit_legend(ax, names, peak_at)
-    _fit_rms_text(ax, fit["curves"], muted)
+    if rms:
+        _fit_rms_text(ax, fit["curves"], muted)
+    return names, peak_at
 
 
-def _fit_legend(ax, names, peak_at):
+def _fit_legend(ax, names, peak_at, below=False):
     """The chemical-state legend of a fit: ``names`` is ``{key: (colour,
-    text)}`` in first-appearance order, ``peak_at`` where each one peaks."""
+    text)}`` in first-appearance order, ``peak_at`` where each one peaks.
+    ``below`` puts it under the axes however short it is (a stack that also
+    has a legend of its traces). Returns the legend."""
     from matplotlib.patches import Patch
     # states that share a display name (real CasaXPS files leave several
     # named after the region, or "Pt 4f" twice for a doublet) keep their own
@@ -534,15 +564,14 @@ def _fit_legend(ax, names, peak_at):
                      label=(f"{n[:16]} ({peak_at[k]:.1f})" if count[n] > 1
                             else n[:22]))
                for k, (c, n) in names.items()]
-    many = len(handles) > 6           # a long list would cover the data:
+    many = below or len(handles) > 6  # a long list would cover the data:
     fs = max(6, int(ax.xaxis.label.get_fontsize()) - 2)   # put it below
     if many:
-        ax.legend(handles=handles, frameon=False, handlelength=1.0,
-                  loc="upper center", bbox_to_anchor=(0.5, -0.2),
-                  ncol=3, fontsize=fs - 1, columnspacing=1.2)
-    else:
-        ax.legend(handles=handles, loc="upper left", fontsize=fs,
-                  frameon=False, handlelength=1.0)
+        return ax.legend(handles=handles, frameon=False, handlelength=1.0,
+                         loc="upper center", bbox_to_anchor=(0.5, -0.2),
+                         ncol=3, fontsize=fs - 1, columnspacing=1.2)
+    return ax.legend(handles=handles, loc="upper left", fontsize=fs,
+                     frameon=False, handlelength=1.0)
 
 
 def _fit_rms_text(ax, curves, muted):

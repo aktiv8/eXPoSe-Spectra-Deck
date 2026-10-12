@@ -816,6 +816,171 @@ class TestFitLegend(unittest.TestCase):
         self.assertEqual(len(ax.texts), 0)
 
 
+@unittest.skipUnless(HAVE_NP and HAVE_MPL, "numpy / matplotlib not installed")
+class TestFitStackDrawing(unittest.TestCase):
+    """Several fitted spectra stacked: each trace's own fit, normalised and
+    offset exactly like its data, one state legend for the panel."""
+
+    COLS = ["#aa0000", "#00aa00", "#0000aa", "#aaaa00"]
+    EVERY = {"components": True, "envelope": True, "background": True}
+
+    @staticmethod
+    def regions(n=3, fitted=None):
+        import copy
+        out = []
+        for i in range(n):
+            r = copy.copy(fitted_region())
+            r.counts = [c * (1 + 0.3 * i) for c in r.counts]
+            r.sample = f"S{i}"
+            if fitted is not None and not fitted[i]:
+                r.fit = None
+            out.append(r)
+        return out
+
+    @staticmethod
+    def per_trace(regs):
+        return [casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
+                               *r.dwell_and_scans())
+                if r.fit is not None else None for r in regs]
+
+    def stack(self, regs, show=None, merge=False, style=None, norm="None",
+              offset=0.6):
+        per = self.per_trace(regs)
+        fit = {"curves": [c for one in per for c in (one or [])],
+               "per_trace": per, "show": show or self.EVERY,
+               "colours": self.COLS, "merge": merge}
+        ax = Figure().add_subplot()
+        plots.draw_stack(ax, regs, offset, norm, None,
+                         ["#0072B2"] * len(regs), "t", "s", (), False,
+                         fit=fit, style=style)
+        return ax, per
+
+    def test_yoff_shifts_every_curve_of_a_fit(self):
+        r = self.regions(1)[0]
+        cv = self.per_trace([r])[0]
+        out = {}
+        for off in (0.0, 5.0):
+            ax = Figure().add_subplot()
+            plots.draw_fit(ax, r.energy, {"curves": cv, "colours": self.COLS,
+                                          "show": self.EVERY}, 1.0, "grey",
+                           "red", yoff=off)
+            out[off] = ax
+        a, b = out[0.0], out[5.0]
+        self.assertEqual(len(a.lines), len(b.lines))
+        self.assertTrue(a.lines)
+        for la, lb in zip(a.lines, b.lines):
+            ya, yb = np.asarray(la.get_ydata()), np.asarray(lb.get_ydata())
+            ok = ~np.isnan(ya)
+            self.assertTrue(ok.any())
+            np.testing.assert_allclose(yb[ok] - ya[ok], 5.0)
+
+    def test_draw_fit_can_leave_the_legend_and_rms_to_the_caller(self):
+        r = self.regions(1)[0]
+        ax = Figure().add_subplot()
+        names, peak_at = plots.draw_fit(
+            ax, r.energy, {"curves": self.per_trace([r])[0],
+                           "colours": self.COLS, "show": self.EVERY},
+            1.0, "grey", "red", legend=False, rms=False)
+        self.assertIsNone(ax.get_legend())
+        self.assertEqual(len(ax.texts), 0)
+        self.assertEqual(set(names), set(peak_at))
+        self.assertTrue(names)
+
+    def test_each_trace_gets_its_own_fit_offset_like_its_data(self):
+        regs = self.regions(3)
+        ax, per = self.stack(regs, show={"envelope": True})
+        n = len(regs)
+        self.assertEqual(len(ax.lines), n + 3 + 1)   # data, fits, scale bar
+        envs = ax.lines[n:n + 3]
+        normed = [np.asarray(r.counts) for r in regs]
+        step = 0.6 * max(float(v.max() - v.min()) for v in normed)
+        for i, (line, cvs) in enumerate(zip(envs, per)):
+            want = np.asarray(cvs[0].envelope) + i * step
+            got = np.asarray(line.get_ydata())
+            ok = ~np.isnan(want)
+            self.assertTrue(ok.any())
+            np.testing.assert_allclose(got[ok], want[ok], rtol=1e-9)
+
+    def test_normalised_stack_scales_the_fit_like_the_data(self):
+        regs = self.regions(2)
+        ax, per = self.stack(regs, show={"envelope": True}, norm="Max = 1")
+        normed = [np.asarray(r.counts) / max(r.counts) for r in regs]
+        step = 0.6 * max(float(v.max() - v.min()) for v in normed)
+        for i, (line, cvs) in enumerate(zip(ax.lines[2:4], per)):
+            want = np.asarray(cvs[0].envelope) / max(regs[i].counts) + i * step
+            ok = ~np.isnan(want)
+            np.testing.assert_allclose(np.asarray(line.get_ydata())[ok],
+                                       want[ok], rtol=1e-9)
+
+    def test_one_state_legend_for_the_whole_stack_and_no_rms_note(self):
+        regs = self.regions(3)
+        ax, _ = self.stack(regs, show={"components": True, "envelope": True})
+        texts = [t.get_text() for t in ax.get_legend().get_texts()]
+        one, _ = self.stack(regs[:1], show={"components": True})
+        self.assertEqual(texts, [t.get_text()
+                                 for t in one.get_legend().get_texts()])
+        self.assertEqual([t for t in ax.texts if t.get_text().startswith("RMS")],
+                         [])
+
+    def test_the_legend_lists_a_swatch_and_name_once_across_traces(self):
+        """Real files refit one spectrum with the components in another
+        order or grouping: the same colour and name must not be listed once
+        per trace (three refits of HOPG's C 1s gave every state twice)."""
+        import copy
+        regs = []
+        for ix in ([-1], [0]):
+            r = copy.copy(fitted_region())
+            r.fit = casafit.parse(TestFitLegend.index_lines("C 1s", ix))
+            r.energy, r.counts = model_data(r.fit, HV, 0.27, 25)
+            regs.append(r)
+        ax, _ = self.stack(regs, show={"components": True})
+        self.assertEqual([t.get_text() for t in ax.get_legend().get_texts()],
+                         ["C 1s c0"])
+
+    def test_a_single_fitted_trace_in_a_fit_stack_keeps_its_rms_note(self):
+        ax, _ = self.stack(self.regions(1), show={"envelope": True})
+        self.assertEqual(len([t for t in ax.texts
+                              if t.get_text().startswith("RMS ")]), 1)
+
+    def test_the_trace_legend_and_the_fit_legend_both_survive(self):
+        from matplotlib.legend import Legend
+        ax, _ = self.stack(self.regions(3), show={"components": True},
+                           style={"labels": "Legend"})
+        legends = [c for c in ax.get_children() if isinstance(c, Legend)]
+        self.assertEqual(len(legends), 2)
+        trace = ax.get_legend()
+        self.assertEqual(len(trace.get_texts()), 3)      # one per trace
+
+    def test_a_trace_without_a_fit_is_drawn_plain(self):
+        regs = self.regions(3, fitted=[True, False, True])
+        ax, per = self.stack(regs, show={"envelope": True})
+        self.assertIsNone(per[1])
+        self.assertEqual(len(ax.lines), 3 + 2 + 1)      # data, envelopes, bar
+
+    def test_merging_applies_to_every_trace_of_a_stack(self):
+        regs = self.regions(2)
+        grouped = casafit.parse([l.replace("INDEX -1 (*Ti 2p*)",
+                                           "INDEX 3 (*Ti(IV)*)")
+                                 for l in CASA])
+        for r in regs:
+            r.fit = grouped            # both components are INDEX 3 now
+        every = {"components": True}
+        sep, _ = self.stack(regs, show=every)
+        mrg, _ = self.stack(regs, show=every, merge=True)
+        self.assertEqual(len(sep.lines), 2 + 2 * 2 + 1)   # data, 2 per trace, bar
+        self.assertEqual(len(mrg.lines), 2 + 1 * 2 + 1)   # data, 1 per trace, bar
+
+    def test_a_stack_without_per_trace_curves_still_draws_no_fit(self):
+        regs = self.regions(3)
+        ax = Figure().add_subplot()
+        cv = self.per_trace(regs[:1])[0]
+        plots.draw_stack(ax, regs, 0.6, "None", None, ["#0072B2"] * 3, "t",
+                         "s", (), False,
+                         fit={"curves": cv, "colours": self.COLS,
+                              "show": self.EVERY})
+        self.assertEqual(len(ax.lines), 3 + 1)                   # data, bar
+
+
 # ------------------------------------------------------- real CasaXPS files
 @unittest.skipUnless(HAVE_NP, "numpy not installed")
 class TestRealFiles(unittest.TestCase):

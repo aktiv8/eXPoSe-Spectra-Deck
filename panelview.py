@@ -9,7 +9,10 @@ Page-level settings (grouping, energy scale, style, colours) are not here.
 """
 import viewdata
 
-VIEWS = ("Stack", "Waterfall 3D", "Heatmap", "Fit")
+VIEWS = ("Stack", "Waterfall 3D", "Heatmap", "Fit", "Fit stack")
+FIT_STACK_MAX = 8          # fitted traces on one "Fit stack" panel (the trace
+                           # window steps through a longer group)
+FIT_VIEWS = ("Fit", "Fit stack")
 SERIES = ("Waterfall 3D", "Heatmap")           # read in z order
 NORMS = ("None", "Max = 1", "Area = 1", "At cursor")
 FIT_LAYERS = ("components", "envelope", "background")
@@ -126,14 +129,14 @@ def describe(override, defaults=None):
         parts[0] += f", by {look['z_axis']}"
     if "norm" in ov and ov["norm"] != "None":
         parts.append(f"normalised {ov['norm']}")
-    if "offset" in ov and view in ("Stack", "Fit"):
+    if "offset" in ov and view in ("Stack", "Fit", "Fit stack"):
         parts.append(f"offset {ov['offset']:g}×")
     if ov.get("reverse"):
         parts.append("reversed")
     if "fit_merge" in ov:
         parts.append("INDEX groups merged" if ov["fit_merge"]
                      else "INDEX groups drawn separately")
-    if view == "Fit":
+    if view in FIT_VIEWS:
         on = [k for k in FIT_LAYERS if look.get("fit_show", {}).get(k, True)]
         if len(on) < len(FIT_LAYERS):
             parts.append("showing " + (", ".join(on) if on else "no layers"))

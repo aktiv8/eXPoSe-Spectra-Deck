@@ -327,5 +327,175 @@ class TestPanelViewsInApp(unittest.TestCase):
         self.assertEqual(colours.get("Z KLL"), pal["cycle"][1])
 
 
+@unittest.skipUnless(HAVE_MPL, "matplotlib / Tk not available")
+class TestFitStackInApp(unittest.TestCase):
+    """The Fit stack view in the real window: ten fitted levels of one core
+    level are shown eight at a time, each with its own fit."""
+
+    @classmethod
+    def setUpClass(cls):
+        import copy
+        import matplotlib
+        cls._rc = matplotlib.rcParams.copy()
+        try:
+            cls.root = tk.Tk()
+        except tk.TclError:
+            raise unittest.SkipTest("no display")
+        cls.root.withdraw()
+        from test_casafit import fitted_region
+        regs = []
+        for i in range(10):
+            r = copy.copy(fitted_region(n=61))
+            r.counts = [c * (1 + 0.1 * i) for c in r.counts]
+            r.sample, r.etch_level, r.etch_time = "Depth", i + 1, 30.0 * i
+            regs.append(r)
+        cls.docs = {"fits.vms": doc("fits.vms", regs)}
+        cls._load = ee.load_file
+        ee.load_file = lambda p: cls.docs[os.path.basename(p)]
+        cls.ws = ee.Workspace(cls.root)
+
+    @classmethod
+    def tearDownClass(cls):
+        ee.load_file = cls._load
+        cls.root.destroy()
+        import matplotlib
+        matplotlib.rcParams.update(cls._rc)
+
+    def setUp(self):
+        ws = self.ws
+        for d in list(ws.docs):
+            ws.docs.remove(d)
+        ws.file_ids.clear()
+        ws.region_parser.clear()
+        ws.group_var.set("Element, per sample")
+        ws.view_var.set("Fit stack")
+        ws.norm_var.set("None")
+        ws.scale_var.set("Binding")
+        ws.panels_var.set("Auto")
+        ws.traces_var.set("All")
+        ws.colscale_var.set("Theme default")
+        ws.panel_views = {}
+        ws.trace_start = 0
+        ws.fit_merge_var.set(False)
+        for v in ws.fit_vars.values():
+            v.set(True)
+        for p in self.docs:
+            ws._add_file(p, file_id=p[:-4], refresh=False)
+        ws._finish_adding()
+        ws.checked = {id(r) for d in ws.docs for r in d.regions}
+        self.key = [k for k, _ in ws._groups()][0]
+
+    def axis(self):
+        self.ws._render()
+        return next(a for a, k in self.ws._axmap.items() if k == self.key)
+
+    def test_the_window_is_at_most_eight_traces(self):
+        lim = self.ws._panel_limit
+        look = {"view": "Fit stack"}
+        self.assertEqual(lim(None, look), 8)
+        self.assertEqual(lim(20, look), 8)
+        self.assertEqual(lim(5, look), 5)
+        self.assertEqual(lim(None, {"view": "Fit"}), 1)
+        self.assertIsNone(lim(None, {"view": "Stack"}))
+        self.assertEqual(lim(5, {"view": "Stack"}), 5)
+        ax = self.axis()
+        self.assertEqual(self.ws._axinfo[ax][2], 8)
+        self.assertEqual(self.ws._axinfo[ax][1], "stack")
+        self.assertIn("1–8 of 10", ax.get_title(loc="right"))
+
+    def test_the_trace_slider_walks_the_window(self):
+        self.ws.trace_start = 2
+        ax = self.axis()
+        self.assertEqual(self.ws._axinfo[ax][2], 8)
+        self.assertIn("3–10 of 10", ax.get_title(loc="right"))
+
+    def test_every_trace_is_drawn_with_its_fit_and_one_legend(self):
+        ax = self.axis()
+        from matplotlib.legend import Legend
+        # 8 data + 8 x (background, components, envelope) + the scale bar
+        self.assertGreater(len(ax.lines), 8 * 3)
+        self.assertEqual(len([c for c in ax.get_children()
+                              if isinstance(c, Legend)]), 1)
+        self.assertGreater(len(ax.collections), 8)      # shaded components
+
+    def test_the_fit_layers_and_merge_apply_to_the_stack(self):
+        n_all = len(self.axis().lines)
+        self.ws.fit_vars["background"].set(False)
+        self.assertEqual(len(self.axis().lines), n_all - 8)
+        self.ws.fit_vars["background"].set(True)
+        self.ws.fit_vars["envelope"].set(False)
+        self.ws.fit_vars["components"].set(False)
+        self.assertEqual(len(self.axis().lines), n_all - 8 - 2 * 8)
+
+    def test_the_plain_stack_view_still_draws_no_fit(self):
+        self.ws.view_var.set("Stack")
+        ax = self.axis()
+        self.assertEqual(len(ax.collections), 0)
+        self.assertEqual(len(ax.lines), 10 + 1)          # data and scale bar
+
+    def test_the_data_keep_one_colour_so_they_do_not_clash_with_states(self):
+        ax = self.axis()
+        cols = {ax.lines[i].get_color() for i in range(8)}
+        self.assertEqual(cols, {self.ws.palette["cycle"][0]})
+        self.ws.colscale_var.set("Viridis")                 # the user's choice
+        cols = {self.axis().lines[i].get_color() for i in range(8)}
+        self.assertGreater(len(cols), 1)
+
+    def test_a_trace_without_a_fit_is_noted_and_drawn_plain(self):
+        reg = next(iter(self.docs.values())).regions[3]
+        saved, reg.fit = reg.fit, None
+        self.addCleanup(setattr, reg, "fit", saved)
+        self.axis()
+        self.assertIn(f"{self.key}: 1 of 8 spectra have no fit",
+                      self.ws._view_notes)
+
+    def test_a_group_with_no_fits_says_so(self):
+        regs = next(iter(self.docs.values())).regions
+        saved = [r.fit for r in regs]
+        for r in regs:
+            r.fit = None
+        try:
+            self.axis()
+            self.assertIn(f"{self.key}: no fit stored, shown as a plain stack",
+                          self.ws._view_notes)
+        finally:
+            for r, f in zip(regs, saved):
+                r.fit = f
+
+    def test_fit_overlay_gives_one_curve_set_per_trace_and_says_things_once(self):
+        regs = [self.ws._display(r) for r in
+                next(iter(self.docs.values())).regions[:4]]
+        notes = []
+        out = self.ws._fit_overlay(regs, regs, self.ws.palette, notes,
+                                   {"components": True}, False, stack=True)
+        self.assertEqual(len(out["per_trace"]), 4)
+        self.assertTrue(all(out["per_trace"]))
+        self.assertEqual(len(notes), len(set(notes)))
+        single = self.ws._fit_overlay(regs[:1], regs[:1], self.ws.palette, [],
+                                      {"components": True}, False)
+        self.assertNotIn("per_trace", single)
+        self.assertIsNone(self.ws._fit_overlay(regs, regs, self.ws.palette,
+                                               [], {"components": True}))
+
+    def test_a_panel_can_have_its_own_fit_stack(self):
+        self.ws.view_var.set("Stack")
+        self.ws._set_panel_view(self.key, "view", "Fit stack")
+        ax = self.axis()
+        self.assertEqual(self.ws._axinfo[ax][2], 8)
+        self.assertGreater(len(ax.collections), 8)
+
+    def test_the_view_survives_a_saved_state_and_draws_in_a_report(self):
+        st = self.ws.capture_state()
+        self.assertEqual(st["view_mode"], "Fit stack")
+        self.ws.view_var.set("Stack")
+        pages = []
+        self.ws._render_figure_pages({"name": "F", "caption": "", "state": st},
+                                     pages.append)
+        self.assertTrue(pages)
+        ax = next(a for pg in pages for a in pg.axes if a.collections)
+        self.assertGreater(len(ax.collections), 8)
+        self.assertEqual(self.ws.view_var.get(), "Stack")   # live view kept
+
+
 if __name__ == "__main__":
     unittest.main()
