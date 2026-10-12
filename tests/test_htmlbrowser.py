@@ -26,6 +26,7 @@ import exporters  # noqa: E402
 import holder  # noqa: E402
 import htmlbrowser as hb  # noqa: E402
 import plots  # noqa: E402
+import reportspec  # noqa: E402
 import themes  # noqa: E402
 from readers import ImageBlob, Region, SpectrumFile  # noqa: E402
 
@@ -1295,6 +1296,14 @@ class TestJavaScript(unittest.TestCase):
                 fx["map"] = self.map_fixture()
             if HAVE_NP:
                 fx["imaging"] = self.imaging_fixture()
+            fx["figure_titles"] = [
+                {"number": n, "name": name, "sep": sep,
+                 "want": reportspec.figure_title(n, name, sep)}
+                for n, name, sep in (
+                    (1, "Figure 1b", " – "), (2, "  figure 3 ", ": "),
+                    (2, "Fig. 2a", " – "), (3, "Fe 2p fits", " – "),
+                    (3, "Fe 2p fits", ": "), (2, "Figures of merit", " – "),
+                    (4, "", " – "), (4, "   ", " – "))]
             fx["iss"] = self.iss_fixture()
             fx["elements"] = self.element_fixture()
             fx["casaxps"] = self.casaxps_fixture()

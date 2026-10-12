@@ -270,6 +270,16 @@
     });
     return out;
   };
+  /* the heading of a saved figure (mirrors reportspec.figure_title): a name
+     that already is a figure label ("Figure 1b", "Fig. 2") is the user's own
+     numbering and stands as typed, any other name follows the figure's place,
+     no name gives "Figure N" */
+  V.figureTitle = function (number, name, sep) {
+    name = String(name == null ? '' : name).trim();
+    if (!name) return 'Figure ' + number;
+    if (/^fig(?:ure)?\.?\s*\d/i.test(name)) return name;
+    return 'Figure ' + number + (sep === undefined ? ' – ' : sep) + name;
+  };
   /* palette slot of each component of ONE fit region from its CasaXPS INDEX
      numbers, in order (mirrors casafit.colour_slots; stateless, so INDEX n is
      the same colour in every region and panel): INDEX >= 0 takes index % n,
@@ -2468,11 +2478,11 @@
     S.data.figures.forEach(function (f, i) {
       var fig = h('figure');
       f.pages.forEach(function (src, k) {
-        var img = h('img', { src: src, alt: 'Figure ' + (i + 1) + ': ' + f.name });
+        var img = h('img', { src: src, alt: V.figureTitle(i + 1, f.name, ': ') });
         fig.appendChild(img);
         fig.appendChild(h('div', null, h('a', { href: src, download: 'figure_' + (i + 1) + (f.pages.length > 1 ? '_p' + (k + 1) : '') + '.png', text: 'Download PNG' })));
       });
-      fig.appendChild(h('figcaption', null, h('strong', { text: 'Figure ' + (i + 1) + ' – ' + f.name }), f.caption ? '\n' + f.caption : ''));
+      fig.appendChild(h('figcaption', null, h('strong', { text: V.figureTitle(i + 1, f.name) }), f.caption ? '\n' + f.caption : ''));
       box.appendChild(fig);
     });
   }

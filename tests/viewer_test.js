@@ -227,6 +227,15 @@ function near(a, b, msg, tol) {
     eq(V.fitRows({}).length, 0, 'a spectrum without a fit has no rows');
   }
 
+  // ---- figure headings: the page and reportspec.figure_title agree ----
+  if (fx.figure_titles) {
+    for (const c of fx.figure_titles) {
+      eq(V.figureTitle(c.number, c.name, c.sep), c.want, 'figure heading for ' + JSON.stringify(c.name));
+    }
+    eq(V.figureTitle(2, null), 'Figure 2', 'no name gives the figure number');
+    eq(V.figureTitle(2, 'Depth'), 'Figure 2 – Depth', 'the page separates with an en dash by default');
+  }
+
   // ---- the CasaXPS-curves switch picks one of the two row sets everywhere ----
   {
     const rg = { fit: { rows: ['recon'], csv_rows: ['casa'], notes: ['n'], csv_notes: ['cn'] } };
