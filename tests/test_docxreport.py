@@ -125,6 +125,23 @@ class TestDocx(unittest.TestCase):
         self.assertEqual(len(doc.inline_shapes), 3)
         self.assertIn("Caption 1", self.all_text(doc))
 
+    def test_figures_are_numbered_by_place_and_own_labels_kept(self):
+        import docx_export
+        figs = [{"id": "a", "name": "Plot A", "caption": "", "state": {}},
+                {"id": "b", "name": "Plot B", "caption": "", "state": {}},
+                {"id": "c", "name": "Figure 1b", "caption": "", "state": {}},
+                {"id": "d", "name": "", "caption": "", "state": {}}]
+        spec = rs.with_child(rs.with_on(rs.default_spec(), "cover", False),
+                             "figures", "b", False)
+        path = os.path.join(self.dir, "n.docx")
+        docx_export.build_document(path, self.details, "", self.rows,
+                                   self.docs, figs, self.png, spec=spec)
+        from docx import Document
+        heads = [h for h in self.headings(Document(path))
+                 if "Figure" in h or "Plot" in h]
+        self.assertEqual(heads, ["Figures", "Figure 1 — Plot A",
+                                 "Figure 1b", "Figure 3"])
+
     def test_a_section_can_be_switched_off(self):
         spec = rs.with_on(rs.default_spec(), "figures", False)
         spec = rs.with_on(spec, "cover", False)

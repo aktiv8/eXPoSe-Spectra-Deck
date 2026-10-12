@@ -380,13 +380,15 @@ def _results_section(d, results, skip=()):
 
 
 def _figures_section(d, figures, render_figure, skip=()):
-    chosen = [(i, f) for i, f in enumerate(figures, 1)
-             if reportspec.figure_id(f, i) not in skip]
+    # numbered by place among the figures that go in, as the PDF and the
+    # slides do; the skip list is keyed by the figure's own position
+    chosen = [f for i, f in enumerate(figures, 1)
+              if reportspec.figure_id(f, i) not in skip]
     if not chosen:
         return False
     d.heading("Figures", level=1)
     wrote = False
-    for number, fig in chosen:
+    for number, fig in enumerate(chosen, 1):
         images = render_figure(number, fig) or []
         if not images:
             continue
