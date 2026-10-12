@@ -234,7 +234,8 @@
      and, per row, curves from the region's first point on (`i0`): background,
      envelope and one curve per component, in the spectrum's own counts. The
      numbers were worked out by the desktop app; the page only draws them. */
-  V.FIT_LAYERS = ['components', 'envelope', 'background', 'residual', 'merge'];
+  V.FIT_LAYERS = ['components', 'envelope', 'background', 'residual', 'merge', 'stack'];
+  V.FIT_STACK_MAX = 8;       /* fitted traces drawn on one stacked panel (the desktop's Fit stack cap) */
   V.curveFull = function (cur, curve, n) {      /* a curve on every point, null outside */
     if (!cur || !curve) return null;
     var out = new Array(n);
@@ -254,6 +255,20 @@
   V.fitNotes = function (reg) {
     if (!reg || !reg.fit) return [];
     return (V.fitSource.csv && reg.fit.csv_rows ? reg.fit.csv_notes : reg.fit.notes) || [];
+  };
+  /* the states of the fits of several spectra, for ONE legend: one entry per
+     swatch (palette slot) and name, so a component of the same colour and
+     name in another trace is not listed again (mirrors the desktop's stack
+     legend in plots.draw_stack) */
+  V.fitStatesOf = function (regs, n) {
+    var out = [], seen = {};
+    regs.forEach(function (reg) {
+      V.fitStates(reg, n).forEach(function (x) {
+        var k = x.slot + '|' + x.name;
+        if (!(k in seen)) { seen[k] = true; out.push(x); }
+      });
+    });
+    return out;
   };
   /* palette slot of each component of ONE fit region from its CasaXPS INDEX
      numbers, in order (mirrors casafit.colour_slots; stateless, so INDEX n is
@@ -1194,7 +1209,7 @@
             norm: 'none', offset: 0.6, scale: 'Binding', iss: 'kinetic', levelOn: false, levelIdx: 0, levels: [],
             panels: new Map(), theme: 'auto', printing: false, nodes: [], holderIdx: 0,
             holderHot: null, tab: 'plot', filter: '', camIdx: 0, mapById: {}, camById: {},
-            fit: { components: true, envelope: true, background: true, residual: false, merge: false, hidden: {} },
+            fit: { components: true, envelope: true, background: true, residual: false, merge: false, stack: false, hidden: {} },
             q: { include: {}, seeded: {}, transmission: false, level: {}, rsfLibrary: '' },
             d: { sample: null, mode: 'element', axis: null, last: null },
             ident: { on: false, win: 2, auto: false, secondary: false, auger: false, split: false,
@@ -1464,6 +1479,14 @@
       if (s) {
         anyFit = true;
         V.fitNotes(s.reg).forEach(function (t) { notes.push('fit: ' + t); });
+      } else if (stackFitted(p.group)) {
+        anyFit = true;                       /* the "Fits on stacks" box lives in the fit bar */
+        if (S.fit.stack && !stackFitItems(p.group)) {
+          notes.push('fits on stacks are drawn for up to ' + V.FIT_STACK_MAX + ' spectra');
+        }
+        p.group.items.filter(function (it) { return stackFitItems(p.group) && hasFit(it); }).forEach(function (it) {
+          V.fitNotes(it.reg).forEach(function (t) { if (notes.indexOf('fit: ' + t) < 0) notes.push('fit: ' + t); });
+        });
       }
     });
     $('fitbar').hidden = !anyFit;
@@ -1479,6 +1502,16 @@
   /* a fit is drawn (and tabulated) on a panel that shows one spectrum */
   function singleFit(g) {
     return g && g.items.length === 1 && V.fitRows(g.items[0].reg).length ? g.items[0] : null;
+  }
+  /* a stacked panel draws each trace's own fit when "Fits on stacks" is ticked
+     (up to V.FIT_STACK_MAX traces, like the desktop's Fit stack); the table and
+     the residual stay with a panel that shows one spectrum */
+  function hasFit(s) { return V.fitRows(s.reg).length > 0; }
+  function stackFitted(g) {
+    return !!g && S.mode === 'stack' && g.items.length > 1 && g.items.some(hasFit);
+  }
+  function stackFitItems(g) {
+    return S.fit.stack && stackFitted(g) && g.items.length <= V.FIT_STACK_MAX ? g.items : null;
   }
   function fitColours() {
     var c = cycle();
@@ -1668,6 +1701,11 @@
     var yoff = ys.map(function (v, i) { return v.map(function (y) { return y + i * step; }); });
 
     var fit = singleFit(g) ? fitCurves(items[0], V.normFactor(items[0].y, S.norm)) : null;
+    var sfits = !fit && stackFitItems(g) ? items.map(function (s) {
+      return hasFit(s) ? fitCurves(s, V.normFactor(s.y, S.norm)) : null;
+    }) : null;
+    /* the states are drawn in the palette's other colours, so the data keep the first one */
+    var dataCol = sfits ? cycle()[0] : null;
     var xlo = Infinity, xhi = -Infinity;
     axes.forEach(function (a) { a.x.forEach(function (v) { if (v < xlo) xlo = v; if (v > xhi) xhi = v; }); });
     var pad = (xhi - xlo) * 0.02 || 1;
@@ -1794,12 +1832,17 @@
 
     /* the fit: background, components on top of it, envelope, residual */
     if (fit) drawFit(ctx, C, lay, X, Y, axes[0].x, fit, items[0], resBase, rr, font);
+    if (sfits) {
+      sfits.forEach(function (f, i) {
+        if (f) drawFit(ctx, C, lay, X, Y, axes[i].x, f, items[i], null, 0, font, { yadd: i * step, stack: true });
+      });
+    }
 
     /* traces */
     var endpts = [];
     items.forEach(function (s, i) {
       var xs = axes[i].x, v = yoff[i], sel = isSelected(s);
-      ctx.strokeStyle = cmap[s.id] || C.fg;
+      ctx.strokeStyle = dataCol || cmap[s.id] || C.fg;
       ctx.lineWidth = sel ? 2.3 : (n > 12 ? 1 : 1.4);
       ctx.lineJoin = 'round';
       ctx.beginPath();
@@ -1816,7 +1859,8 @@
       endpts.push(Y(sum / (b - a)));
     });
     ctx.restore();
-    if (fit && S.fit.components) fitLegend(ctx, C, lay, items[0], font);
+    if (fit && S.fit.components) fitLegend(ctx, C, lay, [items[0]], font);
+    else if (sfits && S.fit.components) fitLegend(ctx, C, lay, items.filter(function (s, i) { return sfits[i]; }), font);
 
     /* trace labels: at the end of each trace of a stack, a legend otherwise */
     ctx.font = font(11); ctx.textBaseline = 'middle';
@@ -1826,7 +1870,7 @@
       var pos = V.dodge(sel, 14);
       ctx.textAlign = 'left';
       ids.forEach(function (i, k) {
-        ctx.fillStyle = cmap[items[i].id] || C.fg;
+        ctx.fillStyle = dataCol || cmap[items[i].id] || C.fg;
         ctx.fillText(labels[i], lay.l + lay.w + 6, Math.min(by - 4, Math.max(lay.t + 4, pos[k])));
       });
     } else if (n > 1) {
@@ -1951,7 +1995,11 @@
       ctx.closePath(); ctx.fill();
     }
   }
-  function drawFit(ctx, C, lay, X, Y, xs, fit, s, resBase, rr, font) {
+  function drawFit(ctx, C, lay, X, Y, xs, fit, s, resBase, rr, font, opt) {
+    /* opt.yadd: the trace's offset in a stack (added to every curve);
+       opt.stack: the per-component ticks belong to the one-spectrum table */
+    var yadd = opt && opt.yadd || 0, Yd = Y;
+    if (yadd) Y = function (v) { return Yd(v + yadd); };
     ctx.lineJoin = 'round';
     fit.forEach(function (fr) {
       var rcol = rowColours(fr.row);
@@ -1961,7 +2009,7 @@
         strokeCurve(ctx, xs, fr.bg, X, Y); ctx.setLineDash([]);
       }
       if (S.fit.components) {
-        V.drawnCurves(fr.row.components, fr.comps, S.fit.merge, function (j) { return S.fit.hidden[fr.ri + ':' + j]; }).forEach(function (e) {
+        V.drawnCurves(fr.row.components, fr.comps, S.fit.merge, function (j) { return !(opt && opt.stack) && S.fit.hidden[fr.ri + ':' + j]; }).forEach(function (e) {
           var cv = e.values, col = rcol[e.j] || '#888888';
           var lo = fr.bg || zero, top = cv.map(function (v, k) { return v === null || lo[k] === null ? null : lo[k] + v; });
           ctx.fillStyle = col; ctx.globalAlpha = 0.35; fillBetween(ctx, xs, top, lo, X, Y); ctx.globalAlpha = 1;
@@ -1983,8 +2031,8 @@
     ctx.lineWidth = 1;
   }
   /* the states of the fit, top left of the plot; a long list is left to the table */
-  function fitLegend(ctx, C, lay, s, font) {
-    var cols = fitColours(), st = V.fitStates(s.reg, cols.length);
+  function fitLegend(ctx, C, lay, list, font) {
+    var cols = fitColours(), st = V.fitStatesOf(list.map(function (s) { return s.reg; }), cols.length);
     if (!st.length || st.length > 6) return;
     ctx.font = font(11); ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     st.forEach(function (x, i) {

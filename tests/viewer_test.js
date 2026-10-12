@@ -205,6 +205,21 @@ function near(a, b, msg, tol) {
       eq(V.drawnCurves(comps, curves, true, null).map((e) => e.members), [[0, 1], [3]],
          'a component with no curve is skipped, an ungrouped one stands alone');
     }
+    // the legend of a stack of fits: one entry per swatch (slot) and name across the traces
+    {
+      const mk = (comps) => ({ fit: { rows: [{ region: 'C 1s', components: comps }] } });
+      const a = mk([{ index: -1, state: 'C 1s c0' }]);                    // ungrouped, slot 0
+      const b = mk([{ index: 0, state: 'C 1s c0' }]);                     // INDEX 0, slot 0: the same swatch and words
+      const c = mk([{ index: 1, state: 'Oxide' }, { index: -1, state: 'C 1s c0' }]);
+      eq(V.fitStatesOf([a, b], 6).map((x) => x.slot + '|' + x.name), ['0|C 1s c0'],
+         'the same colour and name in another trace is listed once');
+      eq(V.fitStatesOf([a, c], 6).map((x) => x.slot + '|' + x.name), ['0|C 1s c0', '1|Oxide'],
+         'a different colour or name is a new entry, in order of appearance');
+      eq(V.fitStatesOf([{}, a], 6).length, 1, 'a spectrum without a fit adds nothing');
+      eq(V.fitStatesOf([], 6), [], 'no spectra, no states');
+      check(V.FIT_STACK_MAX === 8, 'fits on stacks are drawn for up to 8 traces, like the desktop');
+      check(V.FIT_LAYERS.indexOf('stack') >= 0 && V.FIT_LAYERS.indexOf('merge') >= 0, 'both fit options are wired');
+    }
     for (const n of Object.keys(fx.fit.state_slots)) {
       eq(V.fitStates(fspecs[0].reg, +n).map((x) => x.name + '|' + x.slot),
          fx.fit.state_slots[n].map((x) => x.name + '|' + x.slot), 'chemical states and their INDEX slots for a palette of ' + n);

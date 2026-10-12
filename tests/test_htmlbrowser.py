@@ -753,7 +753,8 @@ class TestPage(unittest.TestCase):
         # +30_000: the Image maps tab (Kratos imaging maps: blur, sharpness,
         # series, canvas drawing and controls) in viewer.js
         # +2_000: colour by CasaXPS INDEX and the merge of INDEX groups
-        self.assertLess(len(page), 189_000 + raw)     # far below plain JSON
+        # +2_500: the fits of a stack (per-trace curves, offset, one legend)
+        self.assertLess(len(page), 191_500 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR

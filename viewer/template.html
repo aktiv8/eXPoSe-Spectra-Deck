@@ -81,6 +81,7 @@
           <label class="field"><input type="checkbox" id="fit-background" checked> Background</label>
           <label class="field"><input type="checkbox" id="fit-residual"> Residual</label>
           <label class="field" title="Draw the components that share a CasaXPS INDEX as one component (the outline of their sum), so a chemical state built from several peaks reads as one shape. The table and the CSV keep every component."><input type="checkbox" id="fit-merge"> Merge INDEX groups</label>
+          <label class="field" title="On a stack of several spectra, draw each trace's own fit (up to eight traces), offset like the traces. The fit table and the residual stay with a panel that shows one spectrum."><input type="checkbox" id="fit-stack"> Fits on stacks</label>
           <label class="field" id="fit-csv-field" hidden title="Draw and quantify the fits that have a CasaXPS CSV export from CasaXPS's own curves. Untick to use the reconstruction from the stored fit parameters."><input type="checkbox" id="fit-csv" checked> CasaXPS exported curves</label>
         </div>
         <p id="notes" class="muted small"></p>

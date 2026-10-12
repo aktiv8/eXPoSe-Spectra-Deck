@@ -565,7 +565,8 @@ shape; the table, the quantification and the exports still list every peak.
 Choose **View ▸ Fit stack** to stack several fitted spectra (a depth profile, or
 the same region refitted): each trace is drawn with its own fit, offset like a
 normal stack, up to eight at a time (the Traces slider moves the window), with
-one legend of the chemical states.
+one legend of the chemical states. In the offline data browser the same is
+the **Fits on stacks** box in the fit bar (a stack of up to eight spectra).
 
 * **Charge correction carried over.** CasaXPS records its binding-energy
   correction in each block as `Calib M = 281.7289 A = 282 BE ADD` (measured
