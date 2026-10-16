@@ -22,7 +22,7 @@ from readers import load_file, reader_for, UnsupportedFormat  # noqa: E402
 
 CORPUS = os.environ.get("XPS_CORPUS", "")
 EXTS = (".vms", ".vamas", ".avg", ".avx", ".vgd", ".spe", ".kal", ".dset",
-        ".experiment", ".txt")
+        ".experiment", ".txt", ".npl")
 
 
 @unittest.skipUnless(CORPUS and os.path.isdir(CORPUS), "XPS_CORPUS not set")

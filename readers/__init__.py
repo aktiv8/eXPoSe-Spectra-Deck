@@ -25,7 +25,7 @@ def _sniff_experiment(head: bytes, ext: str) -> bool:
 # Content sniffing first, so renamed or unusual extensions still load.
 READERS = [
     ("VAMAS (ISO 14976)", vamas.sniff, vamas.VamasFile,
-     ("*.vms", "*.vamas", "*.vam")),
+     ("*.vms", "*.vamas", "*.vam", "*.npl")),      # .npl: PHI MultiPak export
     ("Thermo Avantage (.avg)", thermo_avg.sniff, thermo_avg.ThermoAvgFile,
      ("*.avg", "*.avx")),
     ("Thermo Avantage (.vgd)", thermo_vgd.sniff, thermo_vgd.ThermoVgdFile,

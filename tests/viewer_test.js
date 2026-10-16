@@ -386,8 +386,12 @@ function near(a, b, msg, tol) {
     eq(V.anodeFor(null), 'Al', 'anodeFor defaults to Al');
     eq(V.anodeFor(1486.6), 'Al', 'anodeFor Al Kalpha');
     eq(V.anodeFor(1253.6), 'Mg', 'anodeFor Mg Kalpha');
+    eq(V.anodeFor(1486.68), 'Al', 'anodeFor Thermo Al Kalpha');
+    eq(V.anodeFor(5414.8), null, 'anodeFor Cr 5414.8 eV (HAXPES) has no anode');
+    eq(V.anodeFor(2984.2), null, 'anodeFor Ag Lalpha has no anode');
     {
       const table = [['scofield', 'Al', 'Pt 4f', 15.45], ['scofield', 'Mg', 'Pt 4f', 15.86]];
+      eq(V.rsfOf('Pt 4f', table, 'scofield', 5414.8), null, 'rsfOf Cr: no table value');
       near(V.rsfOf('Pt 4f', table, 'scofield', 1486.6), 15.45, 'rsfOf Al');
       near(V.rsfOf('Pt 4f', table, 'scofield', 1253.6), 15.86, 'rsfOf Mg');
       eq(V.rsfOf('Zz 9z', table, 'scofield', 1486.6), null, 'rsfOf no match');

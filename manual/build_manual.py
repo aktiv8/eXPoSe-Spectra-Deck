@@ -278,8 +278,9 @@ def build_toc(doc):
 
 FORMATS_HEADERS = ["Format", "Extension", "Notes"]
 FORMATS_ROWS = [
-    ("VAMAS (ISO 14976)", ".vms, .vamas",
-     "From any vendor (Kratos/CasaXPS, PHI, SPECS, Thermo, ...). Handles "
+    ("VAMAS (ISO 14976)", ".vms, .vamas, .npl",
+     "From any vendor (Kratos/CasaXPS, PHI, SPECS, Thermo, ...); PHI MultiPak's own "
+     "export is the .npl. Handles "
      "NORM/MAP/SDPSV modes, regular and irregular scans, and vendor comment blocks."),
     ("Thermo Avantage text dump", ".avg (.avx text dump)",
      "Multi-position scans give one region per position; a SnapMap loads as its "
@@ -289,7 +290,9 @@ FORMATS_ROWS = [
     ("Thermo Avantage experiment", "a folder, or .VGX",
      "Opens the whole experiment as one session: samples, analysis points, scans in "
      "run order, camera images and SnapMaps (Chapter 22)."),
-    ("PHI / ULVAC-PHI MultiPak", ".spe", "Intensities are counts per second, as stored."),
+    ("PHI / ULVAC-PHI MultiPak", ".spe",
+     "Intensities are counts per second, as stored. Reads float64 and float32 data "
+     "(the block headers say which, e.g. the Quantes) in either byte order."),
     ("Scienta Omicron SES", ".txt", "Detector/angle columns are summed to one spectrum."),
     ("Numbers in columns", ".csv .asc .txt .dat .tsv",
      "Any spectrum saved as plain columns (tab, comma, semicolon or space separated, "

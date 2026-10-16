@@ -71,11 +71,19 @@ def load_rsf(path=None):
         return []
 
 
+LOW_HV, HIGH_HV = 1200.0, 1600.0     # the table covers Mg and Al sources only
+
+
 def anode_for(hv):
     """"Mg" if ``hv`` is nearer 1253.6 eV than 1486.6 eV, else "Al" -- the
     default when ``hv`` is None or the two are equidistant, since Al Kalpha
     is by far the common case (the same default this app already assumes
-    elsewhere, e.g. ``xpslines.DEFAULT_HV``)."""
+    elsewhere, e.g. ``xpslines.DEFAULT_HV``). ``None`` when ``hv`` lies
+    outside ``LOW_HV``..``HIGH_HV`` (Cr 5414.8 eV HAXPES, Ag L-alpha 2984 eV,
+    ...): the table holds Mg and Al cross sections only, and Al's must not be
+    used for another photon energy."""
+    if hv and not LOW_HV <= float(hv) <= HIGH_HV:
+        return None
     if hv and abs(float(hv) - MG_HV) < abs(float(hv) - AL_HV):
         return "Mg"
     return "Al"
@@ -87,6 +95,8 @@ def rsf_of(line, table, library="scofield", hv=None):
     None when that exact line/anode/library combination is not in the
     table."""
     anode = anode_for(hv)
+    if anode is None:
+        return None
     for e in table:
         if (e["library"] == library and e["anode"] == anode
                 and e["line"] == line):

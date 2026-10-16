@@ -272,6 +272,172 @@ class TestPhiSpe(Tmp):
         with self.assertRaises(ValueError):
             load_file(self.write("bad.spe", blob))
 
+    # -- block headers that say how the data are stored (Quantes, K-Alpha+) --
+    @staticmethod
+    def phi_blob(regions, order="<", tag=b"f8", source="Al 1486.6 mono",
+                 head_extra=(), date="2022 8 8", pad=0, desc="test"):
+        """A PHI .spe whose 96-byte block headers carry the data type (+72),
+        length (+76) and offset (+80), as the real files do. ``regions`` is
+        [(name, [counts], step, start)]; ``pad`` bytes sit before the data."""
+        code, size = {b"f8": ("d", 8), b"f4": ("f", 4)}.get(tag, ("d", 8))
+        head = ["SOFH", "Technique: XPS", "FileDesc: " + desc,
+                "FileDate: " + date, "AcqFileDate: " + date,
+                "XraySource: " + source, "XrayPower: 25.0 W",
+                "XrayBeamDiameter: 100.0 um", "AnalyserMode: FAT",
+                "SourceAnalyserAngle: 45.0 d",
+                "IntensityCalCoeff: 107.072 0.591",
+                "AnalyserWorkFcn: 4.45 eV", "NoSpectralRegFull: 1",
+                "SpectralRegDefFull: 1 1 Su1s 111 9 -1.0 8.0 0.0 8.0 0.0 "
+                "0.0 280.00 TOTAL", "NoSpectralReg: %d" % len(regions)]
+        for i, (n, c, step, start) in enumerate(regions, 1):
+            head += ["SpectralRegDef: %d %d %s 40 %d %.4f %.4f %.4f %.4f "
+                     "%.4f %.6f %.2f TOTAL" % (
+                         i, i, n, len(c), step, start, start + step * (len(c) - 1),
+                         start, start + step * (len(c) - 1), 0.5, 23.5),
+                     "SpectralRegDef2: %d 40.0 3 0 6 1" % i]
+        head += ["NoSpatialArea: 1", *head_extra, "EOFH"]
+        blob = "\r\n".join(head).encode("latin-1") + b"\r\n"
+        n = len(regions)
+        blob += struct.pack(order + "4i", 1, n, 96 * n, 16)
+        offset = 16 + 96 * n + pad
+        for i, (name, c, _s, _st) in enumerate(regions, 1):
+            h = bytearray(96)
+            struct.pack_into(order + "i", h, 0, i)
+            struct.pack_into(order + "i", h, 20, len(c))
+            h[32:35], h[40:43], h[56:59] = b"chn", b"sar", b"c/s"
+            h[72:72 + len(tag)] = tag
+            struct.pack_into(order + "i", h, 76, len(c) * size)
+            struct.pack_into(order + "i", h, 80, offset)
+            blob += bytes(h)
+            offset += len(c) * size
+        blob += b"\x7f" * pad
+        for _n, c, _s, _st in regions:
+            blob += struct.pack("%s%d%s" % (order, len(c), code), *c)
+        return blob
+
+    REGIONS = [("Su1s", [10.5 + i for i in range(9)], -1.0, 8.0),
+               ("Zr2p3", [100.25 + i for i in range(5)], -0.125, 2255.0)]
+
+    def test_float32_data_type_from_the_block_header(self):
+        f = load_file(self.write("q.spe", self.phi_blob(self.REGIONS,
+                                                       tag=b"f4")))
+        self.assertEqual(f.warnings, [])
+        self.assertEqual(f.regions[1].counts, self.REGIONS[1][1])
+        self.assertEqual(f.regions[0].counts, self.REGIONS[0][1])
+
+    def test_big_endian_file(self):
+        f = load_file(self.write("be.spe", self.phi_blob(self.REGIONS,
+                                                        order=">")))
+        self.assertEqual(f.regions[1].counts, self.REGIONS[1][1])
+        f = load_file(self.write("be4.spe", self.phi_blob(
+            self.REGIONS, order=">", tag=b"f4")))
+        self.assertEqual(f.regions[0].counts, self.REGIONS[0][1])
+
+    def test_data_offset_comes_from_the_block_header(self):
+        f = load_file(self.write("pad.spe", self.phi_blob(
+            self.REGIONS, tag=b"f4", pad=24)))
+        self.assertEqual(f.warnings, [])
+        self.assertEqual(f.regions[1].counts, self.REGIONS[1][1])
+
+    def test_full_and_def2_lines_are_not_regions(self):
+        f = load_file(self.write("full.spe", self.phi_blob(self.REGIONS)))
+        self.assertEqual(len(f.regions), 2)
+        self.assertEqual([r.n_points for r in f.regions], [9, 5])
+
+    def test_phi_region_names(self):
+        f = load_file(self.write("n.spe", self.phi_blob(self.REGIONS)))
+        self.assertEqual([r.name for r in f.regions], ["Survey", "Zr 2p3"])
+
+    def test_unknown_data_type_is_refused(self):
+        blob = self.phi_blob(self.REGIONS, tag=b"f8")
+        i = blob.find(b"EOFH") + 6 + 16 + 72
+        blob = blob[:i] + b"i2" + blob[i + 2:]
+        with self.assertRaises(ValueError) as cm:
+            load_file(self.write("t.spe", blob))
+        self.assertIn("unsupported data type", str(cm.exception))
+
+    def test_implausible_values_are_refused_not_returned(self):
+        bad = [("C1s", [1e300, 2e300, 3e300], -1.0, 3.0)]
+        with self.assertRaises(ValueError) as cm:
+            load_file(self.write("bad.spe", self.phi_blob(bad)))
+        self.assertIn("plausible", str(cm.exception))
+
+    def test_source_with_an_element_names_the_anode(self):
+        for text, anode, hv in (("Al 1486.6 mono", "Al mono", 1486.6),
+                                ("Cr 5414.8 mono", "Cr mono", 5414.8)):
+            f = load_file(self.write("s.spe", self.phi_blob(
+                self.REGIONS, source=text)))
+            r = f.regions[0]
+            self.assertEqual((r.anode, r.photon_energy), (anode, hv))
+            self.assertEqual(f.instrument["X-ray source"],
+                             "%s (%g eV)" % (anode, hv))
+
+    def test_energy_only_source_names_no_anode(self):
+        """Thermo's ``KA1486 1486.68``: the energy is the whole number, no
+        anode is made up, and nothing reads "KA1486"."""
+        import methods
+        f = load_file(self.write("ka.spe", self.phi_blob(
+            self.REGIONS, source="KA1486 1486.68", desc="CasaXPS MULTIPAK output")))
+        r = f.regions[0]
+        self.assertEqual((r.anode, r.photon_energy), ("", 1486.68))
+        self.assertNotIn("X-ray source", f.instrument)
+        md = f.region_metadata(r)
+        text = methods._source_sentence([md])
+        self.assertNotIn("KA1486", text)
+        self.assertIn("1486.68", text)
+        self.assertEqual(f.instrument["Acquisition software"],
+                         "CasaXPS (MultiPak-format output)")
+    def test_dates_with_any_spacing(self):
+        for text, want in (("2022 8 8", "2022-08-08"),
+                           ("2025 10  6", "2025-10-06"),
+                           ("2009 03 19", "2009-03-19")):
+            f = load_file(self.write("d.spe", self.phi_blob(self.REGIONS,
+                                                           date=text)))
+            self.assertEqual(f.regions[0].date, want)
+
+    def test_recorded_settings_become_metadata(self):
+        f = load_file(self.write("m.spe", self.phi_blob(self.REGIONS)))
+        r = f.regions[0]
+        md = f.region_metadata(r)
+        self.assertEqual(md["Analyser mode"], "Constant analyser energy (CAE)")
+        self.assertEqual(md["X-ray spot (µm)"], "100")
+        self.assertIn("107.072, 0.591", md["Intensity calibration (a, b)"])
+        self.assertEqual(md["Source–analyser angle (°)"], "45")
+        self.assertNotIn("Take-off angle (°)", md)  # a different quantity
+        self.assertIsNone(r.tf_ke)              # recorded, never applied
+        self.assertEqual(r.counts, self.REGIONS[0][1])
+
+    def test_npl_is_offered_beside_vms(self):
+        import readers
+        vamas = dict(readers.supported_patterns())["VAMAS (ISO 14976)"]
+        self.assertIn("*.npl", vamas)
+        try:
+            import spectradeck as ee
+        except Exception as exc:                # noqa: BLE001 - no Tk/display
+            self.skipTest(f"app not importable here: {exc}")
+        types = ee.Workspace._open_filetypes()
+        self.assertIn("*.npl", types[0][1])              # all supported
+        self.assertTrue(any(n.startswith("VAMAS") and "*.npl" in p
+                            for n, p in types))
+
+    def test_nul_in_a_vamas_species_label(self):
+        """PHI MultiPak's ``.npl`` export ends each species label with a NUL."""
+        e, y = peak(21, 280, 290, 285)
+        p = self.path("nul.vms")
+        export_vamas([Region(name="C 1s", index=1, offset=0, energy=e,
+                             counts=y, decodable=True, sample="S1",
+                             photon_energy=1486.6, pass_energy=20.0,
+                             dwell=0.1, step=0.5)], p,
+                     include_transmission=False)
+        with open(p, "rb") as fh:
+            blob = fh.read()
+        blob = blob.replace(b"C 1s", b"C 1s\x00")
+        self.assertIn(b"C 1s\x00", blob)
+        with open(self.path("nul.npl"), "wb") as fh:
+            fh.write(blob)
+        self.assertEqual(load_file(self.path("nul.npl")).regions[0].name,
+                         "C 1s")
+
 
 class TestScienta(Tmp):
     def test_regions_and_units(self):

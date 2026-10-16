@@ -75,6 +75,13 @@ class TestAnodeFor(unittest.TestCase):
         mid = (rsf.AL_HV + rsf.MG_HV) / 2.0
         self.assertEqual(rsf.anode_for(mid), "Al")
 
+    def test_other_photon_energies_have_no_anode(self):
+        """Cr 5414.8 eV (HAXPES), Ag L-alpha and Zr anodes are not Al."""
+        for hv in (5414.8, 2984.2, 2042.4, 500.0):
+            self.assertIsNone(rsf.anode_for(hv))
+        self.assertEqual(rsf.anode_for(1486.68), "Al")     # Thermo's Al K-alpha
+        self.assertIsNone(rsf.rsf_of("Pt 4f", FIXTURE, "scofield", 5414.8))
+
 
 class TestRsfOf(unittest.TestCase):
     def test_exact_match(self):

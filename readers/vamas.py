@@ -148,6 +148,8 @@ class VamasFile(SpectrumFile):
             text = raw.decode("utf-8")
         except UnicodeDecodeError:
             text = raw.decode("latin-1")
+        # PHI MultiPak's export (``.npl``) ends each species label with a NUL
+        text = text.replace("\x00", "")
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = text.split("\n")
         first_line = next((l for l in lines if l.strip()), "")

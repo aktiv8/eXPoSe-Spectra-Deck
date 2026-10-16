@@ -359,13 +359,16 @@
     return m ? m[1] : '';
   };
   /* JS port of rsf.py's anode_for/rsf_of: AL_HV/MG_HV match rsf.py exactly. */
-  V.AL_HV = 1486.6; V.MG_HV = 1253.6;
+  V.AL_HV = 1486.6; V.MG_HV = 1253.6; V.LOW_HV = 1200; V.HIGH_HV = 1600;
   V.anodeFor = function (hv) {
+    /* null outside LOW_HV..HIGH_HV: the table is Mg and Al only (HAXPES etc.) */
+    if (hv && (hv < V.LOW_HV || hv > V.HIGH_HV)) return null;
     if (hv && Math.abs(hv - V.MG_HV) < Math.abs(hv - V.AL_HV)) return 'Mg';
     return 'Al';
   };
   V.rsfOf = function (line, table, library, hv) {
     var anode = V.anodeFor(hv);
+    if (anode === null) return null;
     for (var i = 0; i < table.length; i++) {
       var e = table[i];
       if (e[0] === library && e[1] === anode && e[2] === line) return e[3];
