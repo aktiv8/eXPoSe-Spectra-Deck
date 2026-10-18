@@ -610,6 +610,13 @@ def is_exact(shape) -> bool:
         # no exported curves to compare with, so it stays flagged
         return (not ps["tail"] and not ps["suffix"]
                 and abs(ps["a"] - ps["b"]) < 1e-9)
+    if ps["kind"] in ("QF", "QSF"):
+        # the program's table with the 16 x^4 base (and the boxcar for QSF),
+        # checked against CasaXPS's exported curves (a 0.5-1, b 1-12, w 20-50,
+        # n 0-100, k 1-12); LSF has no export yet and stays flagged
+        return (len(ps["params"]) in (4, 5) and not ps["tail"]
+                and not ps["suffix"] and ps["a"] > 0 and ps["b"] > 0
+                and ps["w"] > 0)
     if ps["kind"] == "LS":
         # the program's table with the "Moving Average" kernel, checked against
         # CasaXPS's exported curves (a and b of 0.5-1.5, n of 10-500)
@@ -827,7 +834,7 @@ def gauss_conv(x, y, gfwhm):
 #   1`` equal samples (the "square Lorentzian" of the literature) in place of
 #   the Gaussian; the stretch / clamp at ``n * step > 2`` is the same.
 # * ``LSF(a, b, w, n, k)`` / ``QF`` / ``QSF`` (builder 0x14040ead0 types 1, 4,
-#   5; **read from the program, not yet checked against exported curves**):
+#   5; ``QF`` and ``QSF`` checked against 13 exported curves, ``LSF`` not yet):
 #   ``LSF`` is ``LF`` with the "Moving Average" boxcar in place of the Gaussian;
 #   ``QF`` has ``16 x^4`` where ``LF`` has ``4 x^2`` in the base,
 #   ``1 / (1 + 16 x^4) ** p``, with the same exponent p; ``QSF`` is ``QF`` with

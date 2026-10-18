@@ -17,6 +17,8 @@ components in its header:
 * ``more E and PHI.csv`` - three more ``E`` fits (a = 1, 0.5, 0.1) and six
   ``GL(m,n)PHI(j,w)`` fits (``SL`` makes the same call as ``PHI``)
 * ``ls shapes.csv`` - Au 4d, ten ``LS(a,b,n)`` fits (a, b 0.5-1.5, n 10-500)
+* ``qf.csv`` - Au 4d, 13 fits: nine ``QF(a,b,w,n[,k])`` and four ``QSF``
+  (a 0.5-1, b 1-12, w 20-50, n 0-100, k 1-12)
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -317,6 +319,31 @@ class TestLsLiteral(unittest.TestCase):
             self.assertTrue(ls.is_exact(shape), shape)
             seen += 1
         self.assertEqual(seen, 10)
+
+
+@unittest.skipUnless(HAVE_NP and _path("qf.csv"), "qf.csv not found")
+class TestQfLiteral(unittest.TestCase):
+    """``QF`` (the ``LF`` table with a ``16 x^4`` base) and ``QSF`` (the same
+    with the boxcar kernel), the stated Area used as it is."""
+
+    def test_every_fit_matches_casaxps(self):
+        seen = {"QF": 0, "QSF": 0}
+        for info, head, cols in _blocks(_path("qf.csv")):
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            lit = cols[:, 2] - bg
+            shape = info["Lineshape"][0]
+            mine = np.empty_like(lit)
+            mine[order] = ls.component_curve(
+                ke[order], shape, HV - float(info["Position"][0]),
+                float(info["FWHM"][0]), float(info["Area"][0]))
+            err = float(np.abs(mine - lit).max() / lit.max())
+            self.assertLess(err, 0.006, shape)
+            self.assertTrue(ls.is_exact(shape), shape)
+            seen[shape.split("(")[0]] += 1
+        self.assertEqual(seen, {"QF": 9, "QSF": 4})
 
 
 if __name__ == "__main__":

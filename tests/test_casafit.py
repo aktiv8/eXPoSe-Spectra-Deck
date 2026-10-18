@@ -306,7 +306,7 @@ class TestShapes(unittest.TestCase):
         using its first parameter as a 0-100 % mix -- e.g. DS(0.09,500) drew
         as an almost-pure Gaussian GL(0.09) and reported itself as exact.
         parse_shape must keep the real name and is_exact must say False."""
-        for shape in ("QF(1,2,3,4)", "H(0.09,250)", "SS(1.53,243,0.2)"):
+        for shape in ("TP(1,2,3,4)", "H(0.09,250)", "SS(1.53,243,0.2)"):
             p = ls.parse_shape(shape)
             self.assertNotEqual(p["kind"], "GL", shape)
             self.assertFalse(ls.is_exact(shape), shape)
@@ -1374,13 +1374,19 @@ class TestProgramTables(unittest.TestCase):
                       "GL(30)PHI(1)"):
             self.assertIsNone(ls._table_for(ls.parse_shape(shape)), shape)
 
-    def test_lsf_qf_qsf_are_read_from_the_program_but_not_flagged_exact(self):
-        # builder 0x14040ead0 types 1, 4, 5; no exported CasaXPS curve yet
+    def test_lsf_qf_qsf_are_read_from_the_program(self):
+        # builder 0x14040ead0 types 1, 4, 5; QF and QSF are checked against
+        # CasaXPS's exported curves (tests/test_lineshape_literal.py), LSF
+        # has no export yet and stays flagged approximate
         for shape in ("LSF(0.7,1.5,75,100)", "QF(0.7,1.5,75,100)",
                       "QSF(0.7,1.5,75,100,2)"):
             self.assertIsNotNone(ls._table_for(ls.parse_shape(shape)), shape)
-            self.assertFalse(ls.is_exact(shape), shape)
             self.assertEqual(ls.check_shape(shape), [], shape)
+        self.assertFalse(ls.is_exact("LSF(0.7,1.5,75,100)"))
+        self.assertTrue(ls.is_exact("QF(0.7,1.5,75,100)"))
+        self.assertTrue(ls.is_exact("QSF(0.7,1.5,75,100,2)"))
+        self.assertTrue(ls.is_exact("QSF(0.9,12,20,1)"))
+        self.assertFalse(ls.is_exact("QF(0.7,1.5,75)"))        # too few numbers
         # LSF is LF with another kernel: no kernel (n = 0 or k = 0), no difference
         for tail in ("0", "100,0"):
             np.testing.assert_allclose(
