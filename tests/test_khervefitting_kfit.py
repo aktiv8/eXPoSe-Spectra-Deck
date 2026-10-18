@@ -893,6 +893,69 @@ class TestPtCl2RefittedRealFile(unittest.TestCase):
         self.assertGreaterEqual(seen["U2-Tougaard"], 2)
 
 
+KF194_DIR = os.path.dirname(PTCL2_REFITTED_PATH)
+KF194_LOADED = os.path.join(KF194_DIR, "PtCl2_refitted_loaded and saved 1.94.kfit")
+KF194_REFIT = os.path.join(KF194_DIR, "PtCl2_refitted KF1.94.kfit")
+
+
+@unittest.skipUnless(os.path.isfile(KF194_LOADED) and os.path.isfile(KF194_REFIT),
+                     "the two KherveFitting 1.94 PtCl2 files are not present")
+class TestKherveFitting194(unittest.TestCase):
+    """The same project loaded and saved again by KherveFitting 1.94 (nothing
+    changed: all 12 configured sheets still store the raw data as their
+    background, so that is how the version saves an untouched sheet), and
+    refitted there (5 sheets whose background was changed now store a real
+    curve: Shirley, Smart, U2-Tougaard)."""
+
+    def _stored_and_rebuilt(self, path):
+        doc = readers.load_file(path)
+        stored = rebuilt = 0
+        for r in doc.regions:
+            if r.fit and r.fit.regions and r.fit.regions[0].background not in ("", "Unknown"):
+                reg = r.fit.regions[0]
+                if reg.known_background is not None:
+                    stored += 1
+                elif "equals the raw data" in (reg.note or ""):
+                    rebuilt += 1
+        return doc, stored, rebuilt
+
+    def test_a_loaded_and_saved_project_has_no_stored_backgrounds(self):
+        _, stored, rebuilt = self._stored_and_rebuilt(KF194_LOADED)
+        self.assertEqual((stored, rebuilt), (0, 12))
+
+    def test_a_refitted_project_uses_its_real_curves_and_rebuilds_the_rest(self):
+        doc, stored, rebuilt = self._stored_and_rebuilt(KF194_REFIT)
+        self.assertEqual((stored, rebuilt), (5, 7))
+        for r in doc.regions:
+            if not (r.fit and r.fit.regions and r.fit.components):
+                continue
+            dw, sc = r.dwell_and_scans()
+            cv = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
+                                dw, sc)[0]
+            if cv.residual_rms is not None:
+                self.assertLess(cv.residual_rms, 0.08, f"{r.sample} {r.name}")
+
+    def test_the_rebuilt_shirley_is_close_to_kherve_fittings_own(self):
+        import copy
+        import numpy as np
+        doc = readers.load_file(KF194_REFIT)
+        r = next(r for r in doc.regions if r.name == "C 1s"
+                 and r.fit.regions[0].background == "Shirley"
+                 and r.fit.regions[0].known_background is not None)
+        dw, sc = r.dwell_and_scans()
+
+        def curve(fit):
+            return np.array(casafit.curves(fit, r.energy, r.counts,
+                                           r.photon_energy, dw, sc)[0].background)
+        own = curve(r.fit)
+        fit2 = copy.deepcopy(r.fit)
+        fit2.regions[0].known_background = None
+        ours = curve(fit2)
+        ok = ~np.isnan(own) & ~np.isnan(ours)
+        span = max(r.counts) - min(r.counts)
+        self.assertLess(float(np.abs(own[ok] - ours[ok]).max()) / span, 0.04)
+
+
 class _Group:
     """The little of an h5py group that ``_build_fit`` reads."""
     name = "/core_levels/cl_0"
