@@ -597,7 +597,7 @@ class SpectrumFile:
             md["Source configuration"] = r.extra["config"]
         if r.fit is not None:
             bgs = sorted({g.background for g in r.fit.regions})
-            md["CasaXPS fit"] = (
+            md[f"{r.extra.get('fit_source', 'CasaXPS')} fit"] = (
                 f"{len(r.fit.components)} component(s)"
                 + (f", {'/'.join(bgs)} background" if bgs else "")
                 + (f", BE calibration {r.fit.calib_shift:+.2f} eV"

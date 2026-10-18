@@ -545,6 +545,12 @@ def parse_shape(text) -> dict:
         out.update(a=ps[0] if ps else 0.0, m=ps[1] if len(ps) > 1 else 0.0)
     elif kind in ("GL", "SGL", "VOIGT"):
         out["mix"] = ps[0] if ps else 30.0
+    elif kind == "AV":
+        # AV(mix, t1, t2, t3): an Avantage fitted peak (readers/thermo_vgp.py)
+        # -- the Gaussian/Lorentzian sum with mix = the Lorentzian percentage,
+        # and the three raw tail terms the project stores, kept but not drawn
+        out["mix"] = ps[0] if ps else 30.0
+        out["tail_terms"] = tuple(ps[1:4])
     elif kind == "A":
         # A(a,b,n)GL(m) / A(a,b,n)SGL(m): the Gelius asymmetric shape (see
         # module docstring). a, b control the tail; n (kept in "m", like DS's
@@ -572,6 +578,21 @@ def is_exact(shape) -> bool:
     ps = parse_shape(shape)
     return (ps["kind"] in ("GL", "SGL") and not ps["tail"]
             and len(ps["params"]) <= 1 and not ps["suffix"])
+
+
+def shape_notes(shape) -> list:
+    """Caveats about a shape that is drawn, but not as its source defines it
+    (the component stays in the envelope): [] for the shapes that are drawn
+    as they are. An Avantage peak (``AV``) whose project stores tail terms
+    other than the "no tail" values ``(0, 1, 0)`` says they are not drawn."""
+    ps = parse_shape(shape)
+    if ps["kind"] == "AV":
+        t = ps.get("tail_terms") or ()
+        if len(t) == 3 and not (abs(t[0]) < 1e-9 and abs(t[1] - 1.0) < 1e-9
+                                and abs(t[2]) < 1e-9):
+            return ["Avantage tail terms are not drawn (asymmetric peak shown "
+                    "symmetric)"]
+    return []
 
 
 def check_shape(shape) -> list:
@@ -629,6 +650,11 @@ def check_shape(shape) -> list:
             bad.append("TLA needs three parameters")
         elif ps["a"] <= 0 or ps["b"] <= 0 or ps["m"] < 0:
             bad.append("TLA's alpha and mu must be positive and n not negative")
+    elif kind == "AV":
+        if n < 1:
+            bad.append("AV needs a mix")
+        elif not 0 <= vals[0] <= 100:
+            bad.append("AV's mix must be between 0 and 100")
     if ps["tail"]:
         tk = ps["tk"]
         if tk is None or not math.isfinite(tk) or tk <= 0:
@@ -790,6 +816,8 @@ def _raw_values(x, sp, pos, fwhm):
         return base
     if sp["kind"] == "VOIGT":
         return _voigt_values(x, pos, fwhm, sp["mix"])
+    if sp["kind"] == "AV":
+        return _gl_sgl_values(x, "SGL", sp["mix"], pos, fwhm)
     if sp["kind"] == "DS":
         t = 2.0 * (x - pos) / fwhm
         a = sp["a"]
@@ -844,7 +872,7 @@ def component_curve(ke, shape, pos, fwhm, area):
     sp = parse_shape(shape)
     fwhm = fwhm if fwhm and fwhm > 0 else 1.0
     v = _raw_values(ke, sp, pos, fwhm)
-    if sp["kind"] in ("GL", "SGL", "VOIGT"):
+    if sp["kind"] in ("GL", "SGL", "VOIGT", "AV"):
         conv = v
     else:
         gw = fwhm * GAUSS_K.get(sp["kind"], 0.0) * (

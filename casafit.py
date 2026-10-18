@@ -62,6 +62,9 @@ class FitRegion:
     csv_curves: "CsvCurves | None" = None   # literal curves matched from a
         # CasaXPS ASCII export (casacsv.py) -- independent of known_background,
         # only used when curves() is called with prefer_csv=True
+    note: str = ""                   # a caveat about how this region's
+        # background is drawn (an Avantage "Smart" background drawn as
+        # Shirley), added to Curves.notes
 
 
 @dataclass
@@ -517,6 +520,8 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
                                            params=reg.params)
             comps, total = [], (np.zeros(len(sel)) if bg is None else bg.copy())
             approx = False
+            if reg.note:
+                notes.append(reg.note)
             for c in region_comps:
                 bad = lineshapes.check_shape(c.shape)
                 if bad:
@@ -533,6 +538,10 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
                 comps.append((c, v))
                 total = total + v
                 approx = approx or not lineshapes.is_exact(c.shape)
+                for msg in lineshapes.shape_notes(c.shape):
+                    note = f"{c.name or 'component'}: {msg}"
+                    if note not in notes:
+                        notes.append(note)
         k = scale or 1.0
 
         def full(vals):

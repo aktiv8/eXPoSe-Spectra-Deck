@@ -114,6 +114,8 @@ def looks_like_experiment(folder: str) -> bool:
         return False
     if any(n.lower().endswith(DATA_EXTS) for n in names):
         return False
+    if any(n.lower().endswith(".vgp") for n in names):
+        return False                 # projects: each opens with its own fits
     return any(True for _ in data_files(folder))
 
 

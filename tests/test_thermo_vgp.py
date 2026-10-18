@@ -21,7 +21,10 @@ sys.path.insert(0, ROOT)
 sys.path.insert(0, HERE)
 
 import olewriter  # noqa: E402
+import readers  # noqa: E402
 from readers import thermo_vgp as V  # noqa: E402
+from readers.base import Region, SpectrumFile  # noqa: E402
+from readers.thermo_experiment import looks_like_experiment  # noqa: E402
 
 CORPUS = os.environ.get("XPS_VGP_CORPUS",
                         os.path.join("C:\\", "AvantageSystem", "Knowledge"))
@@ -225,6 +228,202 @@ class TestRefused(unittest.TestCase):
             V.parse(raw)
 
 
+# -- the shape ---------------------------------------------------------------------
+class TestAvantageShape(unittest.TestCase):
+    def test_parse_and_flags(self):
+        import lineshapes as ls
+        p = ls.parse_shape("AV(23,0,1,0)")
+        self.assertEqual((p["kind"], p["mix"], p["tail_terms"]),
+                         ("AV", 23.0, (0.0, 1.0, 0.0)))
+        self.assertFalse(ls.is_exact("AV(23,0,1,0)"))        # a reconstruction
+        self.assertEqual(ls.check_shape("AV(23,0,1,0)"), [])
+        self.assertTrue(ls.check_shape("AV(120,0,1,0)"))
+        self.assertTrue(ls.check_shape("AV()"))
+
+    def test_tail_terms_are_said_only_when_they_are_not_the_no_tail_values(self):
+        import lineshapes as ls
+        self.assertEqual(ls.shape_notes("AV(23,0,1,0)"), [])
+        self.assertEqual(ls.shape_notes("AV(23,1e-17,1,0)"), [])
+        self.assertTrue(ls.shape_notes("AV(26,1e-17,0.367,0.0428)"))
+        self.assertEqual(ls.shape_notes("GL(30)"), [])
+
+    def test_it_is_drawn_as_the_gaussian_lorentzian_sum(self):
+        import numpy as np
+        import lineshapes as ls
+        ke = np.linspace(1190.0, 1214.0, 2401)
+        a = ls.component_curve(ke, "AV(23,0,1,0)", 1202.0, 1.3, 100.0)
+        b = ls.component_curve(ke, "SGL(23)", 1202.0, 1.3, 100.0)
+        self.assertTrue(np.allclose(a, b))
+
+    def test_the_area_follows_the_drawn_height(self):
+        import numpy as np
+        import lineshapes as ls
+        ke = np.linspace(1150.0, 1250.0, 20001)
+        for mix in (0.0, 0.23, 0.6, 1.0):
+            area = V.peak_area(1000.0, 1.3, mix)
+            curve = ls.component_curve(ke, f"AV({100 * mix:g},0,1,0)", 1200.0,
+                                       1.3, area)
+            self.assertAlmostEqual(float(curve.max()) / 1000.0, 1.0, delta=0.01)
+
+
+# -- the project as a session --------------------------------------------------------
+HV, DWELL = 1486.68, 0.025
+SPECS = {"C1s Scan": ("C 1s", 1190.0, 1210.0), "Pd": ("Pd 3d", 1130.0, 1160.0),
+         "Unfitted": ("O 1s", 940.0, 960.0)}
+BGS = [dict(start=1195.0, end=1206.0, avg=10, width=0.05, code=0),
+       dict(start=1140.0, end=1157.0, avg=5, width=0.1, code=3)]
+
+
+def _shape(x, fwhm, mix):
+    import numpy as np
+    t = x / fwhm
+    return (1 - mix) * np.exp(-4 * np.log(2) * t * t) + mix / (1 + 4 * t * t)
+
+
+class StubVgd(SpectrumFile):
+    """Stands in for ``ThermoVgdFile``: one synthetic spectrum per file name,
+    a flat 1000 counts/s plus the fitted peaks of the demo project."""
+    format_name = "stub"
+
+    def load(self, path):
+        import numpy as np
+        self.path = path
+        name, lo, hi = SPECS[os.path.splitext(os.path.basename(path))[0]]
+        ke = np.arange(lo, hi, 0.1)
+        y = np.full(len(ke), 1000.0)
+        for p in PEAKS:
+            if lo < p["ke"] < hi:
+                y += p["height"] / DWELL * _shape(ke - p["ke"], p["fwhm"],
+                                                  p["mix"])
+        self.kind = "spectrum"
+        self.regions = [Region(
+            name=name, index=0, offset=0, decodable=True,
+            energy=list(HV - ke), counts=list(y * DWELL), photon_energy=HV,
+            dwell=DWELL, extra={"n_scans": 1})]
+        return self._finish()
+
+
+class TestProjectFile(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="vgp_")
+        self.path = os.path.join(self.dir, "Demo.vgp")
+        with open(self.path, "wb") as fh:
+            fh.write(make_project(bgs=BGS))
+        os.makedirs(os.path.join(self.dir, "Demo.DATA"))
+        for n in ("C1s Scan", "Pd", "Unfitted"):
+            with open(os.path.join(self.dir, "Demo.DATA", n + ".VGD"), "wb"):
+                pass
+        self._real = V.ThermoVgdFile
+        V.ThermoVgdFile = StubVgd
+
+    def tearDown(self):
+        V.ThermoVgdFile = self._real
+        import shutil
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _doc(self):
+        return V.ThermoProjectFile().load(self.path)
+
+    def test_spectra_come_in_the_projects_order_under_its_name(self):
+        doc = self._doc()
+        self.assertEqual([r.name for r in doc.regions],
+                         ["C 1s", "Pd 3d", "O 1s"])
+        self.assertEqual({r.sample for r in doc.regions}, {"Demo"})
+        self.assertEqual(doc.experiment["name"], "Demo")
+        self.assertEqual(doc.errors, [])
+
+    def test_a_spectrum_the_project_fits_has_its_fit_and_the_others_none(self):
+        c1s, pd, o1s = self._doc().regions
+        self.assertEqual([c.name for c in c1s.fit.components],
+                         ["C1s C-C", "Peak 2"])        # the empty name is numbered
+        self.assertEqual(len(pd.fit.components), 1)
+        self.assertIsNone(o1s.fit)
+        self.assertEqual(c1s.extra["fit_source"], "Avantage")
+        reg = c1s.fit.regions[0]
+        self.assertEqual((reg.background, reg.start_ke, reg.end_ke, reg.avg),
+                         ("Linear", 1195.0, 1206.0, 10))
+        self.assertEqual(reg.rsf, 0.0)                  # nothing is guessed
+        self.assertTrue(all(c.rsf == 0.0 for c in c1s.fit.components))
+
+    def test_positions_and_areas_are_in_the_fit_codes_units(self):
+        c1s = self._doc().regions[0]
+        c = c1s.fit.components[0]
+        self.assertEqual((c.pos_ke, c.fwhm), (1202.2, 1.3))
+        self.assertAlmostEqual(
+            c.area, V.peak_area(94.0 / DWELL, 1.3, 0.23), places=6)
+        self.assertEqual(c.shape, "AV(23,0,1,0)")
+
+    def test_the_rebuilt_fit_lands_on_the_spectrum(self):
+        import casafit
+        c1s = self._doc().regions[0]
+        cv = casafit.curves(c1s.fit, c1s.energy, c1s.counts, HV, DWELL, 1)[0]
+        self.assertTrue(cv.approximate)                 # never claimed exact
+        self.assertLess(cv.residual_rms, 0.01)
+        self.assertEqual(cv.notes, [])                  # symmetric, linear
+
+    def test_tail_terms_and_a_smart_background_are_said(self):
+        import casafit
+        pd = self._doc().regions[1]
+        cv = casafit.curves(pd.fit, pd.energy, pd.counts, HV, DWELL, 1)[0]
+        self.assertTrue(cv.approximate)
+        self.assertTrue(any("Smart" in n for n in cv.notes))
+        self.assertTrue(any("tail terms" in n for n in cv.notes))
+
+    def test_members_name_the_project_and_its_spectra(self):
+        doc = self._doc()
+        rels = [rel for _p, rel in doc.members]
+        self.assertEqual(rels[0], "Demo.vgp")
+        self.assertEqual(sorted(rels[1:]),
+                         sorted(os.path.join("Demo.DATA", n + ".VGD")
+                                for n in ("C1s Scan", "Pd", "Unfitted")))
+
+    def test_the_metadata_names_the_source_of_the_fit(self):
+        doc = self._doc()
+        md = doc.region_metadata(doc.regions[0])
+        self.assertIn("Avantage fit", md)
+        self.assertNotIn("CasaXPS fit", md)
+
+    def test_a_missing_spectrum_is_reported_and_the_rest_loads(self):
+        os.remove(os.path.join(self.dir, "Demo.DATA", "Pd.VGD"))
+        doc = self._doc()
+        self.assertEqual([r.name for r in doc.regions], ["C 1s", "O 1s"])
+        self.assertEqual(len(doc.errors), 1)
+        self.assertIn("Pd.VGD", doc.errors[0][0])
+
+    def test_the_registry_knows_a_project_file_and_its_folder(self):
+        self.assertIs(readers.reader_for(self.path), V.ThermoProjectFile)
+        self.assertIs(readers.reader_for(self.dir), V.ThermoProjectFile)
+        self.assertFalse(looks_like_experiment(self.dir))
+        doc = readers.load_file(self.dir)               # a workbook's folder
+        self.assertIsInstance(doc, V.ThermoProjectFile)
+        self.assertEqual(len(doc.regions), 3)
+
+    def test_sniff_by_extension_or_by_the_stream_names(self):
+        with open(self.path, "rb") as fh:
+            data = fh.read(4096)
+        self.assertTrue(V.sniff(data, ".vgp"))
+        self.assertTrue(V.sniff(data, ".dat"))          # renamed: by content
+        self.assertFalse(V.sniff(b"not ole", ".vgp"))
+        self.assertFalse(V.sniff(olewriter.build({"Contents": b"x"})[:4096],
+                                 ".dat"))
+
+    def test_a_file_that_is_not_a_project_says_so(self):
+        bad = os.path.join(self.dir, "Bad.vgp")
+        with open(bad, "wb") as fh:
+            fh.write(olewriter.build({"Contents": b"\x00" * 8}))
+        with self.assertRaises(ValueError) as cm:
+            V.ThermoProjectFile().load(bad)
+        self.assertIn("Avantage project", str(cm.exception))
+
+    def test_a_folder_of_two_projects_is_not_one_project(self):
+        with open(self.path, "rb") as fh:
+            data = fh.read()
+        with open(os.path.join(self.dir, "Other.vgp"), "wb") as fh:
+            fh.write(data)
+        self.assertIsNone(V.project_in_folder(self.dir))
+        self.assertIs(readers.reader_for(self.dir), readers.ThermoExperiment)
+
+
 def _corpus():
     if not os.path.isdir(CORPUS):
         return []
@@ -242,7 +441,6 @@ class TestRealProjects(unittest.TestCase):
     def setUpClass(cls):
         import numpy as np
         import lineshapes
-        import readers
         cls.np, cls.ls, cls.readers = np, lineshapes, readers
         cls.projects = [(p, V.load(p)) for p in _corpus()]
 
@@ -317,6 +515,34 @@ class TestRealProjects(unittest.TestCase):
         self.assertGreater(float(np.mean(rms < 0.05)), 0.9)
         self.assertLess(float(np.max(np.abs(scale - 1))), 0.15)
         self.assertLess(abs(float(np.median(scale)) - 1), 0.02)
+
+    def test_every_project_opens_as_a_session_with_its_fits(self):
+        import casafit
+        import quant
+        np = self.np
+        sym, tails, n_fits = [], [], 0
+        for path, prj in self.projects:
+            doc = readers.load_file(path)
+            self.assertIsInstance(doc, V.ThermoProjectFile, path)
+            self.assertEqual(doc.errors, [], path)
+            fitted = [r for r in doc.regions if r.fit is not None]
+            n_fits += len(fitted)
+            self.assertEqual(len(fitted) > 0, len(prj.peaks) > 0, path)
+            for r in fitted:
+                dwell, scans = r.dwell_and_scans()
+                cv = casafit.curves(r.fit, r.energy, r.counts,
+                                    r.photon_energy, dwell, scans)
+                self.assertTrue(cv, path)
+                self.assertTrue(cv[0].approximate)       # never claimed exact
+                self.assertTrue(quant.fit_rows(r), path)
+                has_tail = any("tail terms" in n for n in cv[0].notes)
+                (tails if has_tail else sym).append(cv[0].residual_rms)
+        self.assertGreater(n_fits, 100)
+        # measured: symmetric median 1.2 % of the range (p90 3.3 %, max 5.7 %);
+        # the spectra with tail terms (not drawn) are worse and say so
+        self.assertLess(float(np.median(sym)), 0.02)
+        self.assertLess(float(np.max(sym)), 0.08)
+        self.assertLess(float(np.median(tails)), 0.06)
 
 
 if __name__ == "__main__":

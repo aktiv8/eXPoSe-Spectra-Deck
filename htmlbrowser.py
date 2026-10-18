@@ -367,9 +367,9 @@ def fit_notes(rows):
     """The caveats of a fit, as the app's plots state them."""
     out = []
     if any(r["approximate"] for r in rows):
-        out.append("some line shapes (LA, LF, DS, A(), TLA, Voigt, a tail on "
-                   "GL / SGL, or one this program does not know) are "
-                   "reconstructed, not CasaXPS's own")
+        out.append("some line shapes (LA, LF, DS, A(), TLA, Voigt, Avantage, "
+                   "a tail on GL / SGL, or one this program does not know) are "
+                   "reconstructed, not drawn by the program that made the fit")
     out.extend(n for r in rows for n in r.get("shape_notes", ()))
     unknown = sorted({r["background"] for r in rows
                       if not r["background_known"]})

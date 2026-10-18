@@ -3925,9 +3925,10 @@ class Workspace:
             if not stack or text not in notes:
                 notes.append(text)
         if any(c.approximate for c in cvs):
-            note("fit: some line shapes (LA, LF, DS, A(), TLA, Voigt, a tail "
-                 "on GL / SGL, or one this program does not know) are "
-                 "reconstructed, not CasaXPS's own")
+            note("fit: some line shapes (LA, LF, DS, A(), TLA, Voigt, "
+                 "Avantage, a tail on GL / SGL, or one this program does not "
+                 "know) are reconstructed, not drawn by the program that made "
+                 "the fit")
         for c in cvs:
             for n in c.notes:
                 note("fit: " + n)

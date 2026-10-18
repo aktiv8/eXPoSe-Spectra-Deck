@@ -7,9 +7,9 @@ import os
 from .base import Region, ImageBlob, TreeNode, SpectrumFile
 from .kratos_experiment import EscapeParser
 from . import (vamas, thermo_avg, thermo_vgd, phi_spe, scienta_txt,
-               kratos_kal, kratos_dset, thermo_vgx, khervefitting_kfit,
-               column_text, nexus_nexafs, nexus_xps)
-from .thermo_experiment import (ThermoExperiment, LoadCancelled,
+               kratos_kal, kratos_dset, thermo_vgx, thermo_vgp,
+               khervefitting_kfit, column_text, nexus_nexafs, nexus_xps)
+from .thermo_experiment import (ThermoExperiment, LoadCancelled, find_vgx,
                                 looks_like_experiment, experiment_roots)
 
 
@@ -28,6 +28,8 @@ READERS = [
      ("*.vms", "*.vamas", "*.vam", "*.npl")),      # .npl: PHI MultiPak export
     ("Thermo Avantage (.avg)", thermo_avg.sniff, thermo_avg.ThermoAvgFile,
      ("*.avg", "*.avx")),
+    ("Thermo Avantage project with fits (.vgp)", thermo_vgp.sniff,
+     thermo_vgp.ThermoProjectFile, ("*.vgp",)),
     ("Thermo Avantage (.vgd)", thermo_vgd.sniff, thermo_vgd.ThermoVgdFile,
      ("*.vgd", "*.avx")),
     ("Thermo Avantage experiment (.VGX)", thermo_vgx.sniff, ThermoExperiment,
@@ -81,6 +83,8 @@ def describe_unrecognised(head: bytes) -> str:
 
 def reader_for(path: str):
     if os.path.isdir(path):
+        if thermo_vgp.project_in_folder(path) and not find_vgx(path):
+            return thermo_vgp.ThermoProjectFile    # one project and its data
         return ThermoExperiment            # an experiment folder
     ext = os.path.splitext(path)[1].lower()
     try:
@@ -117,7 +121,7 @@ def load_file(path: str, progress=None, options=None) -> SpectrumFile:
     reports ``progress(i, n, name)`` (return True to cancel, which raises
     ``LoadCancelled``)."""
     cls = reader_for(path)
-    if cls is ThermoExperiment:
+    if issubclass(cls, ThermoExperiment):      # an experiment or a project
         return cls().load(path, progress)
     if cls is column_text.ColumnTextFile:
         return cls().load(path, options)

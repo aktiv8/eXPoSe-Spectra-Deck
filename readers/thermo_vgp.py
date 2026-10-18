@@ -53,16 +53,27 @@ compared with the counts of the same project's ``.VGD`` (``tests/test_thermo_vgp
 
 Anything this module cannot place is left out and said in ``Project.notes``;
 a file whose records do not parse as described raises :class:`VgpError`.
+
+``ThermoProjectFile`` (below) opens a project as a session: its ``.VGD``
+spectra with a :class:`casafit.Fit` for every fitted one. A fitted peak
+becomes ``AV(mix %, t1, t2, t3)`` (``lineshapes.py``): the sum shape, drawn
+without the tail terms, flagged approximate and said so; the area is that of
+the drawn shape at the stored height; no sensitivity factor is invented.
 """
 
 from __future__ import annotations
 
+import math
 import os
 import re
 import struct
 from dataclasses import dataclass, field
 
+import casafit
+
 from .ole2 import OleFile, OleError, is_ole
+from .thermo_experiment import ThermoExperiment, LoadCancelled
+from .thermo_vgd import ThermoVgdFile
 
 
 class VgpError(Exception):
@@ -355,3 +366,173 @@ def load(path: str) -> Project:
     """Read the project file at ``path`` (``.vgp``)."""
     from .base import read_bytes
     return parse(read_bytes(path), path)
+
+
+# -- the project opened as a session ----------------------------------------------
+_GAUSS_AREA = math.sqrt(math.pi / (4.0 * math.log(2.0)))   # area / (height x FWHM)
+_LORENTZ_AREA = math.pi / 2.0
+SOURCE = "Avantage"
+
+
+def sniff(head: bytes, ext: str) -> bool:
+    """An OLE2 file named ``.vgp`` or whose directory (it sits in the first
+    4 KB of every project seen) lists the two streams a project has."""
+    if not is_ole(head):
+        return False
+    return ext == ".vgp" or (
+        "Fitted Peaks".encode("utf-16le") in head
+        and "Data Spaces".encode("utf-16le") in head)
+
+
+def project_in_folder(folder: str):
+    """The one ``.vgp`` directly in ``folder`` (a project restored from a
+    workbook, or opened as a folder), else None."""
+    try:
+        hits = [n for n in os.listdir(folder) if n.lower().endswith(".vgp")
+                and not n.startswith(".")]
+    except OSError:
+        return None
+    return os.path.join(folder, hits[0]) if len(hits) == 1 else None
+
+
+def peak_area(height_cps: float, fwhm: float, mix: float) -> float:
+    """Area (counts/s x eV) of a Gaussian/Lorentzian sum of that height, FWHM
+    and Lorentzian share. The project's own area differs by about 4 % (see the
+    module docstring); the drawn curve is made to match the data, so the
+    area follows the drawn shape and the project's number is kept apart."""
+    m = min(max(mix, 0.0), 1.0)
+    return height_cps * fwhm * ((1.0 - m) * _GAUSS_AREA + m * _LORENTZ_AREA)
+
+
+def shape_of(peak: FittedPeak) -> str:
+    """The ``lineshapes.py`` shape string of a fitted peak: ``AV(mix %,
+    tail terms)`` (see :func:`lineshapes.shape_notes`)."""
+    t = peak.tail
+    return f"AV({100.0 * peak.mix:.6g},{t[0]:.6g},{t[1]:.6g},{t[2]:.6g})"
+
+
+def fit_for(peaks, bg, region, dwell: float, scans: int):
+    """The :class:`casafit.Fit` of one spectrum from its fitted ``peaks`` and
+    ``bg`` (a :class:`BackgroundDef` or None). Nothing is guessed: the RSFs are
+    left unknown (0), the project stores none that was read."""
+    k = dwell * (scans or 1)
+    fit = casafit.Fit()
+    if bg is None:
+        reg = casafit.FitRegion(name=region.name, background="None",
+                                rsf=0.0, line="Avantage project, no background")
+        reg.start_ke = region.photon_energy - max(region.energy)
+        reg.end_ke = region.photon_energy - min(region.energy)
+    else:
+        name = "Linear" if bg.code == 0 else "Shirley"
+        note = ("" if bg.code in (0, 1) else
+                f"the {bg.kind} background (type {bg.code}) is drawn as a "
+                "Shirley background")
+        reg = casafit.FitRegion(
+            name=region.name, background=name, start_ke=bg.start_ke,
+            end_ke=bg.end_ke, rsf=0.0, avg=max(1, int(bg.avg_points)),
+            line=f"Avantage {bg.kind} background", note=note)
+    fit.regions.append(reg)
+    for i, p in enumerate(peaks):
+        h = p.height / k
+        fit.components.append(casafit.FitComponent(
+            name=p.name or f"Peak {i + 1}", shape=shape_of(p),
+            area=peak_area(h, p.fwhm, p.mix), fwhm=p.fwhm, pos_ke=p.ke,
+            rsf=0.0, region=region.name,
+            line=f"Avantage fitted peak, area {p.area:.6g} counts/s eV"))
+    return fit
+
+
+class ThermoProjectFile(ThermoExperiment):
+    """An Avantage project: its ``.VGD`` spectra with the project's fits."""
+    format_name = "Thermo Avantage project (.vgp)"
+
+    def __init__(self):
+        super().__init__()
+        self.project = None             # the decoded Project
+        self._order = {}
+
+    def _rank_of(self):                 # the project's own order of spectra
+        return lambda config, sample, scan: (self._order.get(scan, 10 ** 6),)
+
+    def load(self, path: str, progress=None):
+        path = os.path.abspath(path)
+        vgp = project_in_folder(path) if os.path.isdir(path) else path
+        if not vgp:
+            raise ValueError("this folder does not hold exactly one Avantage "
+                             "project (.vgp)")
+        try:
+            prj = load(vgp)
+        except VgpError as exc:
+            raise ValueError(f"{os.path.basename(vgp)} could not be read as an "
+                             f"Avantage project ({exc})")
+        self.path, self.project = path, prj
+        self.root_dir = os.path.dirname(vgp)
+        name = os.path.splitext(os.path.basename(vgp))[0]
+        loaded, subs, seen = [], {}, set()
+        n = len(prj.data_spaces)
+        for i, ref in enumerate(prj.data_spaces):
+            if progress and progress(i, n, os.path.basename(ref.path)):
+                raise LoadCancelled()
+            f = ref.resolve(self.root_dir)
+            rel = os.path.relpath(f, self.root_dir)
+            if not os.path.isfile(f):
+                self.errors.append((rel, "the file is missing"))
+                continue
+            try:
+                sub = ThermoVgdFile().load(f)
+            except ValueError as exc:
+                if "is empty" in str(exc):
+                    self.skipped.append((rel, "aborted acquisition: no data"))
+                else:
+                    self.errors.append((rel, str(exc)))
+                continue
+            except Exception as exc:                    # noqa: BLE001
+                self.errors.append((rel, str(exc) or type(exc).__name__))
+                continue
+            if sub.kind == "table":
+                self.skipped.append((rel, "auto-height table, not a spectrum"))
+                continue
+            subs[i] = sub
+            scan = os.path.splitext(os.path.basename(f))[0]
+            self._order.setdefault(scan, i)
+            loaded.append((f, rel, sub, name, ""))
+            if f not in seen:
+                seen.add(f)
+                self.members.append((f, rel))
+        self.members.insert(0, (vgp, os.path.basename(vgp)))
+        self._attach_fits(prj, subs)
+        self.warnings += [f"{name}: {note}" for note in prj.notes]
+        self._merge(loaded)
+        self.experiment = {"name": name, "project": "", "platter": "",
+                           "date": ""}
+        return self._finish()
+
+    def _attach_fits(self, prj, subs):
+        for di in prj.fitted_data_spaces():
+            sub = subs.get(di)
+            if sub is None:
+                continue
+            regions = [r for r in sub.regions if r.decodable and r.energy
+                       and r.photon_energy]
+            peaks = prj.peaks_of(di)
+            bg = prj.background_of(di)
+            for r in regions:
+                if len(regions) == 1:
+                    mine = peaks
+                else:
+                    lo = r.photon_energy - max(r.energy) - 1.5
+                    hi = r.photon_energy - min(r.energy) + 1.5
+                    mine = [p for p in peaks if lo < p.ke < hi]
+                if not mine:
+                    continue
+                dwell, scans = r.dwell_and_scans()
+                if not dwell:
+                    self.warnings.append(
+                        f"{r.name}: the dwell time is unknown, so the fit "
+                        "cannot be drawn (its heights are in counts)")
+                    continue
+                r.fit = fit_for(mine, bg, r, dwell, scans)
+                r.extra["fit_source"] = SOURCE
+                r.extra["avantage_peaks"] = [
+                    {"name": p.name, "area": p.area, "height_counts": p.height,
+                     "tail": list(p.tail)} for p in mine]
