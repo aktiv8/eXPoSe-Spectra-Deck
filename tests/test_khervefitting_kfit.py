@@ -869,6 +869,112 @@ class TestPtCl2RefittedRealFile(unittest.TestCase):
         res = quant.normalise(rows)[0]
         self.assertEqual(res["why"], "no RSF")
 
+    def test_every_configured_sheet_stores_the_data_as_its_background(self):
+        # the re-saved file: Shirley sheets are rebuilt (residuals of a few
+        # per cent, they were 24-40 % with the data used as the background),
+        # the U2-Tougaard ones are left without a drawn background
+        doc = self._doc()
+        seen = {"Shirley": 0, "U2-Tougaard": 0}
+        for r in doc.regions:
+            if not (r.fit and r.fit.regions and r.fit.components):
+                continue
+            reg = r.fit.regions[0]
+            dw, sc = r.dwell_and_scans()
+            cv = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
+                                dw, sc)[0]
+            self.assertIn("equals the raw data", reg.note, r.name)
+            self.assertIsNone(reg.known_background, r.name)
+            if reg.background == "Shirley":
+                self.assertLess(cv.residual_rms, 0.08, f"{r.sample} {r.name}")
+            else:
+                self.assertIsNone(cv.background, r.name)
+            seen[reg.background] += 1
+        self.assertGreaterEqual(seen["Shirley"], 6)
+        self.assertGreaterEqual(seen["U2-Tougaard"], 2)
+
+
+class _Group:
+    """The little of an h5py group that ``_build_fit`` reads."""
+    name = "/core_levels/cl_0"
+
+    def __init__(self, bkg_y):
+        self._bkg_y = bkg_y
+        self.attrs = {"name": "C1s"}
+
+    def get(self, key):
+        return self._bkg_y if key == "Bkg Y" else None
+
+
+class TestStaleBackground(unittest.TestCase):
+    """A sheet with a configured background whose stored curve is the raw data
+    (a project re-saved by a newer KherveFitting does this: all 12 configured
+    sheets of PtCl2_refitted.kfit). The stored curve is not trusted: a type
+    that can be reproduced is rebuilt from its limits, another is left
+    undrawn, and the region says which."""
+
+    N = 41
+
+    def _region(self):
+        import numpy as np
+        from readers import Region
+        be = np.linspace(290.0, 280.0, self.N)
+        counts = 1000.0 + 50.0 * (be - 280.0) + 3000.0 * np.exp(
+            -((be - 285.0) / 0.8) ** 2)
+        return Region(name="C 1s", index=0, offset=0, energy=be.tolist(),
+                      counts=counts.tolist(), decodable=True, sample="s",
+                      photon_energy=1486.6, dwell=0.1, source="a.kfit")
+
+    def _fit(self, bkg_type, differs=False, offsets=("0", "0")):
+        import numpy as np
+        r = self._region()
+        stored = np.array(r.counts) - (500.0 if differs else 0.0)
+        sheet = {"Fitting": {"Peaks": {}},
+                 "Background": {"Bkg Type": bkg_type, "Bkg Low": 281.0,
+                                "Bkg High": 289.0,
+                                "Bkg Offset Low": offsets[0],
+                                "Bkg Offset High": offsets[1]}}
+        return kf.KherveFittingKfitFile._build_fit(_Group(stored), r, sheet)
+
+    def test_a_shirley_whose_stored_curve_is_the_data_is_rebuilt(self):
+        fit = self._fit("Shirley")
+        self.assertIsNotNone(fit)
+        reg = fit.regions[0]
+        self.assertIsNone(reg.known_background)
+        self.assertEqual(reg.background, "Shirley")
+        self.assertIn("rebuilt", reg.note)
+        r = self._region()
+        cv = casafit.curves(fit, r.energy, r.counts, r.photon_energy, 0.1, 1)[0]
+        bg = [v for v in cv.background if v == v]
+        self.assertGreater(len(bg), 10)
+        # a real background lies under the peak, not on the data (a Shirley may
+        # sit a little above sloped data near its ends)
+        self.assertLess(max(b - c for b, c in
+                            zip(cv.background, r.counts) if b == b), 150.0)
+        self.assertGreater(max(c - b for b, c in
+                               zip(cv.background, r.counts) if b == b), 100.0)
+
+    def test_a_type_that_cannot_be_rebuilt_is_left_undrawn_and_says_so(self):
+        fit = self._fit("U2-Tougaard")
+        reg = fit.regions[0]
+        self.assertIsNone(reg.known_background)
+        self.assertIn("no background is drawn", reg.note)
+        r = self._region()
+        cv = casafit.curves(fit, r.energy, r.counts, r.photon_energy, 0.1, 1)[0]
+        self.assertIsNone(cv.background)
+
+    def test_offsets_are_said_not_to_be_applied(self):
+        fit = self._fit("Shirley", offsets=("2", "0"))
+        self.assertIn("offsets are not applied", fit.regions[0].note)
+
+    def test_a_stored_curve_that_differs_is_still_used(self):
+        fit = self._fit("Shirley", differs=True)
+        reg = fit.regions[0]
+        self.assertIsNotNone(reg.known_background)
+        self.assertEqual(reg.note, "")
+
+    def test_no_type_and_no_peaks_is_still_no_fit(self):
+        self.assertIsNone(self._fit("", differs=False))
+
 
 RUO2_JSON = os.path.join("3d Ge ... Nd", "44 - Ru - Ruthenium",
                          "RuO2_Kfitting.json")

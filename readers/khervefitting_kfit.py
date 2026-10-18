@@ -734,8 +734,38 @@ class KherveFittingKfitFile(SpectrumFile):
         # differs from "Raw Data", but its own Bkg Type is then always the
         # empty string, so that alone (not "differs from raw data") is the
         # signal that a background was genuinely set up here.
-        has_background = bool(raw_bkg_type) and known_bg is not None and \
+        differs = known_bg is not None and \
             any(abs(a - b) > 1e-9 for a, b in zip(known_bg, region.counts))
+        has_background = bool(raw_bkg_type) and differs
+        # The other way round: a background that *is* configured (a type and
+        # limits) but whose stored curve is the raw data itself. A project
+        # re-saved by a newer KherveFitting does this for every sheet (all 12
+        # configured sheets of PtCl2_refitted.kfit), the curve having not been
+        # recomputed; used as it is, the "background" is the data and every
+        # fit is drawn on top of it (residuals of 24-40 % of the range). The
+        # stored curve is then not trusted: a type this module can reproduce
+        # from the limits is rebuilt (casafit.curves does it from
+        # ``background``), any other is left undrawn, and the region says so.
+        stale = bool(raw_bkg_type) and known_bg is not None and not differs
+        stale_note = ""
+        if stale:
+            has_background = True
+            known_bg = None
+            if lineshapes.background(raw_bkg_type, [0.0, 1.0, 2.0, 3.0], 1) \
+                    is not None:
+                stale_note = (
+                    f"the file stores no {raw_bkg_type} background curve for "
+                    f"this sheet (it equals the raw data): rebuilt here from "
+                    f"its limits")
+            else:
+                stale_note = (
+                    f"the file stores no {raw_bkg_type} background curve for "
+                    f"this sheet (it equals the raw data) and this type is "
+                    f"not reproduced: no background is drawn")
+            offs = [_num(bkg.get("Bkg Offset Low")),
+                    _num(bkg.get("Bkg Offset High"))]
+            if any(o for o in offs):
+                stale_note += "; its background offsets are not applied"
         if not peaks and not has_background:
             return None
         bkg_type = raw_bkg_type or "Unknown"
@@ -752,7 +782,8 @@ class KherveFittingKfitFile(SpectrumFile):
         reg = casafit.FitRegion(
             name=region.name, background=bkg_type,
             start_ke=hv - hi, end_ke=hv - lo, rsf=0.0,
-            known_background=tuple(known_bg) if known_bg else None)
+            known_background=tuple(known_bg) if known_bg else None,
+            note=stale_note)
         # KherveFitting's own Position/Height/Area/FWHM are counted over the
         # whole acquisition (the same raw-counts scale as "Raw Data"/"Bkg
         # Y"), not counts/s the way CasaXPS's own Area already is -- checked
