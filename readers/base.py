@@ -542,7 +542,7 @@ class SpectrumFile:
             md["Position Y (mm)"] = f"{r.pos_y:.3f}"
             if r.extra.get("pos_z") is not None:
                 md["Position Z (mm)"] = f"{r.extra['pos_z']:.3f}"
-        if r.etch_level is not None:
+        if r.etch_level is not None and "tilt" not in r.extra:
             md["Etch level"] = str(r.etch_level)
             md["Etch time (s)"] = (f"{r.etch_time:g}"
                                    if r.etch_time is not None else "")

@@ -390,7 +390,31 @@ def _depth_sentence(rows):
     iterations are described apart (``_iteration_sentence``)."""
     iterations = _iteration_sentence([r for r in rows if is_iss(r)])
     rows = [r for r in rows if not is_iss(r)]
-    return " ".join(s for s in (_etch_sentence(rows), iterations) if s)
+    return " ".join(s for s in (_etch_sentence(rows), _tilt_sentence(rows),
+                                iterations) if s)
+
+
+def _tilt_sentence(rows):
+    """Angle-resolved series: the sample tilts a sample was recorded at, as
+    the file gives them. Nothing is said about take-off or information depth
+    (the files record neither)."""
+    per = {}
+    for r in rows:
+        t = _num(r.get("Sample tilt (\u00b0)"))
+        if t is not None:
+            per.setdefault(str(r.get("Sample", "")), set()).add(t)
+    per = {k: v for k, v in per.items() if len(v) > 1}
+    if not per:
+        return ""
+    tilts = sorted({t for v in per.values() for t in v})
+    steps = {round(b - a, 6) for a, b in zip(tilts, tilts[1:])}
+    s = (f"Angle-resolved spectra were recorded at {len(tilts)} sample tilts "
+         f"from {tilts[0]:g}\u00b0 to {tilts[-1]:g}\u00b0")
+    if len(steps) == 1:
+        s += f" in {steps.pop():g}\u00b0 steps"
+    if len(per) > 1:
+        s += f" on {len(per)} samples"
+    return s + "."
 
 
 def _etch_sentence(rows):

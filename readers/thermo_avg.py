@@ -30,13 +30,17 @@ ISS_TECHNIQUE = 6              # DS_GEPROPID_TECHNIQUE of an ion scattering file
 K_VALUE_TYPE = "DS_GEPROPID_VALUE_TYPE"
 VALUE_RGB = 13                       # a camera image: one packed colour per pixel
 # axis type codes of the binary VGSpaceAxes stream (the .avg dump spells them out)
-AXIS_CODES = {1: "ENERGY", 3: "X", 4: "Y", 6: "ETCHLEVEL", 8: "ETCHTIME",
-              10: "POSITION"}
+AXIS_CODES = {1: "ENERGY", 2: "ANGLE", 3: "X", 4: "Y", 6: "ETCHLEVEL",
+              8: "ETCHTIME", 10: "POSITION"}
 AXIS_DEFAULTS = {          # symbol, unit, label the dump would print
     "ENERGY": ("E", "eV", "Energy"), "X": ("X", "µm", "X"),
     "Y": ("Y", "µm", "Y"), "ETCHTIME": ("EtchTime", "s", "Etch Time"),
     "ETCHLEVEL": ("EtchLevel", "", "Etch Level"),
-    "POSITION": ("Pos", "", "Position")}
+    "POSITION": ("Pos", "", "Position"),
+    # code 2: the stage-tilt series of an angle-resolved run (the .avg dump
+    # names it ANGLE, label 'Angle', values 0, 15 ... 75 for the files it was
+    # checked on; the unit is the degree sign)
+    "ANGLE": ("\u03b8", "\u00b0", "Angle")}
 
 
 def typed_value(vt: str, raw: str):
@@ -295,7 +299,7 @@ class ThermoDataSpaceFile(SpectrumFile):
         regions = []
 
         def make(idx, values, sample="", note="", pos=None, level=None,
-                 etch_time=None):
+                 etch_time=None, tilt=None):
             ok = values is not None and any(v is not None for v in values)
             counts = None
             if ok:
@@ -322,6 +326,9 @@ class ThermoDataSpaceFile(SpectrumFile):
                 etch_level=level, etch_time=etch_time,
             )
             self._acquisition_facts(r, p)
+            if tilt is not None:             # a stage-tilt series (ARXPS)
+                r.extra["tilt"] = tilt
+                r.conditions["Sample tilt (\u00b0)"] = f"{tilt:g}"
             if pos:
                 r.pos_x, r.pos_y = pos
             elif stage:
@@ -338,7 +345,7 @@ class ThermoDataSpaceFile(SpectrumFile):
         else:
             for k, b in enumerate(blocks):
                 labels = b["labels"]
-                sample, pos, etch = "", None, None
+                sample, pos, etch, tilt = "", None, None, None
                 if extra_kind == "position":
                     lab = next((labels[i] for i in extra_space
                                 if i in labels and isinstance(labels[i], str)),
@@ -356,9 +363,12 @@ class ThermoDataSpaceFile(SpectrumFile):
                         if (types[i] == "ETCHTIME"
                                 and isinstance(labels.get(i), float)):
                             etch = labels[i]
+                        elif (types[i] == "ANGLE"
+                                and isinstance(labels.get(i), (int, float))):
+                            tilt = float(labels[i])
                 make(k, b["values"], sample=sample, pos=pos,
                      level=k if extra_kind == "levels" else None,
-                     etch_time=etch)
+                     etch_time=etch, tilt=tilt)
                 if pos and sample:
                     self._sample_pos[sample] = pos
 
@@ -370,7 +380,10 @@ class ThermoDataSpaceFile(SpectrumFile):
                 "is_profile": True, "n_levels": len(regions),
                 "regions_per_level": 1, "etch_per_level": 0.0,
                 "total_etch_time": times[-1] if times else 0.0,
-                "cumulative": times, "etch_source": "data axis"}
+                "cumulative": times,
+                "etch_source": ("tilt angle (not sputtering)"
+                                if any("tilt" in r.extra for r in regions)
+                                else "data axis")}
 
     @staticmethod
     def _iss_settings(p):

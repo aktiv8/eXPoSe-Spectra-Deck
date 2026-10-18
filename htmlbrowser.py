@@ -641,6 +641,8 @@ def build_payload(docs, display=None, details=None, methods_text="",
                 "meta": _meta(p.region_metadata(r)), "note": rnote,
                 "markers": marks,
             }
+            if d.extra.get("tilt") is not None:     # an angle-resolved series
+                reg["tilt"] = d.extra["tilt"]
             if d.is_iss:       # the page's ISS axis (kinetic, or the ratio E/E0)
                 rec = d.extra.get("iss") or {}
                 saved = ann.iss_for(fid) if ann is not None else {}

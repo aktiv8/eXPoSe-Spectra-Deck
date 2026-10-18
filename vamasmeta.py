@@ -148,6 +148,9 @@ def apply_to_region(r, md) -> None:
     lvl = _float(md.get("Etch level"))
     if lvl is not None:
         r.etch_level = int(round(lvl))
+    tilt = _float(md.get("Sample tilt (\u00b0)"))
+    if tilt is not None:
+        r.extra["tilt"] = tilt
     t = _float(md.get("Etch time (s)"))
     if t is not None:
         r.etch_time = t

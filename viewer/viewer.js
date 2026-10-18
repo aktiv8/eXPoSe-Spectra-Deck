@@ -851,7 +851,12 @@
       return isFinite(v) ? v : null;
     };
     return { level: reg.level, etch: reg.etch === undefined ? null : reg.etch,
+             tilt: reg.tilt === undefined ? null : reg.tilt,
              depth: num('Depth (nm)'), fluence: num('Fluence (ions/cm²)') };
+  };
+  /* the sample tilt of an angle-resolved series, as a suffix for a level label */
+  V.tiltTag = function (tilt) {
+    return tilt === null || tilt === undefined ? '' : ' (' + +Number(tilt).toPrecision(6) + '°)';
   };
   /* the horizontal axes a set of levels can support, best first */
   V.profileAxes = function (infos) {
@@ -1292,7 +1297,7 @@
         var rs = byName[k], profile = rs.length > 1 && rs.every(function (r) { return r.level !== null && r.level !== undefined; });
         if (profile) {
           var leaves = rs.map(function (r) {
-            return leafNode(r.id, 'Level ' + r.level + (r.etch !== null && r.etch !== undefined ? ' (' + +r.etch.toPrecision(6) + ' s)' : ''), s.name + ' ' + rs[0].name);
+            return leafNode(r.id, 'Level ' + r.level + (r.etch !== null && r.etch !== undefined ? ' (' + +r.etch.toPrecision(6) + ' s)' : '') + V.tiltTag(r.tilt), s.name + ' ' + rs[0].name);
           });
           kids.push(groupNode(rs[0].name + ' · ' + rs.length + ' levels', leaves, false));
         } else {
@@ -1477,7 +1482,7 @@
       $('level').disabled = !S.levelOn;
       var l = S.levels[S.levelIdx], any = specs.filter(function (s) { return s.reg.level === l; })[0];
       var depth = any && any.reg.meta && any.reg.meta['Depth (nm)'] ? ', ' + any.reg.meta['Depth (nm)'] + ' nm' : '';
-      $('levelText').textContent = S.levelOn ? 'Level ' + l + (any && any.reg.etch !== null && any.reg.etch !== undefined ? ' (' + +any.reg.etch.toPrecision(6) + ' s' + depth + ')' : '') + '  ·  ' + (S.levelIdx + 1) + ' of ' + S.levels.length : S.levels.length + ' levels shown';
+      $('levelText').textContent = S.levelOn ? 'Level ' + l + (any && any.reg.etch !== null && any.reg.etch !== undefined ? ' (' + +any.reg.etch.toPrecision(6) + ' s' + depth + ')' : V.tiltTag(any && any.reg.tilt)) + '  ·  ' + (S.levelIdx + 1) + ' of ' + S.levels.length : S.levels.length + ' levels shown';
     }
     var notes = [];
     if (S.scale === 'Kinetic' && specs.some(function (s) { return s.reg.binding && !s.reg.hv; })) {
@@ -2200,7 +2205,7 @@
       if (gs.length > 1) {
         var sel = h('select', { 'aria-label': 'Depth level' });
         gs.forEach(function (x) {
-          var o = h('option', { value: String(x.level), text: 'Level ' + x.level + (x.etch !== null && x.etch !== undefined ? ' (' + +x.etch.toPrecision(6) + ' s)' : '') });
+          var o = h('option', { value: String(x.level), text: 'Level ' + x.level + (x.etch !== null && x.etch !== undefined ? ' (' + +x.etch.toPrecision(6) + ' s)' : '') + V.tiltTag(x.tilt) });
           if (x === g) o.selected = true;
           sel.appendChild(o);
         });

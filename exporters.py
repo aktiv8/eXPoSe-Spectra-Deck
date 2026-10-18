@@ -259,7 +259,8 @@ def export_vamas(regions, path, institution="Not specified",
         a(dwell)                  # signal collection time (s)
         a(str(n_scans))           # number of scans
         a("0")                    # signal time correction
-        a(SENT)                   # sample normal polar angle of tilt
+        tilt = r.extra.get("tilt")
+        a(SENT if tilt is None else f"{tilt:g}")   # polar angle of tilt
         a(SENT)                   # sample normal tilt azimuth
         a(SENT)                   # sample rotation angle
         a("0")                    # additional numerical parameters

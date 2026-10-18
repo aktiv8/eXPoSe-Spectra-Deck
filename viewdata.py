@@ -17,7 +17,7 @@ RATIO_UNITS = "E/E$_0$"          # mathtext, so any plot font draws the 0
 ENERGY_SCALES = ("Binding", "Kinetic")
 ISS_AXES = ("Kinetic", RATIO)     # the x axis of ion scattering spectra; the
                                   # first is the default (see Workspace)
-Z_MODES = ("Auto", "Etch time", "Etch level", "Acquisition time",
+Z_MODES = ("Auto", "Etch time", "Tilt", "Etch level", "Acquisition time",
            "Trace order", "Depth", "Fluence")
 SPUTTER_MODES = ("Depth", "Fluence")     # need the sputter settings
 
@@ -136,6 +136,9 @@ def _z_candidates(regions, date_of, sputter_for=None):
         dose = [sputter.fluence(s, t) for s, t in zip(sets, times)]
         if all(d is not None for d in dose) and _distinct(dose):
             out["Fluence"] = (dose, "Fluence (ions/cm\u00b2)")
+    tilts = [r.extra.get("tilt") for r in regions]
+    if all(v is not None for v in tilts) and _distinct(tilts):
+        out["Tilt"] = ([float(v) for v in tilts], "Tilt (\u00b0)")
     levels = [r.etch_level for r in regions]
     if all(v is not None for v in levels) and _distinct(levels):
         out["Etch level"] = ([float(v) for v in levels], "Etch level")
@@ -163,12 +166,13 @@ def resolve_z(regions, mode="Auto", date_of=None,
     """The z value of each region for the requested mode.
 
     "Auto" (or a mode this data cannot support) falls back through etch
-    time → etch level → acquisition time → trace order, taking the first that
+    time → tilt → etch level → acquisition time → trace order, taking the first that
     has at least two distinct values; etch times that are all 0 (not recorded
     in the file) therefore count as absent. ``date_of(region)`` supplies the
     acquisition date string (readers differ in where they keep it)."""
     cands = _z_candidates(regions, date_of, sputter_for)
-    order = ("Etch time", "Etch level", "Acquisition time", "Trace order")
+    order = ("Etch time", "Tilt", "Etch level", "Acquisition time",
+             "Trace order")
     if mode in cands and mode != "Auto":
         pick = mode
     else:
