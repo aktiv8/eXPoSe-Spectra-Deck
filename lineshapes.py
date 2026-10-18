@@ -802,6 +802,10 @@ def gauss_conv(x, y, gfwhm):
 #   Gaussian-Lorentzian shape ``GL(m)`` / ``SGL(m)``; on the low-KE side that
 #   shape mixed with a power law, ``b/100 / (1 + 4x^2) ** ((1 - a) / 2) +
 #   (1 - b/100) * GL(m)``; same right-half area rule.
+# * ``E(a, b, n)GL(m)`` / ``SGL(m)`` (builder 0x14040f950, read from the
+#   program but **not yet checked against an exported CasaXPS curve**): as
+#   ``F``, but the low-KE term is the Gaussian-Lorentzian shape itself raised
+#   to a power, ``b/100 * GL(m) ** ((1 - a) / 2) + (1 - b/100) * GL(m)``.
 # * A Gaussian kernel of ``2 * floor(n/2) + 1`` samples (``n`` + 1 when even),
 #   ``exp(-(3 j / half)^2)`` for j = -half..half, normalised, applied by an
 #   edge-extended correlation.
@@ -981,6 +985,24 @@ def _gl_table(mode, mix, tail=0.0):
     return _cached(key, build)
 
 
+def _e_table(a, b, n, mode, mix):
+    """The table of ``E(a, b, n)GL(m)`` (``mode`` 0) / ``SGL(m)`` (1)."""
+    key = ("E", round(float(a), 9), round(float(b), 9), int(n), int(mode),
+           round(float(mix), 9))
+
+    def build():
+        np = _np()
+        _, a_, b_, n_, mode_, mix_ = key
+        idx, c = _grid(_LA_POINTS)
+        x = _TABLE_STEP * (idx - c)
+        gl = _gl_curve(x, mode_, mix_)
+        w = b_ / 100.0
+        left = w * gl ** ((1.0 - a_) * 0.5) + (1.0 - w) * gl
+        y = np.where(idx > c, gl, left)
+        return _finish_table(_gauss_smooth(y, n_), _LA_POINTS, True)
+    return _cached(key, build)
+
+
 def _a_table(a, b, n, mode, mix):
     """The table of ``A(a, b, n)GL(m)`` (``mode`` 0) / ``SGL(m)`` (1)."""
     key = ("A", round(float(a), 9), round(float(b), 9), int(n), int(mode),
@@ -1143,8 +1165,9 @@ def _table_for(sp):
         return _lf_table(sp["a"], sp["b"], min(sp["w"], _LF_MAX_W),
                          min(_la_n(sp["m"]), _LF_MAX_N),
                          min(max(k, 0), _LF_MAX_K))
-    if kind in ("H", "F"):
-        # H(a, n)GL(m) / H(a, n)SGL(m); F(a, b, n)GL(m) / F(a, b, n)SGL(m)
+    if kind in ("H", "F", "E"):
+        # H(a, n)GL(m) / H(a, n)SGL(m); F(a, b, n)GL(m) / F(a, b, n)SGL(m);
+        # E(a, b, n)GL(m) / E(a, b, n)SGL(m)
         ps = sp["params"]
         if len(ps) != (2 if kind == "H" else 3):
             return None
@@ -1164,6 +1187,8 @@ def _table_for(sp):
             return _ds_table(ps[0], n, mode, mix, True)
         if not 0.0 <= ps[1] <= 100.0:
             return None
+        if kind == "E":
+            return _e_table(ps[0], ps[1], n, mode, mix)
         return _f_table(ps[0], ps[1], n, mode, mix)
     if kind == "DS" and len(sp["params"]) in (1, 2):
         # DS(a, n)GL(m) / DS(a, n)SGL(m) / DS(a, n) / DS(a); n of 1 or past

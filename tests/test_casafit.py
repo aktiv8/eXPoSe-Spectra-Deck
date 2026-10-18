@@ -1359,6 +1359,29 @@ class TestProgramTables(unittest.TestCase):
         # high-KE side is the Gaussian-Lorentzian shape
         self.assertLess(float(blend[far].sum()), 0.8 * float(plain[far].sum()))
 
+    def test_e_is_read_from_the_program_but_not_flagged_exact(self):
+        # E(a,b,n)GL(m): builder 0x14040f950; no exported CasaXPS curve of it
+        # exists yet, so the structure is checked, not the numbers
+        sp = ls.parse_shape("E(0.5,60,0)GL(30)")
+        self.assertIsNotNone(ls._table_for(sp))
+        self.assertFalse(ls.is_exact("E(0.5,60,0)GL(30)"))
+        y = self._curve("E(0.5,60,0)GL(30)")
+        low = float(y[self.X < 1005.0].sum())
+        high = float(y[self.X > 1005.0].sum())
+        self.assertGreater(low, high * 1.2)
+
+    def test_e_without_its_power_term_is_the_gl_shape(self):
+        # b = 0 leaves only GL(m) on both sides (its area is the right half
+        # doubled, i.e. the whole of a symmetric peak)
+        e = self._curve("E(0.5,0,0)GL(30)")
+        gl = self._curve("GL(30)")
+        np.testing.assert_allclose(e, gl, atol=2e-3 * float(gl.max()))
+
+    def test_e_is_close_to_f_for_a_small_asymmetry(self):
+        e = self._curve("E(0.09,32,150)SGL(90)")
+        f = self._curve("F(0.09,32,150)SGL(90)")
+        self.assertLess(float(np.abs(e - f).max()), 0.05 * float(f.max()))
+
     def test_ds_three_number_form_is_not_read_from_the_program(self):
         sp = ls.parse_shape("DS(0.1,200,0.5)")
         self.assertIsNone(ls._table_for(sp))
