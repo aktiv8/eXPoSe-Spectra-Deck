@@ -610,10 +610,11 @@ def is_exact(shape) -> bool:
         # no exported curves to compare with, so it stays flagged
         return (not ps["tail"] and not ps["suffix"]
                 and abs(ps["a"] - ps["b"]) < 1e-9)
-    if ps["kind"] in ("QF", "QSF"):
-        # the program's table with the 16 x^4 base (and the boxcar for QSF),
-        # checked against CasaXPS's exported curves (a 0.5-1, b 1-12, w 20-50,
-        # n 0-100, k 1-12); LSF has no export yet and stays flagged
+    if ps["kind"] in ("LSF", "QF", "QSF"):
+        # the program's table with the boxcar (LSF, QSF) and / or the 16 x^4
+        # base (QF, QSF), checked against CasaXPS's exported curves (QF / QSF:
+        # a 0.5-1, b 1-12, w 20-50, n 0-100, k 1-12; LSF: a 0.8-1, b 1-1.2,
+        # w 10-50, n 0-500)
         return (len(ps["params"]) in (4, 5) and not ps["tail"]
                 and not ps["suffix"] and ps["a"] > 0 and ps["b"] > 0
                 and ps["w"] > 0)
@@ -836,7 +837,7 @@ def gauss_conv(x, y, gfwhm):
 #   1`` equal samples (the "square Lorentzian" of the literature) in place of
 #   the Gaussian; the stretch / clamp at ``n * step > 2`` is the same.
 # * ``LSF(a, b, w, n, k)`` / ``QF`` / ``QSF`` (builder 0x14040ead0 types 1, 4,
-#   5; ``QF`` and ``QSF`` checked against 13 exported curves, ``LSF`` not yet):
+#   5; ``QF`` and ``QSF`` checked against 13 exported curves, ``LSF`` against 8):
 #   ``LSF`` is ``LF`` with the "Moving Average" boxcar in place of the Gaussian;
 #   ``QF`` has ``16 x^4`` where ``LF`` has ``4 x^2`` in the base,
 #   ``1 / (1 + 16 x^4) ** p``, with the same exponent p; ``QSF`` is ``QF`` with
@@ -1262,12 +1263,26 @@ def _table_values(table, x, pos, fwhm, area):
     peak out against 0.5-1.3 % without it."""
     np = _np()
     y, width, _off, npts = table
-    u = (np.asarray(x, dtype=float) - pos) / fwhm * width
-    size = _table_size(npts)
-    grid = _TABLE_STEP * (np.arange(size) - (size - 1) // 2)
-    # a position beyond the table (hundreds of FWHM away) counts as zero (the
-    # program's own lookup past its table was not read)
-    return np.interp(u, grid, y, left=0.0, right=0.0) * (area * width / fwhm)
+    u = np.asarray((np.asarray(x, dtype=float) - pos) / fwhm * width)
+    c = (len(y) - 1) // 2
+    half = (npts - 1) // 2
+    # The program keeps each table twice: a fine array (``npts`` samples
+    # ``_TABLE_STEP`` apart) and a coarse one (``_TABLE_RATIO`` times wider
+    # spacing, so reaching ``_TABLE_RATIO`` times further), and reads the fine
+    # one only inside its own range. Beyond it the coarse array is read with
+    # linear interpolation, which rounds off a steep shoulder that falls there
+    # (the edge of a wide boxcar): CasaXPS's own LSF(1,1,50,500) shows exactly
+    # that, 1.8 % of the peak at +-7.5 table units, against 0.1 % elsewhere.
+    fine = y[c - half:c + half + 1]
+    coarse = y[c - half * _TABLE_RATIO:c + half * _TABLE_RATIO + 1:_TABLE_RATIO]
+    fine_u = _TABLE_STEP * np.arange(-half, half + 1)
+    coarse_u = _TABLE_STEP * _TABLE_RATIO * np.arange(-half, half + 1)
+    inside = np.abs(u) <= _TABLE_STEP * half
+    # a position beyond the coarse array (hundreds of FWHM away) counts as
+    # zero (the program's own lookup past its table was not read)
+    out = np.where(inside, np.interp(u, fine_u, fine),
+                   np.interp(u, coarse_u, coarse, left=0.0, right=0.0))
+    return out * (area * width / fwhm)
 
 
 def _table_for(sp):

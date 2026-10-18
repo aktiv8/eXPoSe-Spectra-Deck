@@ -1375,14 +1375,13 @@ class TestProgramTables(unittest.TestCase):
             self.assertIsNone(ls._table_for(ls.parse_shape(shape)), shape)
 
     def test_lsf_qf_qsf_are_read_from_the_program(self):
-        # builder 0x14040ead0 types 1, 4, 5; QF and QSF are checked against
-        # CasaXPS's exported curves (tests/test_lineshape_literal.py), LSF
-        # has no export yet and stays flagged approximate
+        # builder 0x14040ead0 types 1, 4, 5, all checked against CasaXPS's
+        # exported curves (tests/test_lineshape_literal.py)
         for shape in ("LSF(0.7,1.5,75,100)", "QF(0.7,1.5,75,100)",
                       "QSF(0.7,1.5,75,100,2)"):
             self.assertIsNotNone(ls._table_for(ls.parse_shape(shape)), shape)
             self.assertEqual(ls.check_shape(shape), [], shape)
-        self.assertFalse(ls.is_exact("LSF(0.7,1.5,75,100)"))
+        self.assertTrue(ls.is_exact("LSF(0.7,1.5,75,100)"))
         self.assertTrue(ls.is_exact("QF(0.7,1.5,75,100)"))
         self.assertTrue(ls.is_exact("QSF(0.7,1.5,75,100,2)"))
         self.assertTrue(ls.is_exact("QSF(0.9,12,20,1)"))
@@ -1409,6 +1408,27 @@ class TestProgramTables(unittest.TestCase):
         self.assertTrue(ls.check_shape("LSF(0.7,1.5,75,100,21)"))
         self.assertTrue(ls.check_shape("QF(0.7,1.5,75,100,-1)"))
         self.assertTrue(ls.check_shape("QSF(0.7,1.5,75)"))
+
+    def test_the_lookup_reads_the_coarse_array_beyond_the_fine_one(self):
+        # the program keeps a fine array (+-7.5 table units, spacing 0.025) and
+        # a coarse one (spacing 1.0) and reads the coarse one beyond the fine
+        # range; a wide boxcar's steep edge falls there (CasaXPS's own
+        # LSF(1,1,50,500) curve shows the rounded-off corner)
+        sp = ls.parse_shape("LSF(1,1,50,500)")
+        table = ls._table_for(sp)
+        y, width, _off, npts = table
+        c = (len(y) - 1) // 2
+        grid = ls._TABLE_STEP * (np.arange(len(y)) - c)
+        x = np.linspace(-9.0, 9.0, 3601) * 0.5          # u = x * width / fwhm
+        fwhm = 2.0 * width / 18.0 * 9.0 / 4.5 / 2.0     # any positive width
+        pos = 0.0
+        got = ls._table_values(table, x, pos, 1.0, 1.0) / width
+        u = x * width
+        full = np.interp(u, grid, y)
+        inside = np.abs(u) <= 7.5
+        np.testing.assert_allclose(got[inside], full[inside], rtol=1e-12)
+        self.assertGreater(float(np.abs(got - full)[~inside].max()),
+                           0.002 * float(y.max()))
 
     def test_ls_is_la_with_a_boxcar_kernel(self):
         # n = 0: no kernel at all, so LS and LA are the same table

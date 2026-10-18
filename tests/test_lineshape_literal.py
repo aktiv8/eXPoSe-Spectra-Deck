@@ -21,6 +21,7 @@ components in its header:
   (a 0.5-1, b 1-12, w 20-50, n 0-100, k 1-12)
 * ``ds 3 param noe second cannot be 0.csv`` - C 1s, three ``DS(a,n,m)`` carbide
   components (a 0.01 and 0.1, n 2 and 3, m 400; the program refuses n of 0 and 1)
+* ``lsf_shape.csv`` - Au 4d, eight ``LSF(a,b,w,n)`` fits (w 0-100, n 0-500)
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -383,6 +384,40 @@ class TestDsCutoffLiteral(unittest.TestCase):
             self.assertLess(tail, 0.005, shape)
             seen += 1
         self.assertEqual(seen, 3)
+
+
+@unittest.skipUnless(HAVE_NP and _path("lsf_shape.csv"), "lsf_shape.csv not found")
+class TestLsfLiteral(unittest.TestCase):
+    """``LSF``: the ``LF`` table with the boxcar kernel, the stated Area used as
+    it is. ``LSF(1,1,50,500)``'s boxcar edge falls at the edge of the fine
+    array and is only reproduced by the two-array lookup (1.8 % without it)."""
+
+    def test_every_fit_matches_casaxps(self):
+        seen = 0
+        for info, head, cols in _blocks(_path("lsf_shape.csv")):
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            lit = cols[:, 2] - bg
+            shape = info["Lineshape"][0]
+            mine = np.empty_like(lit)
+            mine[order] = ls.component_curve(
+                ke[order], shape, HV - float(info["Position"][0]),
+                float(info["FWHM"][0]), float(info["Area"][0]))
+            if float(shape.split(",")[2]) > 0:
+                err = float(np.abs(mine - lit).max() / lit.max())
+                self.assertLess(err, 0.004, shape)
+                self.assertTrue(ls.is_exact(shape), shape)
+            else:
+                # w = 0 is refused by the program's own builder: CasaXPS's
+                # curve has the older fallback's shape (0.17 %) but not its
+                # stated-Area scale (3 % apart), so only the shape is compared
+                sc = float(np.dot(mine, lit) / np.dot(mine, mine))
+                self.assertLess(float(np.abs(sc * mine - lit).max() / lit.max()),
+                                0.004, shape)
+            seen += 1
+        self.assertEqual(seen, 8)
 
 
 if __name__ == "__main__":
