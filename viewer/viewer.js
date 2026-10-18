@@ -1563,9 +1563,10 @@
       var head = [row.region, row.background + ' background'];
       if (row.rsf) head.push('RSF ' + +row.rsf.toPrecision(4));
       if (row.area !== null && row.area !== undefined) head.push('area ' + Math.round(row.area).toLocaleString('en-US') + ' counts/s·eV' + (row.basis === 'components' ? ' (sum of components)' : ''));
-      if (row.rms !== null && row.rms !== undefined) head.push('fit rms ' + (row.rms * 100).toFixed(1) + ' % of the range');
-      if (row.chi2_red !== null && row.chi2_red !== undefined) head.push('reduced χ² ' + row.chi2_red.toFixed(2));
-      if (S.data.fit_sd && row.residual_sd !== null && row.residual_sd !== undefined) head.push('Residual StDev ' + row.residual_sd.toFixed(2));
+      var stats = S.data.fit_stats || ['rms', 'chi2'];
+      if (stats.indexOf('rms') >= 0 && row.rms !== null && row.rms !== undefined) head.push('fit rms ' + (row.rms * 100).toFixed(1) + ' % of the range');
+      if (stats.indexOf('chi2') >= 0 && row.chi2_red !== null && row.chi2_red !== undefined) head.push('reduced χ² ' + row.chi2_red.toFixed(2));
+      if (stats.indexOf('sd') >= 0 && row.residual_sd !== null && row.residual_sd !== undefined) head.push('Residual StDev ' + row.residual_sd.toFixed(2));
       box.appendChild(h('div', { class: 'fit-head', text: head.join('  ·  ') }));
       if (!row.components.length) return;
       var tot = row.components.reduce(function (a, c) { return a + Math.max(0, c.area || 0); }, 0);

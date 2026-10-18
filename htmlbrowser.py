@@ -530,7 +530,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
                   calibration="", figures=(), calib=None, generated=None,
                   cameras=True, snapmaps=True, lines=None, casa_quant=None,
                   rsf_entries=None, prefer_csv=True, quant_overrides=None,
-                  ticked=None, show_sd=False):
+                  ticked=None, fit_stats=None):
     """The data of the browser as a JSON-able dict.
 
     ``figures`` is ``[{"name", "caption", "pages": [png bytes]}]``; ``calib``
@@ -758,9 +758,11 @@ def build_payload(docs, display=None, details=None, methods_text="",
                     "bg": {"light": light["plot_bg"], "dark": dark["plot_bg"]}},
         **({"quant_include": quant_include} if quant_include else {}),
         **({"fit_csv": {"default": bool(prefer_csv)}} if fit_csv else {}),
-        # the app's "Residual StDev" choice: the page shows CasaXPS's figure
-        # in each fit's header only when it was on at export
-        **({"fit_sd": True} if show_sd else {}),
+        # the app's choice of fit-quality figures (RMS, chi2, Residual StDev)
+        # at export; absent = the first two, as before the choice existed
+        **({"fit_stats": list(fit_stats)}
+           if fit_stats is not None and tuple(fit_stats) != ("rms", "chi2")
+           else {}),
         **({"casa_numbers": True} if casa_tagged else {}),
     }
 

@@ -681,7 +681,7 @@ def _results_slides(deck, results, skip=()):
         if not s.is_profile:
             header, rows, weights = resultspages.composition_table(
                 s.levels[0], [3.8, 2.8, 1.5, 3.0, 2.4, 1.6, 1.5, 1.4],
-                getattr(results, "show_sd", False))
+                getattr(results, "stats", None))
             cpng = resultspages.composition_png(s.levels[0], size=FIGURE_SIZE,
                                                 dpi=150)
             if cpng:

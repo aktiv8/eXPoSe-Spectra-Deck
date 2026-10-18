@@ -301,9 +301,45 @@ class TestPanelViewsInApp(unittest.TestCase):
         before = self.ws._signature()
         self.ws.fit_sd_var.set(True)
         self.assertNotEqual(before, self.ws._signature())
-        self.assertTrue(self.ws._results().show_sd)       # reports follow it
+        self.assertIn("sd", self.ws._results().stats)     # reports follow it
         self.ws.fit_sd_var.set(False)
-        self.assertFalse(self.ws._results().show_sd)
+        self.assertNotIn("sd", self.ws._results().stats)
+
+    def test_rms_and_chi2_round_trip_and_a_missing_key_is_on(self):
+        """The RMS and Reduced chi-square boxes are on unless switched off,
+        and a figure saved before they existed (which drew both) applies them
+        on, whatever the live window has."""
+        self.addCleanup(self.ws.fit_rms_var.set, True)
+        self.addCleanup(self.ws.fit_chi2_var.set, True)
+        self.ws.fit_rms_var.set(False)
+        self.ws.fit_chi2_var.set(False)
+        st = self.ws.capture_state()
+        self.assertIs(st["fit_rms"], False)
+        self.assertIs(st["fit_chi2"], False)
+        self.ws.fit_rms_var.set(True)
+        self.ws.fit_chi2_var.set(True)
+        self.ws.apply_state(st, render=False)
+        self.assertFalse(self.ws.fit_rms_var.get())
+        self.assertFalse(self.ws.fit_chi2_var.get())
+        old = {k: v for k, v in st.items() if k not in ("fit_rms", "fit_chi2")}
+        self.ws.apply_state(old, render=False)
+        self.assertTrue(self.ws.fit_rms_var.get())
+        self.assertTrue(self.ws.fit_chi2_var.get())
+        self.ws.fit_rms_var.set(False)
+        with self.ws._temp_state(old):
+            self.assertTrue(self.ws.fit_rms_var.get())
+        self.assertFalse(self.ws.fit_rms_var.get())
+
+    def test_the_three_statistics_reach_the_signature_and_the_results(self):
+        for var in (self.ws.fit_rms_var, self.ws.fit_chi2_var):
+            self.addCleanup(var.set, True)
+        self.assertEqual(self.ws.fit_stats(), ("rms", "chi2"))
+        before = self.ws._signature()
+        self.ws.fit_rms_var.set(False)
+        self.assertNotEqual(before, self.ws._signature())
+        self.assertEqual(self.ws._results().stats, ("chi2",))
+        self.ws.fit_chi2_var.set(False)
+        self.assertEqual(self.ws._results().stats, ())
 
     def test_fit_merge_is_part_of_the_page_look_and_the_signature(self):
         self.addCleanup(self.ws.fit_merge_var.set, False)

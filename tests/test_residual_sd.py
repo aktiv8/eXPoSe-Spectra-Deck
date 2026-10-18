@@ -68,6 +68,8 @@ class TestTheStatistic(unittest.TestCase):
 
 class TestTheTable(unittest.TestCase):
     W = [34, 24, 16, 28, 24, 18, 18, 18]
+    BOTH = ("rms", "chi2")
+    ALL = ("rms", "chi2", "sd")
 
     def _level(self, sd=1.07, **kw):
         r = row("C 1s", 1.0, 200.0, states=[("a", 100.0), ("b", 100.0)], **kw)
@@ -82,9 +84,9 @@ class TestTheTable(unittest.TestCase):
 
     def test_the_toggle_adds_one_last_column(self):
         lv = self._level()
-        header = rp.composition_header(lv, True)
+        header = rp.composition_header(lv, self.ALL)
         self.assertEqual(header, rp.COMPOSITION_HEADER + (rp.SD_HEADER,))
-        rows = rp.composition_cells(lv, True)
+        rows = rp.composition_cells(lv, self.ALL)
         self.assertEqual(rows[0][0], "region")
         self.assertEqual(rows[0][1][-1], "1.07")
         for kind, cells in rows:
@@ -94,24 +96,44 @@ class TestTheTable(unittest.TestCase):
 
     def test_a_report_table_pads_its_weights_and_keeps_the_width(self):
         lv = self._level()
-        header, rows, weights = rp.composition_table(lv, self.W, True)
+        header, rows, weights = rp.composition_table(lv, self.W, self.ALL)
         self.assertEqual(header[-1], rp.SD_HEADER)
         self.assertEqual(len(weights), len(header))
         self.assertAlmostEqual(sum(weights), sum(self.W) + self.W[-1])
 
     def test_an_empty_column_is_left_out_as_the_others_are(self):
         lv = self._level(sd=None)
-        header, _rows, weights = rp.composition_table(lv, self.W, True)
+        header, _rows, weights = rp.composition_table(lv, self.W, self.ALL)
         self.assertNotIn(rp.SD_HEADER, header)
         self.assertEqual(len(weights), len(header))
+
+    def test_each_statistic_can_be_dropped_on_its_own(self):
+        lv = self._level()
+        fixed = rp.COMPOSITION_HEADER[:rp.FIXED_COLUMNS]
+        for stats in [(), ("rms",), ("chi2",), ("sd",), ("rms", "sd"),
+                      ("chi2", "sd"), self.BOTH, self.ALL]:
+            header, rows, weights = rp.composition_table(lv, self.W, stats)
+            want = fixed + tuple(rp._STAT_HEADERS[k] for k in rp.STATS
+                                 if k in stats)
+            self.assertEqual(tuple(header), want, stats)
+            self.assertEqual(len(weights), len(header), stats)
+            for _kind, cells in rows:
+                self.assertEqual(len(cells), len(header), stats)
+
+    def test_none_means_the_default_pair(self):
+        lv = self._level()
+        self.assertEqual(rp.composition_header(lv, None),
+                         rp.COMPOSITION_HEADER)
+        self.assertEqual(rp.composition_header(lv, self.BOTH),
+                         rp.COMPOSITION_HEADER)
 
     def test_casaxps_own_numbers_show_no_fit_quality(self):
         r = row("C 1s", 1.0, 200.0)
         r["casa_pct"] = 50.0
         r["residual_sd"] = 1.0
         lv = level(None, [r])
-        self.assertIs(rp.composition_header(lv, True), rp.CASA_HEADER)
-        for _kind, cells in rp.composition_cells(lv, True):
+        self.assertIs(rp.composition_header(lv, self.ALL), rp.CASA_HEADER)
+        for _kind, cells in rp.composition_cells(lv, self.ALL):
             self.assertEqual(len(cells), len(rp.CASA_HEADER))
 
 
@@ -120,7 +142,7 @@ class TestThePlotNote(unittest.TestCase):
         def __init__(self, region, rms, sd):
             self.region, self.residual_rms, self.residual_sd = region, rms, sd
 
-    def _text(self, show, curves):
+    def _text(self, stats, curves):
         try:
             import matplotlib
             matplotlib.use("Agg")
@@ -129,20 +151,27 @@ class TestThePlotNote(unittest.TestCase):
             self.skipTest("matplotlib not installed")
         import plots
         ax = Figure().subplots()
-        plots._fit_rms_text(ax, curves, "grey", show)
+        plots._fit_rms_text(ax, curves, "grey", stats)
         return [t.get_text() for t in ax.texts]
 
     def test_off_it_is_the_old_note(self):
-        self.assertEqual(self._text(False, [self._Cv("C 1s", 0.012, 1.07)]),
+        self.assertEqual(self._text(("rms",), [self._Cv("C 1s", 0.012, 1.07)]),
                          ["RMS 1.2%"])
 
+    def test_the_rms_line_can_be_switched_off(self):
+        cv = [self._Cv("C 1s", 0.012, 1.07)]
+        self.assertEqual(self._text((), cv), [])
+        self.assertEqual(self._text(("chi2",), cv), [])
+        self.assertEqual(self._text(("sd",), cv), ["Residual StDev 1.07"])
+
     def test_on_a_second_line_gives_the_statistic(self):
-        self.assertEqual(self._text(True, [self._Cv("C 1s", 0.012, 1.07)]),
+        self.assertEqual(self._text(("rms", "sd"),
+                                    [self._Cv("C 1s", 0.012, 1.07)]),
                          ["RMS 1.2%\nResidual StDev 1.07"])
 
     def test_a_curve_without_it_is_left_out(self):
-        got = self._text(True, [self._Cv("C 1s", 0.012, None),
-                                self._Cv("O 1s", 0.02, 1.5)])
+        got = self._text(("rms", "sd"), [self._Cv("C 1s", 0.012, None),
+                                         self._Cv("O 1s", 0.02, 1.5)])
         self.assertEqual(got, ["RMS C 1s: 1.2%, O 1s: 2.0%\n"
                                "Residual StDev O 1s: 1.50"])
 
@@ -152,14 +181,20 @@ class TestTheHtmlPage(unittest.TestCase):
         import htmlbrowser as hb
         from test_htmlbrowser import doc, region
         d = [doc("a.vms", [region()])]
-        self.assertNotIn("fit_sd", hb.build_payload(d))
-        self.assertTrue(hb.build_payload(d, show_sd=True)["fit_sd"])
+        self.assertNotIn("fit_stats", hb.build_payload(d))
+        self.assertNotIn("fit_stats",
+                         hb.build_payload(d, fit_stats=("rms", "chi2")))
+        self.assertEqual(
+            hb.build_payload(d, fit_stats=("rms", "sd"))["fit_stats"],
+            ["rms", "sd"])
+        self.assertEqual(hb.build_payload(d, fit_stats=())["fit_stats"], [])
 
     def test_the_page_shows_it_only_when_the_flag_is_there(self):
         with open(os.path.join(ROOT, "viewer", "viewer.js"),
                   encoding="utf-8") as fh:
             js = fh.read()
-        self.assertIn("S.data.fit_sd && row.residual_sd", js)
+        self.assertIn("S.data.fit_stats || ['rms', 'chi2']", js)
+        self.assertIn("stats.indexOf('sd') >= 0 && row.residual_sd", js)
         self.assertIn("'Residual StDev '", js)
 
 

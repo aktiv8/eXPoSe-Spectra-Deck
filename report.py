@@ -344,7 +344,7 @@ def results_story(results, skip=(), look=None, sid="results"):
         if not s.is_profile:
             header, rows, weights = resultspages.composition_table(
                 s.levels[0], [34, 24, 16, 28, 24, 18, 18, 18],
-                getattr(results, "show_sd", False))
+                getattr(results, "stats", None))
             cpng = resultspages.composition_png(s.levels[0], size=(7.0, 3.0),
                                                 dpi=200)
             block = [head]

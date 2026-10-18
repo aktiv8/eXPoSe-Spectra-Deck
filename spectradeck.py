@@ -1283,6 +1283,8 @@ class Workspace:
             cfg["fit_" + k] = bool(v.get())
         cfg["fit_use_csv_curves"] = bool(self.csv_curves_var.get())
         cfg["fit_merge"] = bool(self.fit_merge_var.get())
+        cfg["fit_rms"] = bool(self.fit_rms_var.get())
+        cfg["fit_chi2"] = bool(self.fit_chi2_var.get())
         cfg["fit_residual_sd"] = bool(self.fit_sd_var.get())
         for k, v in self.ident_vars.items():
             cfg["ident_" + k] = bool(v.get())
@@ -1558,11 +1560,31 @@ class Workspace:
                 "only: the table, the quantification and the exports keep "
                 "every component. Components with no INDEX group are never "
                 "merged. A panel can override this (right-click ▸ Fit layers).")
+        self.fit_rms_var = tk.BooleanVar(value=bool(cfg.get("fit_rms", True)))
+        cb = ttk.Checkbutton(self.fit_frame, text="RMS",
+                             variable=self.fit_rms_var,
+                             command=self._fit_stats_toggled)
+        cb.pack(side="left", padx=(0, 6))
+        tip(cb, "Show the fit's RMS: the root mean square of (data - "
+                "envelope) as a percentage of the region's data range. A "
+                "note on a fitted panel and the Fit RMS column of the "
+                "Quantification table, the reports and the HTML page. On by "
+                "default.")
+        self.fit_chi2_var = tk.BooleanVar(
+            value=bool(cfg.get("fit_chi2", True)))
+        cb = ttk.Checkbutton(self.fit_frame, text="Reduced \u03c7\u00b2",
+                             variable=self.fit_chi2_var,
+                             command=self._fit_stats_toggled)
+        cb.pack(side="left", padx=(0, 6))
+        tip(cb, "Show the Poisson-weighted reduced chi-square of the fit "
+                "(needs the dwell time and scans). The Reduced \u03c7\u00b2 column of "
+                "the Quantification table, the reports and the HTML page. "
+                "On by default.")
         self.fit_sd_var = tk.BooleanVar(
             value=bool(cfg.get("fit_residual_sd", False)))
         cb = ttk.Checkbutton(self.fit_frame, text="Residual StDev",
                              variable=self.fit_sd_var,
-                             command=self._fit_sd_toggled)
+                             command=self._fit_stats_toggled)
         cb.pack(side="left", padx=(0, 6))
         tip(cb, "Show CasaXPS's own goodness-of-fit figure, the Residual "
                 "StDev: the root mean square of (data - envelope) / "
@@ -3015,8 +3037,16 @@ class Workspace:
         self._schedule_render()
         self.quant_panel.refresh()
 
-    def _fit_sd_toggled(self):
-        """The Residual StDev display: the plot note and every table."""
+    def fit_stats(self):
+        """The fit-quality statistics shown (``resultspages.STATS`` order):
+        the Fit row's RMS, Reduced chi-square and Residual StDev boxes."""
+        return tuple(k for k, v in (("rms", self.fit_rms_var),
+                                    ("chi2", self.fit_chi2_var),
+                                    ("sd", self.fit_sd_var)) if v.get())
+
+    def _fit_stats_toggled(self):
+        """A fit-quality statistic shown or hidden: the plot note and every
+        table."""
         self._schedule_render()
         self.quant_panel.refresh()
 
@@ -3963,7 +3993,7 @@ class Workspace:
             note("fit: INDEX groups beyond %d reuse colours "
                  "(the legend tells them apart)" % len(cols))
         out = {"curves": cvs, "show": show, "colours": cols, "merge": merge,
-               "sd": bool(self.fit_sd_var.get())}
+               "stats": self.fit_stats()}
         if stack:
             out["per_trace"] = per
         return out
@@ -4351,6 +4381,8 @@ class Workspace:
             "fit_show": {k: bool(v.get()) for k, v in self.fit_vars.items()},
             "csv_curves": bool(self.csv_curves_var.get()),
             "fit_merge": bool(self.fit_merge_var.get()),
+            "fit_rms": bool(self.fit_rms_var.get()),
+            "fit_chi2": bool(self.fit_chi2_var.get()),
             "fit_sd": bool(self.fit_sd_var.get()),
             "quant_rsf": self.quant_panel.rsf_choice(),
             "quant_transmission": bool(self.quant_panel.view.transmission),
@@ -4414,7 +4446,11 @@ class Workspace:
         # a figure saved before the choice existed drew every component, so a
         # missing key is "off", never whatever the live window has now
         self.fit_merge_var.set(bool(st.get("fit_merge", False)))
-        # (a state saved before the choice existed shows no Residual StDev)
+        # (a state saved before these choices existed drew the RMS and the
+        # reduced chi-square, and showed no Residual StDev: a missing key is
+        # that, never whatever the live window has now)
+        self.fit_rms_var.set(bool(st.get("fit_rms", True)))
+        self.fit_chi2_var.set(bool(st.get("fit_chi2", True)))
         self.fit_sd_var.set(bool(st.get("fit_sd", False)))
         if isinstance(st.get("csv_curves"), bool):
             self.csv_curves_var.set(st["csv_curves"])
@@ -5056,7 +5092,7 @@ class Workspace:
                 overrides=hand,
                 casa_numbers=self.quant_panel.view.casa_numbers))
         res = self._results_memo[1]
-        res.show_sd = bool(self.fit_sd_var.get())   # a display choice only
+        res.stats = self.fit_stats()                # a display choice only
         return res
 
     def quant_hand_count(self):
@@ -5122,7 +5158,7 @@ class Workspace:
             self.calib, casa_quant=self.casa_quant,
             quant_overrides=dict(self.quant_panel.view.include),
             ticked=lambda r: id(r) in self.checked,
-            show_sd=bool(self.fit_sd_var.get()))
+            fit_stats=self.fit_stats())
 
     def export_html_browser(self):
         if not self._report_ready():

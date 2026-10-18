@@ -62,6 +62,13 @@ CASA_FOOT = ("Atomic % = CasaXPS's own quantification (Quant_regions.txt / "
 COMPOSITION_HEADER = ("Region", "Background", "RSF", "Area (counts/s·eV)",
                       "Area / RSF", "at %", "Fit RMS", "Reduced χ²")
 SD_HEADER = "Residual StDev"            # CasaXPS's statistic; shown on request
+# The fit-quality columns the user can show or hide (the Fit row's RMS /
+# Reduced chi² / Residual StDev boxes), in the order they are laid out after
+# the six fixed columns. RMS and Reduced chi² are shown unless switched off.
+STATS = ("rms", "chi2", "sd")
+DEFAULT_STATS = ("rms", "chi2")
+_STAT_HEADERS = {"rms": "Fit RMS", "chi2": "Reduced χ²", "sd": SD_HEADER}
+FIXED_COLUMNS = 6                       # region .. at %
 CASA_HEADER = tuple("CasaXPS %At" if h == "Area / RSF" else h
                     for h in COMPOSITION_HEADER)
 PROFILE_AXES = (("depth", "Depth (nm)"), ("etch", "Etch time (s)"),
@@ -137,8 +144,9 @@ class Sample:
 class Results:
     samples: list = field(default_factory=list)
     method: str = METHOD
-    show_sd: bool = False       # the Residual StDev column (a display choice,
-                                # set by the caller, never by ``collect``)
+    stats: tuple = DEFAULT_STATS    # the fit-quality columns shown (a display
+                                    # choice, set by the caller, never by
+                                    # ``collect``)
 
     def __bool__(self):
         return bool(self.samples)
@@ -688,29 +696,44 @@ def _fmt_sd(v):
     return "" if v is None else f"{v:.2f}"
 
 
-def composition_header(level, show_sd=False):
-    """The column titles of ``composition_cells(level, show_sd)``: the
+def _stats_of(level, stats):
+    """The statistics a level's table shows: the default pair for a level of
+    CasaXPS's own numbers (its table is fixed), else ``stats`` in layout order
+    (``None`` = the default)."""
+    if _from_casa(level) or stats is None:
+        return DEFAULT_STATS
+    return tuple(k for k in STATS if k in stats)
+
+
+def composition_header(level, stats=None):
+    """The column titles of ``composition_cells(level, stats)``: the
     "Area / RSF" column holds CasaXPS's own %At when the level's numbers come
-    from its quantification files (``casamatch``). ``show_sd`` adds a last
-    "Residual StDev" column (never on a level of CasaXPS's own numbers, which
-    show no fit quality)."""
+    from its quantification files (``casamatch``). ``stats`` picks the
+    fit-quality columns after the six fixed ones (a subset of ``STATS``;
+    default Fit RMS and Reduced χ², as before the choice existed; a level of
+    CasaXPS's own numbers always has its fixed table)."""
     if _from_casa(level):
         return CASA_HEADER
-    return COMPOSITION_HEADER + ((SD_HEADER,) if show_sd else ())
+    return COMPOSITION_HEADER[:FIXED_COLUMNS] + tuple(
+        _STAT_HEADERS[k] for k in _stats_of(level, stats))
 
 
-def composition_table(level, weights, show_sd=False):
+def composition_table(level, weights, stats=None):
     """``(header, rows, weights)`` of one level's composition table for a
     report: ``composition_header`` and ``composition_cells`` with every column
     that is empty in all rows left out (a survey has no fit RMS or reduced
     chi-square), the matching column ``weights`` dropped with it and the rest
     scaled to keep the table's width. The first column (the region) is always
     kept."""
-    header = list(composition_header(level, show_sd))
-    rows = composition_cells(level, show_sd)
-    weights = list(weights)
-    if len(weights) < len(header):          # the optional last column
-        weights += [weights[-1]] * (len(header) - len(weights))
+    header = list(composition_header(level, stats))
+    rows = composition_cells(level, stats)
+    # ``weights`` is the default table's (the six fixed columns, RMS, chi²):
+    # the Residual StDev column takes the chi² weight, and a column that is
+    # not shown leaves its weight out
+    w = list(weights)
+    by_stat = {"rms": w[FIXED_COLUMNS], "chi2": w[FIXED_COLUMNS + 1],
+               "sd": w[FIXED_COLUMNS + 1]}
+    weights = w[:FIXED_COLUMNS] + [by_stat[k] for k in _stats_of(level, stats)]
     keep = [i for i in range(len(header))
             if i == 0 or any(str(cells[i]).strip() for _k, cells in rows)]
     if len(keep) == len(header):
@@ -721,7 +744,7 @@ def composition_table(level, weights, show_sd=False):
             [weights[i] * scale for i in keep])
 
 
-def composition_cells(level, show_sd=False):
+def composition_cells(level, stats=None):
     """``[(kind, [cells])]`` for one sample at one level: a "region" row
     (region, background, RSF, area, area / RSF, at %, fit RMS, reduced
     chi-square; the reason instead of the percent when it is left out) with
@@ -741,12 +764,12 @@ def composition_cells(level, show_sd=False):
     ``quant.normalise``'s reference-table fallback supplied one -- see
     ``_fmt_rsf``; a component-level fallback (the file's own data, just
     summed a different way) leaves the cell as the plain, unlabelled area
-    ratio, matching the file's own honest style. ``show_sd`` appends
-    CasaXPS's Residual StDev (``casafit.Curves.residual_sd``) as a last column
-    (a state row has none there); it is left out of a level that shows
-    CasaXPS's own numbers."""
+    ratio, matching the file's own honest style. ``stats`` picks the
+    fit-quality columns after the six fixed ones (see ``composition_header``);
+    the Residual StDev is CasaXPS's own statistic
+    (``casafit.Curves.residual_sd``). A state row has no value in any of them."""
     rows = []
-    sd = bool(show_sd) and not _from_casa(level)
+    shown = _stats_of(level, stats)
     for e, x in zip(level.entries, level.res):
         row = e["row"]
         pct = f"{x['at_pct']:.1f}" if x["at_pct"] is not None else x["why"]
@@ -756,18 +779,19 @@ def composition_cells(level, show_sd=False):
                                 _fmt_rsf(row, x),
                                 _fmt(row.get("area"), ".4g"),
                                 (_fmt(row.get("casa_pct"), ".2f") if casa
-                                 else _fmt(x["corrected"], ".4g")), pct,
-                                _fmt_rms(row.get("rms")),
-                                _fmt_chi2(row.get("chi2_red"))]
-                     + ([_fmt_sd(row.get("residual_sd"))] if sd else [])))
+                                 else _fmt(x["corrected"], ".4g")), pct]
+                     + [{"rms": _fmt_rms(row.get("rms")),
+                         "chi2": _fmt_chi2(row.get("chi2_red")),
+                         "sd": _fmt_sd(row.get("residual_sd"))}[k]
+                        for k in shown]))
         states = (quant.states(row, x["at_pct"])
                   if x["at_pct"] is not None else [])
         if len(states) > 1:                 # one state says nothing more
             for st in states:
                 rows.append(("state", ["    " + st["name"], "", "", "",
                                        f"{100 * st['frac']:.0f}% of region",
-                                       f"{st['at_pct']:.1f}", "", ""]
-                             + ([""] if sd else [])))
+                                       f"{st['at_pct']:.1f}"]
+                             + [""] * len(shown)))
     return rows
 
 
