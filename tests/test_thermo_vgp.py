@@ -232,38 +232,73 @@ class TestRefused(unittest.TestCase):
 class TestAvantageShape(unittest.TestCase):
     def test_parse_and_flags(self):
         import lineshapes as ls
-        p = ls.parse_shape("AV(23,0,1,0)")
-        self.assertEqual((p["kind"], p["mix"], p["tail_terms"]),
-                         ("AV", 23.0, (0.0, 1.0, 0.0)))
-        self.assertFalse(ls.is_exact("AV(23,0,1,0)"))        # a reconstruction
-        self.assertEqual(ls.check_shape("AV(23,0,1,0)"), [])
-        self.assertTrue(ls.check_shape("AV(120,0,1,0)"))
+        p = ls.parse_shape("AV(23,0,1,0,0.05)")
+        self.assertEqual((p["kind"], p["mix"], p["tail_terms"], p["step"]),
+                         ("AV", 23.0, (0.0, 1.0, 0.0), 0.05))
+        self.assertEqual(ls.parse_shape("AVP(23,0,1,0,0.05)")["kind"], "AVP")
+        for s in ("AV(23,0,1,0,0.05)", "AVP(23,0,1,0,0.05)"):
+            self.assertFalse(ls.is_exact(s))                  # a reconstruction
+            self.assertEqual(ls.check_shape(s), [])
+        self.assertTrue(ls.check_shape("AV(120,0,1,0,0.05)"))
         self.assertTrue(ls.check_shape("AV()"))
+        self.assertTrue(ls.check_shape("AV(23,0,1.5,0,0.05)"))   # TM above 1
+        self.assertTrue(ls.check_shape("AV(23,0,0.5,0,-1)"))     # negative step
 
-    def test_tail_terms_are_said_only_when_they_are_not_the_no_tail_values(self):
+    def test_a_tail_that_cannot_be_drawn_is_said(self):
         import lineshapes as ls
-        self.assertEqual(ls.shape_notes("AV(23,0,1,0)"), [])
-        self.assertEqual(ls.shape_notes("AV(23,1e-17,1,0)"), [])
-        self.assertTrue(ls.shape_notes("AV(26,1e-17,0.367,0.0428)"))
+        self.assertEqual(ls.shape_notes("AV(23,0,1,0,0.05)"), [])
+        self.assertEqual(ls.shape_notes("AV(26,1e-17,0.367,0.0428,0.05)"), [])
+        self.assertTrue(ls.shape_notes("AV(26,1e-17,0.367,0.0428,0)"))  # no step
         self.assertEqual(ls.shape_notes("GL(30)"), [])
 
-    def test_it_is_drawn_as_the_gaussian_lorentzian_sum(self):
+    def test_the_sum_and_the_product_are_the_manuals_functions(self):
         import numpy as np
         import lineshapes as ls
         ke = np.linspace(1190.0, 1214.0, 2401)
-        a = ls.component_curve(ke, "AV(23,0,1,0)", 1202.0, 1.3, 100.0)
+        s = ls.component_curve(ke, "AV(23,0,1,0,0.01)", 1202.0, 1.3, 100.0)
         b = ls.component_curve(ke, "SGL(23)", 1202.0, 1.3, 100.0)
-        self.assertTrue(np.allclose(a, b))
+        self.assertTrue(np.allclose(s, b))                    # the sum is SGL
+        # the product, 1 / ([1 + M t^2] exp{(1 - M) ln2 t^2}), t = 2 dx / FWHM
+        raw = ls._raw_values(np.array([1202.0, 1202.65, 1203.9]),
+                             ls.parse_shape("AVP(40,0,1,0,0.01)"), 1202.0, 1.3)
+        for x, v in zip((0.0, 0.65, 1.9), raw):
+            t = 2 * x / 1.3
+            want = 1.0 / ((1 + 0.4 * t * t) * np.exp(0.6 * np.log(2) * t * t))
+            self.assertAlmostEqual(float(v), want, places=9)
 
-    def test_the_area_follows_the_drawn_height(self):
+    def test_the_tail_is_the_manuals_on_the_high_binding_energy_side_only(self):
+        import math
         import numpy as np
         import lineshapes as ls
-        ke = np.linspace(1150.0, 1250.0, 20001)
-        for mix in (0.0, 0.23, 0.6, 1.0):
-            area = V.peak_area(1000.0, 1.3, mix)
-            curve = ls.component_curve(ke, f"AV({100 * mix:g},0,1,0)", 1200.0,
-                                       1.3, area)
-            self.assertAlmostEqual(float(curve.max()) / 1000.0, 1.0, delta=0.01)
+        # Gaussian (mix 0), FWHM 1, centre 1000: 2 eV away the core is 1.5e-5
+        # of the peak, so the value is the tail T = TM CT + (1 - TM) exp(-ET dx)
+        # with dx in channels of 0.1 eV
+        x = np.array([998.0, 1002.0])                  # low KE (high BE), high KE
+        for terms, want in (((0.0, 0.0, 0.05), math.exp(-0.05 * 20)),
+                            ((0.5, 0.4, 0.05), 0.4 * 0.5 + 0.6 * math.exp(-1.0)),
+                            ((0.0, 1.0, 0.05), 0.0)):
+            shape = "AV(0,%g,%g,%g,0.1)" % terms
+            v = ls._raw_values(x, ls.parse_shape(shape), 1000.0, 1.0)
+            self.assertAlmostEqual(float(v[0]), want, places=3)
+            self.assertLess(float(v[1]), 1e-4)         # no tail on the other side
+
+    def test_the_height_is_the_one_asked_for_with_or_without_a_tail(self):
+        import numpy as np
+        import lineshapes as ls
+        ke = np.linspace(1100.0, 1300.0, 40001)
+        for shape in ("AV(0,0,1,0,0.05)", "AV(23,0,1,0,0.05)",
+                      "AVP(60,0,1,0,0.05)", "AV(26,0,0.367,0.0428,0.05)",
+                      "AVP(40,0.1,0.5,0.05,0.1)"):
+            area = ls.area_for_height(shape, 1.3, 1000.0)
+            curve = ls.component_curve(ke, shape, 1200.0, 1.3, area)
+            self.assertAlmostEqual(float(curve.max()) / 1000.0, 1.0, delta=0.01,
+                                   msg=shape)
+
+    def test_window_integral_is_the_area_inside_the_window(self):
+        import lineshapes as ls
+        whole = ls.window_integral("AVP(30,0,1,0,0.05)", 0.0, 1.0, -60.0, 60.0)
+        half = ls.window_integral("AVP(30,0,1,0,0.05)", 0.0, 1.0, -60.0, 0.0)
+        self.assertAlmostEqual(half / whole, 0.5, places=2)   # symmetric
 
 
 # -- the project as a session --------------------------------------------------------
@@ -280,26 +315,58 @@ def _shape(x, fwhm, mix):
     return (1 - mix) * np.exp(-4 * np.log(2) * t * t) + mix / (1 + 4 * t * t)
 
 
+def _peak_shape(p, mode, step=0.1):
+    """The shape string of a demo peak dict (``p``) in ``mode`` (AV / AVP)."""
+    return V.shape_of(V.FittedPeak(
+        index=0, name=p["name"], ke=p["ke"], fwhm=p["fwhm"], mix=p["mix"],
+        area=p["area"], height=p["height"],
+        tail=p.get("tail", (0.0, 1.0, 0.0))), mode, step)
+
+
+def consistent(mode, scale=1.0):
+    """The demo peaks with the areas Avantage would store for them: the drawn
+    shape's own area over each peak's background window (``scale`` fakes a
+    project that stores areas in another unit)."""
+    import lineshapes as ls
+    out = []
+    for p in PEAKS:
+        win = (1195.0, 1206.0) if p["ke"] > 1190 else (1140.0, 1157.0)
+        q = dict(p)
+        q["area"] = scale * p["height"] / DWELL * ls.window_integral(
+            _peak_shape(p, mode), p["ke"], p["fwhm"], *win)
+        out.append(q)
+    return out
+
+
 class StubVgd(SpectrumFile):
     """Stands in for ``ThermoVgdFile``: one synthetic spectrum per file name,
-    a flat 1000 counts/s plus the fitted peaks of the demo project."""
+    a flat 1000 counts/s plus the fitted peaks of the demo project drawn in
+    ``MODE`` (the Avantage sum ``AV`` or product ``AVP``, tail included).
+    ``TWO`` gives the Pd file a second, identical trace (a "Compare" overlay)."""
     format_name = "stub"
+    MODE = "AV"
+    TWO = False
 
     def load(self, path):
         import numpy as np
+        import lineshapes as ls
         self.path = path
-        name, lo, hi = SPECS[os.path.splitext(os.path.basename(path))[0]]
+        base = os.path.splitext(os.path.basename(path))[0]
+        name, lo, hi = SPECS[base]
         ke = np.arange(lo, hi, 0.1)
         y = np.full(len(ke), 1000.0)
         for p in PEAKS:
             if lo < p["ke"] < hi:
-                y += p["height"] / DWELL * _shape(ke - p["ke"], p["fwhm"],
-                                                  p["mix"])
+                sp = ls.parse_shape(_peak_shape(p, self.MODE))
+                y += p["height"] / DWELL * ls._raw_values(ke, sp, p["ke"],
+                                                          p["fwhm"])
         self.kind = "spectrum"
-        self.regions = [Region(
-            name=name, index=0, offset=0, decodable=True,
-            energy=list(HV - ke), counts=list(y * DWELL), photon_energy=HV,
-            dwell=DWELL, extra={"n_scans": 1})]
+        self.regions = []
+        for i in range(2 if (self.TWO and base == "Pd") else 1):
+            self.regions.append(Region(
+                name=name, index=i, offset=i, decodable=True,
+                energy=list(HV - ke), counts=list(y * DWELL),
+                photon_energy=HV, dwell=DWELL, extra={"n_scans": 1}))
         return self._finish()
 
 
@@ -307,17 +374,22 @@ class TestProjectFile(unittest.TestCase):
     def setUp(self):
         self.dir = tempfile.mkdtemp(prefix="vgp_")
         self.path = os.path.join(self.dir, "Demo.vgp")
-        with open(self.path, "wb") as fh:
-            fh.write(make_project(bgs=BGS))
+        self._write(consistent("AV"))
         os.makedirs(os.path.join(self.dir, "Demo.DATA"))
         for n in ("C1s Scan", "Pd", "Unfitted"):
             with open(os.path.join(self.dir, "Demo.DATA", n + ".VGD"), "wb"):
                 pass
         self._real = V.ThermoVgdFile
         V.ThermoVgdFile = StubVgd
+        StubVgd.MODE, StubVgd.TWO = "AV", False
+
+    def _write(self, peaks):
+        with open(self.path, "wb") as fh:
+            fh.write(make_project(peaks=peaks, bgs=BGS))
 
     def tearDown(self):
         V.ThermoVgdFile = self._real
+        StubVgd.MODE, StubVgd.TWO = "AV", False
         import shutil
         shutil.rmtree(self.dir, ignore_errors=True)
 
@@ -348,10 +420,11 @@ class TestProjectFile(unittest.TestCase):
     def test_positions_and_areas_are_in_the_fit_codes_units(self):
         c1s = self._doc().regions[0]
         c = c1s.fit.components[0]
+        import lineshapes as ls
         self.assertEqual((c.pos_ke, c.fwhm), (1202.2, 1.3))
+        self.assertEqual(c.shape, "AV(23,0,1,0,0.1)")        # step = the data's
         self.assertAlmostEqual(
-            c.area, V.peak_area(94.0 / DWELL, 1.3, 0.23), places=6)
-        self.assertEqual(c.shape, "AV(23,0,1,0)")
+            c.area, ls.area_for_height(c.shape, 1.3, 94.0 / DWELL), places=6)
 
     def test_the_rebuilt_fit_lands_on_the_spectrum(self):
         import casafit
@@ -361,13 +434,48 @@ class TestProjectFile(unittest.TestCase):
         self.assertLess(cv.residual_rms, 0.01)
         self.assertEqual(cv.notes, [])                  # symmetric, linear
 
-    def test_tail_terms_and_a_smart_background_are_said(self):
+    def test_a_tail_is_drawn_and_a_smart_background_is_said(self):
         import casafit
+        import numpy as np
         pd = self._doc().regions[1]
+        self.assertTrue(pd.fit.components[0].shape.startswith("AV(26,"))
         cv = casafit.curves(pd.fit, pd.energy, pd.counts, HV, DWELL, 1)[0]
         self.assertTrue(cv.approximate)
         self.assertTrue(any("Smart" in n for n in cv.notes))
-        self.assertTrue(any("tail terms" in n for n in cv.notes))
+        self.assertFalse(any("tail" in n for n in cv.notes))   # it is drawn
+        # the tail is on the low-KE (high binding energy) side only
+        v = np.array(cv.components[0][1])
+        ke = HV - np.array(pd.energy)
+        lo = v[np.argmin(np.abs(ke - (1151.3 - 2.0)))]
+        hi = v[np.argmin(np.abs(ke - (1151.3 + 2.0)))]
+        self.assertGreater(lo, 10 * hi)
+
+    def test_the_product_is_read_from_the_stored_areas(self):
+        self._write(consistent("AVP"))
+        StubVgd.MODE = "AVP"
+        c1s = self._doc().regions[0]
+        self.assertTrue(c1s.fit.components[0].shape.startswith("AVP("))
+        self.assertIn("product", c1s.fit.components[0].line)
+        self._write(consistent("AV"))
+        StubVgd.MODE = "AV"
+        self.assertTrue(self._doc().regions[0].fit.components[0]
+                        .shape.startswith("AV("))
+
+    def test_areas_in_an_unknown_unit_are_drawn_as_the_sum_and_say_so(self):
+        import casafit
+        self._write(consistent("AVP", scale=0.03))
+        c1s = self._doc().regions[0]
+        self.assertTrue(c1s.fit.components[0].shape.startswith("AV("))
+        cv = casafit.curves(c1s.fit, c1s.energy, c1s.counts, HV, DWELL, 1)[0]
+        self.assertTrue(any("neither" in n for n in cv.notes))
+
+    def test_only_the_first_of_several_traces_carries_the_fit(self):
+        StubVgd.TWO = True
+        regs = self._doc().regions
+        self.assertEqual([r.name for r in regs],
+                         ["C 1s", "Pd 3d", "Pd 3d", "O 1s"])
+        self.assertIsNotNone(regs[1].fit)
+        self.assertIsNone(regs[2].fit)
 
     def test_members_name_the_project_and_its_spectra(self):
         doc = self._doc()
@@ -520,7 +628,7 @@ class TestRealProjects(unittest.TestCase):
         import casafit
         import quant
         np = self.np
-        sym, tails, n_fits = [], [], 0
+        sym, tails, n_fits, modes = [], [], 0, set()
         for path, prj in self.projects:
             doc = readers.load_file(path)
             self.assertIsInstance(doc, V.ThermoProjectFile, path)
@@ -535,14 +643,23 @@ class TestRealProjects(unittest.TestCase):
                 self.assertTrue(cv, path)
                 self.assertTrue(cv[0].approximate)       # never claimed exact
                 self.assertTrue(quant.fit_rows(r), path)
-                has_tail = any("tail terms" in n for n in cv[0].notes)
+                has_tail = any(
+                    not (abs(t[0]) < 1e-9 and abs(t[1] - 1.0) < 1e-9)
+                    for t in (self.ls.parse_shape(c.shape)["tail_terms"]
+                              for c in r.fit.components))
                 (tails if has_tail else sym).append(cv[0].residual_rms)
+                modes.add(r.fit.components[0].shape.split("(")[0])
         self.assertGreater(n_fits, 100)
-        # measured: symmetric median 1.2 % of the range (p90 3.3 %, max 5.7 %);
-        # the spectra with tail terms (not drawn) are worse and say so
+        self.assertEqual(modes, {"AV", "AVP"})            # both are found
+        # measured on the 129 projects (114 fitted spectra): no tail median
+        # 1.1 % of the range (p90 2.8 %, max 5.7 %); with the manual's tail
+        # median 1.3 % (p90 2.8 %). Two spectra do not match their fit at all
+        # (native Al oxide on Al's second spectrum, Cd native oxide on metal)
         self.assertLess(float(np.median(sym)), 0.02)
         self.assertLess(float(np.max(sym)), 0.08)
-        self.assertLess(float(np.median(tails)), 0.06)
+        self.assertLess(float(np.median(tails)), 0.025)
+        self.assertLess(float(np.percentile(tails, 90)), 0.05)
+        self.assertLessEqual(int(np.sum(np.array(tails) > 0.1)), 3)
 
 
 if __name__ == "__main__":

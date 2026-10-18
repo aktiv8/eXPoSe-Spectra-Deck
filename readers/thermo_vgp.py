@@ -33,12 +33,28 @@ compared with the counts of the same project's ``.VGD`` (``tests/test_thermo_vgp
   the model at the data's absolute scale -- median 1.003 over 55 spectra
   fitted with symmetric peaks -- and made area / (height x FWHM) constant
   within a spectrum to 0.2 %.)
-* **Tail terms** ``tail`` = (t40, t48, t56) are ``(0, 1, 0)`` for a symmetric
-  peak and non-trivial for the asymmetric (metal) peaks. Their meaning, and
-  the exact shape the ``mix`` selects, are **not established** (a
-  Gaussian/Lorentzian *sum* with ``mix`` as the Lorentzian share fits best of
-  the simple forms but its area constant is 0.96, not 1; see the tests). They
-  are kept as read.
+* **Tail terms** ``tail`` = (CT, TM, ET), the constant tail height, tail
+  mixing ratio and exponential tail of Avantage's tail function (Data
+  Processing Reference Manual v5, p.73): ``T = TM CT + (1 - TM) exp(-ET dx)``,
+  ``dx`` the distance from the peak centre in **channels** (data points), the
+  peak being ``H [GL + (1 - GL) T]`` on the high-binding-energy side and
+  ``H GL`` on the other. ``(0, 1, 0)`` is a symmetric peak. The manual gives
+  the formula, not where the file keeps the numbers: that CT, TM, ET are the
+  three stored values **in this order** (and the channel is the data step) was
+  found by testing every assignment against the stored areas (median error
+  2.6 % against 23 % for the next best; 72 % of the 39 tail peaks within
+  3 %) and the data (tail spectra: median residual 3.5 % of the range without
+  the tail, 1.5 % with it).
+* **The base shape** ``GL`` (manual pp.71-72) is Avantage's Gaussian/Lorentzian
+  *product* ``1 / ([1 + M t^2] exp{(1 - M) ln2 t^2})`` (``M`` = L/G mix / 100)
+  or a *sum*; the manual lists product, sum and convolution (Voigt) forms and
+  the file does not say which was used. Where the project's stored areas equal
+  height x FWHM x (the shape's area) to 2 % for the product but not for the sum
+  (20 of 114 spectra; the stored area matches to 4 digits there) the product is
+  drawn; otherwise the sum (which, for these mixes, is also what the Voigt
+  looks like, residual 1.2 % against 1.2 %). Six projects store areas in an
+  unrecognised unit (ratios 0.03 to 0.5 for either shape) and are drawn as sum
+  with a note.
 * **Links** come from the ``XRefs`` streams: the first table of ``Fitted
   Peaks/XRefs`` pairs a fitted peak with its data space (the data space's index
   in ``Data Spaces``; a project can list spectra it does not fit), the first
@@ -56,9 +72,10 @@ a file whose records do not parse as described raises :class:`VgpError`.
 
 ``ThermoProjectFile`` (below) opens a project as a session: its ``.VGD``
 spectra with a :class:`casafit.Fit` for every fitted one. A fitted peak
-becomes ``AV(mix %, t1, t2, t3)`` (``lineshapes.py``): the sum shape, drawn
-without the tail terms, flagged approximate and said so; the area is that of
-the drawn shape at the stored height; no sensitivity factor is invented.
+becomes ``AV(mix %, CT, TM, ET, step)`` (the sum) or ``AVP(...)`` (the product)
+of ``lineshapes.py``, tail included, always flagged approximate (the form the
+project used is inferred, not read); the area is that of the drawn shape at the
+stored height; no sensitivity factor is invented.
 """
 
 from __future__ import annotations
@@ -70,6 +87,7 @@ import struct
 from dataclasses import dataclass, field
 
 import casafit
+import lineshapes
 
 from .ole2 import OleFile, OleError, is_ole
 from .thermo_experiment import ThermoExperiment, LoadCancelled
@@ -102,10 +120,11 @@ class DataSpaceRef:
 class FittedPeak:
     """One fitted peak. Units: ``ke`` in eV (kinetic), ``fwhm`` in eV,
     ``area`` in counts/s x eV, ``height`` in counts (divide by dwell x scans
-    for counts/s), ``mix`` the Lorentzian share (0-1). ``tail`` is the three
-    raw tail terms (see the module docstring). ``data_space`` and
-    ``background`` index ``Project.data_spaces`` / ``Project.backgrounds``
-    (``None`` when the project does not say)."""
+    for counts/s), ``mix`` the Lorentzian share (0-1). ``tail`` is ``(CT, TM,
+    ET)`` (see the module docstring and the ``ct`` / ``tm`` / ``et``
+    properties). ``data_space`` and ``background`` index
+    ``Project.data_spaces`` / ``Project.backgrounds`` (``None`` when the
+    project does not say)."""
     index: int
     name: str
     ke: float
@@ -118,10 +137,24 @@ class FittedPeak:
     background: int | None = None
 
     @property
+    def ct(self) -> float:
+        """Constant tail height (1 = as high as the peak)."""
+        return self.tail[0]
+
+    @property
+    def tm(self) -> float:
+        """Tail mixing ratio (0 = exponential tail only, 1 = constant only)."""
+        return self.tail[1]
+
+    @property
+    def et(self) -> float:
+        """Exponential tail, per channel (0 = infinite, 1 = no tail)."""
+        return self.tail[2]
+
+    @property
     def symmetric(self) -> bool:
-        return self.tail == (0.0, 1.0, 0.0) or (
-            abs(self.tail[0]) < 1e-9 and abs(self.tail[1] - 1.0) < 1e-9
-            and abs(self.tail[2]) < 1e-9)
+        """No tail: ``CT = 0`` and ``TM = 1`` (``T`` is then 0)."""
+        return abs(self.tail[0]) < 1e-9 and abs(self.tail[1] - 1.0) < 1e-9
 
 
 @dataclass
@@ -369,9 +402,9 @@ def load(path: str) -> Project:
 
 
 # -- the project opened as a session ----------------------------------------------
-_GAUSS_AREA = math.sqrt(math.pi / (4.0 * math.log(2.0)))   # area / (height x FWHM)
-_LORENTZ_AREA = math.pi / 2.0
 SOURCE = "Avantage"
+PRODUCT_TOL = 0.02        # stored area within this of the product's: product
+MATCH_TOL = 0.05          # within this of either shape: the unit is understood
 
 
 def sniff(head: bytes, ext: str) -> bool:
@@ -395,20 +428,50 @@ def project_in_folder(folder: str):
     return os.path.join(folder, hits[0]) if len(hits) == 1 else None
 
 
-def peak_area(height_cps: float, fwhm: float, mix: float) -> float:
-    """Area (counts/s x eV) of a Gaussian/Lorentzian sum of that height, FWHM
-    and Lorentzian share. The project's own area differs by about 4 % (see the
-    module docstring); the drawn curve is made to match the data, so the
-    area follows the drawn shape and the project's number is kept apart."""
-    m = min(max(mix, 0.0), 1.0)
-    return height_cps * fwhm * ((1.0 - m) * _GAUSS_AREA + m * _LORENTZ_AREA)
+def channel_step(region) -> float:
+    """The width of one channel (eV): the spacing of the spectrum's points."""
+    e = region.energy
+    return abs(e[-1] - e[0]) / (len(e) - 1) if e and len(e) > 1 else 0.0
 
 
-def shape_of(peak: FittedPeak) -> str:
-    """The ``lineshapes.py`` shape string of a fitted peak: ``AV(mix %,
-    tail terms)`` (see :func:`lineshapes.shape_notes`)."""
+def shape_of(peak: FittedPeak, mode: str = "AV", step: float = 0.0) -> str:
+    """The ``lineshapes.py`` shape string of a fitted peak: ``AV`` (the sum) or
+    ``AVP`` (the product) of ``(mix %, CT, TM, ET, channel step)``."""
     t = peak.tail
-    return f"AV({100.0 * peak.mix:.6g},{t[0]:.6g},{t[1]:.6g},{t[2]:.6g})"
+    return (f"{mode}({100.0 * peak.mix:.6g},{t[0]:.6g},{t[1]:.6g},{t[2]:.6g},"
+            f"{step:.6g})")
+
+
+def detect_mode(peaks, k: float, step: float, lo: float, hi: float):
+    """``(mode, note)``: ``"AVP"`` (Avantage's product function) when the
+    stored areas of ``peaks`` equal the product shape's area, window ``lo`` to
+    ``hi`` (KE), to ``PRODUCT_TOL`` and the sum's do not fit better, else
+    ``"AV"`` (the sum). ``k`` is dwell x scans (the heights are in counts).
+    ``note`` is empty unless the stored areas match neither shape to
+    ``MATCH_TOL`` -- they are then in a unit this module does not know and the
+    mode could not be read (the sum is drawn)."""
+    def ratio(mode):
+        r = []
+        for p in peaks:
+            if not (p.area > 0 and p.height > 0 and p.fwhm > 0):
+                continue
+            shape = shape_of(p, mode, step)
+            model = (p.height / k) * lineshapes.window_integral(
+                shape, p.ke, p.fwhm, lo, hi)
+            if model > 0:
+                r.append(p.area / model)
+        return sum(r) / len(r) if r else None
+    rp, rs = ratio("AVP"), ratio("AV")
+    if rp is None or rs is None:
+        return "AV", ""
+    dp, ds = abs(rp - 1.0), abs(rs - 1.0)
+    if dp <= PRODUCT_TOL and dp < ds:
+        return "AVP", ""
+    if min(dp, ds) > MATCH_TOL:
+        return "AV", ("the areas stored in the project match neither "
+                      "Avantage's product nor its sum shape, so which was used "
+                      "is not known: the sum is drawn")
+    return "AV", ""
 
 
 def fit_for(peaks, bg, region, dwell: float, scans: int):
@@ -416,6 +479,7 @@ def fit_for(peaks, bg, region, dwell: float, scans: int):
     ``bg`` (a :class:`BackgroundDef` or None). Nothing is guessed: the RSFs are
     left unknown (0), the project stores none that was read."""
     k = dwell * (scans or 1)
+    step = channel_step(region)
     fit = casafit.Fit()
     if bg is None:
         reg = casafit.FitRegion(name=region.name, background="None",
@@ -431,14 +495,18 @@ def fit_for(peaks, bg, region, dwell: float, scans: int):
             name=region.name, background=name, start_ke=bg.start_ke,
             end_ke=bg.end_ke, rsf=0.0, avg=max(1, int(bg.avg_points)),
             line=f"Avantage {bg.kind} background", note=note)
+    mode, mode_note = detect_mode(peaks, k, step, reg.start_ke, reg.end_ke)
+    if mode_note:
+        reg.note = "; ".join(x for x in (reg.note, mode_note) if x)
     fit.regions.append(reg)
     for i, p in enumerate(peaks):
-        h = p.height / k
+        shape = shape_of(p, mode, step)
         fit.components.append(casafit.FitComponent(
-            name=p.name or f"Peak {i + 1}", shape=shape_of(p),
-            area=peak_area(h, p.fwhm, p.mix), fwhm=p.fwhm, pos_ke=p.ke,
-            rsf=0.0, region=region.name,
-            line=f"Avantage fitted peak, area {p.area:.6g} counts/s eV"))
+            name=p.name or f"Peak {i + 1}", shape=shape,
+            area=lineshapes.area_for_height(shape, p.fwhm, p.height / k),
+            fwhm=p.fwhm, pos_ke=p.ke, rsf=0.0, region=region.name,
+            line=f"Avantage fitted peak, area {p.area:.6g} counts/s eV, "
+                 f"{'product' if mode == 'AVP' else 'sum'} shape"))
     return fit
 
 
@@ -516,6 +584,11 @@ class ThermoProjectFile(ThermoExperiment):
                        and r.photon_energy]
             peaks = prj.peaks_of(di)
             bg = prj.background_of(di)
+            # A .VGD can hold several traces (the "Compare" overlays of the
+            # Knowledge projects): the fit belongs to the first one that
+            # holds its peaks (6 of the 7 such files; on the second trace the
+            # same fit leaves 28-38 % of the range unexplained), so the
+            # others are shown without it.
             for r in regions:
                 if len(regions) == 1:
                     mine = peaks
@@ -536,3 +609,4 @@ class ThermoProjectFile(ThermoExperiment):
                 r.extra["avantage_peaks"] = [
                     {"name": p.name, "area": p.area, "height_counts": p.height,
                      "tail": list(p.tail)} for p in mine]
+                break

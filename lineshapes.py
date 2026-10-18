@@ -545,12 +545,17 @@ def parse_shape(text) -> dict:
         out.update(a=ps[0] if ps else 0.0, m=ps[1] if len(ps) > 1 else 0.0)
     elif kind in ("GL", "SGL", "VOIGT"):
         out["mix"] = ps[0] if ps else 30.0
-    elif kind == "AV":
-        # AV(mix, t1, t2, t3): an Avantage fitted peak (readers/thermo_vgp.py)
-        # -- the Gaussian/Lorentzian sum with mix = the Lorentzian percentage,
-        # and the three raw tail terms the project stores, kept but not drawn
+    elif kind in ("AV", "AVP"):
+        # AV(mix, CT, TM, ET, step) / AVP(...): an Avantage fitted peak
+        # (readers/thermo_vgp.py). mix = the Lorentzian percentage of the
+        # Gaussian/Lorentzian *sum* (AV) or *product* (AVP) function; CT, TM,
+        # ET the constant tail height, tail mixing ratio and exponential tail
+        # of Avantage's tail function (Data Processing Reference Manual v5,
+        # p.73); step = the width of one channel (eV), in which ET is
+        # measured. See _avantage_values.
         out["mix"] = ps[0] if ps else 30.0
         out["tail_terms"] = tuple(ps[1:4])
+        out["step"] = ps[4] if len(ps) > 4 else 0.0
     elif kind == "A":
         # A(a,b,n)GL(m) / A(a,b,n)SGL(m): the Gelius asymmetric shape (see
         # module docstring). a, b control the tail; n (kept in "m", like DS's
@@ -583,16 +588,44 @@ def is_exact(shape) -> bool:
 def shape_notes(shape) -> list:
     """Caveats about a shape that is drawn, but not as its source defines it
     (the component stays in the envelope): [] for the shapes that are drawn
-    as they are. An Avantage peak (``AV``) whose project stores tail terms
-    other than the "no tail" values ``(0, 1, 0)`` says they are not drawn."""
+    as they are. An Avantage peak (``AV`` / ``AVP``) with tail terms but no
+    channel width cannot draw its tail and says so."""
     ps = parse_shape(shape)
-    if ps["kind"] == "AV":
+    if ps["kind"] in ("AV", "AVP"):
         t = ps.get("tail_terms") or ()
-        if len(t) == 3 and not (abs(t[0]) < 1e-9 and abs(t[1] - 1.0) < 1e-9
-                                and abs(t[2]) < 1e-9):
-            return ["Avantage tail terms are not drawn (asymmetric peak shown "
-                    "symmetric)"]
+        has_tail = len(t) == 3 and not (abs(t[0]) < 1e-9
+                                        and abs(t[1] - 1.0) < 1e-9)
+        if has_tail and not _avantage_tail(ps):
+            return ["Avantage tail terms are not drawn (the data step is "
+                    "unknown)"]
     return []
+
+
+def area_for_height(shape, fwhm, height):
+    """The ``area`` to give :func:`component_curve` so that a ``GL`` / ``SGL``
+    / ``AV`` / ``AVP`` component peaks at ``height``: those shapes are 1 at
+    their centre and are not broadened further, so it is ``height`` times the
+    area :func:`component_curve` measures for a unit-height peak (over its
+    own extent, tail included)."""
+    np = _np()
+    sp = parse_shape(shape)
+    fwhm = fwhm if fwhm and fwhm > 0 else 1.0
+    span = _NORM_HALF_WIDTH * fwhm
+    wide = np.linspace(-span, span, _NORM_POINTS)
+    s = float(_raw_values(wide, sp, 0.0, fwhm).sum()) * (wide[1] - wide[0])
+    return height * s
+
+
+def window_integral(shape, pos, fwhm, lo, hi, step=0.004):
+    """The integral over ``[lo, hi]`` (eV) of the unit-height shape centred on
+    ``pos`` (for the shapes :func:`area_for_height` covers)."""
+    np = _np()
+    sp = parse_shape(shape)
+    fwhm = fwhm if fwhm and fwhm > 0 else 1.0
+    x = np.arange(lo, hi, step)
+    if len(x) == 0:
+        return 0.0
+    return float(_raw_values(x, sp, pos, fwhm).sum()) * step
 
 
 def check_shape(shape) -> list:
@@ -650,11 +683,17 @@ def check_shape(shape) -> list:
             bad.append("TLA needs three parameters")
         elif ps["a"] <= 0 or ps["b"] <= 0 or ps["m"] < 0:
             bad.append("TLA's alpha and mu must be positive and n not negative")
-    elif kind == "AV":
+    elif kind in ("AV", "AVP"):
         if n < 1:
-            bad.append("AV needs a mix")
+            bad.append(f"{kind} needs a mix")
         elif not 0 <= vals[0] <= 100:
-            bad.append("AV's mix must be between 0 and 100")
+            bad.append(f"{kind}'s mix must be between 0 and 100")
+        if n >= 4 and not (vals[1] >= 0 and 0 <= vals[2] <= 1
+                           and vals[3] >= 0):
+            bad.append(f"{kind}'s tail terms must have CT >= 0, TM between 0 "
+                       "and 1 and ET >= 0")
+        if n >= 5 and vals[4] < 0:
+            bad.append(f"{kind}'s channel width cannot be negative")
     if ps["tail"]:
         tk = ps["tk"]
         if tk is None or not math.isfinite(tk) or tk <= 0:
@@ -797,6 +836,40 @@ def _voigt_values(x, pos, fwhm, fraction):
     return gauss_conv(x, lor, f_g)
 
 
+def _avantage_tail(sp) -> bool:
+    """True when an ``AV`` / ``AVP`` shape has a tail that can be drawn: the
+    terms are not the "no tail" values ``CT = 0, TM = 1`` and the channel width
+    is known."""
+    t = sp.get("tail_terms") or ()
+    if len(t) != 3 or not sp.get("step", 0.0) > 0:
+        return False
+    return not (abs(t[0]) < 1e-9 and abs(t[1] - 1.0) < 1e-9)
+
+
+def _avantage_values(x, sp, pos, fwhm):
+    """An Avantage peak, unit height at ``pos``, from the Data Processing
+    Reference Manual (v5, pp.72-73): ``GL`` is the Gaussian/Lorentzian
+    *product* ``1 / ([1 + M t^2] exp{(1 - M) ln2 t^2})`` with ``t = 2 (x - pos)
+    / FWHM`` (``AVP``) or the *sum* ``M L + (1 - M) G`` (``AV``), ``M`` the
+    L/G mix / 100. A tail is added on the low-kinetic-energy (high binding
+    energy) side only: ``GL + (1 - GL) T`` with ``T = TM CT + (1 - TM)
+    exp(-ET |dx|)``, ``dx`` the distance from the centre **in channels**
+    (data points, ``step`` eV each); the other side is ``GL``."""
+    np = _np()
+    t = (x - pos) / fwhm
+    m = min(max(sp["mix"], 0.0), 100.0) / 100.0
+    if sp["kind"] == "AVP":
+        g = np.exp(-_LN2_4 * (1.0 - m) * t * t) / (1.0 + 4.0 * m * t * t)
+    else:
+        g = m / (1.0 + 4.0 * t * t) + (1.0 - m) * np.exp(-_LN2_4 * t * t)
+    if not _avantage_tail(sp):
+        return g
+    ct, tm, et = sp["tail_terms"]
+    d = np.where(x < pos, pos - x, 0.0) / sp["step"]
+    tail = tm * ct + (1.0 - tm) * np.exp(-et * d)
+    return np.where(x < pos, g + (1.0 - g) * tail, g)
+
+
 def _raw_values(x, sp, pos, fwhm):
     """The lineshape before any Gaussian broadening (GL/SGL/VOIGT have their
     own convolution already folded in): the GL product, the SGL sum, the
@@ -816,8 +889,8 @@ def _raw_values(x, sp, pos, fwhm):
         return base
     if sp["kind"] == "VOIGT":
         return _voigt_values(x, pos, fwhm, sp["mix"])
-    if sp["kind"] == "AV":
-        return _gl_sgl_values(x, "SGL", sp["mix"], pos, fwhm)
+    if sp["kind"] in ("AV", "AVP"):
+        return _avantage_values(x, sp, pos, fwhm)
     if sp["kind"] == "DS":
         t = 2.0 * (x - pos) / fwhm
         a = sp["a"]
@@ -872,7 +945,7 @@ def component_curve(ke, shape, pos, fwhm, area):
     sp = parse_shape(shape)
     fwhm = fwhm if fwhm and fwhm > 0 else 1.0
     v = _raw_values(ke, sp, pos, fwhm)
-    if sp["kind"] in ("GL", "SGL", "VOIGT", "AV"):
+    if sp["kind"] in ("GL", "SGL", "VOIGT", "AV", "AVP"):
         conv = v
     else:
         gw = fwhm * GAUSS_K.get(sp["kind"], 0.0) * (
