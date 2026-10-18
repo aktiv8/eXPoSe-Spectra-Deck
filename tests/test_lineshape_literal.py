@@ -14,6 +14,8 @@ components in its header:
 * ``GL SGL and T tail.csv`` - Au 4d doublet, eight fits: ``SGL(70)``,
   ``SGL(70)T(1|1.5|2)``, ``SGL(90)``, ``GL(70)T(1|1.5|2)``
 * ``E with GL and SGL.csv`` - Au 4d, nine ``E(1,b,n)GL|SGL(m)`` fits
+* ``more E and PHI.csv`` - three more ``E`` fits (a = 1, 0.5, 0.1); its
+  ``GL(a,b)PHI(n,m)`` fits are not read from the program
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -222,8 +224,9 @@ class TestTailLiteral(unittest.TestCase):
 @unittest.skipUnless(HAVE_NP and _path("E with GL and SGL.csv"),
                      "E with GL and SGL.csv not found")
 class TestELiteral(unittest.TestCase):
-    """``E(a,b,n)GL(m)`` / ``SGL(m)``, the stated Area used as it is. Every fit
-    has a = 1, so the ``(1 - a) / 2`` power is not tested, only b and n."""
+    """``E(a,b,n)GL(m)`` / ``SGL(m)``, the stated Area used as it is. The first
+    file has a = 1 (the ``(1 - a) / 2`` power is zero); the second adds
+    a = 0.5 and 0.1, which test the power."""
 
     def test_every_fit_matches_casaxps(self):
         seen = 0
@@ -242,6 +245,29 @@ class TestELiteral(unittest.TestCase):
             self.assertLess(err, 0.004, shape)
             seen += 1
         self.assertEqual(seen, 9)
+
+    @unittest.skipUnless(_path("more E and PHI.csv"), "more E and PHI.csv not found")
+    def test_a_below_one_matches_casaxps(self):
+        seen = {}
+        for info, head, cols in _blocks(_path("more E and PHI.csv")):
+            shape = info["Lineshape"][0]
+            if not shape.startswith("E("):
+                continue
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            lit = cols[:, 2] - bg
+            mine = np.empty_like(lit)
+            mine[order] = ls.component_curve(
+                ke[order], shape, HV - float(info["Position"][0]),
+                float(info["FWHM"][0]), float(info["Area"][0]))
+            seen[shape] = float(np.abs(mine - lit).max() / lit.max())
+        self.assertEqual(sorted(seen), ["E(0.1,5,30)SGL(50)",
+                                        "E(0.5,2,50)SGL(50)",
+                                        "E(1,1,50)SGL(90)"])
+        for shape, err in seen.items():
+            self.assertLess(err, 0.004, shape)
 
 
 if __name__ == "__main__":
