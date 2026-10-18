@@ -436,9 +436,13 @@ def _shape_string(peak):
             gw = _num(peak.get("fwhm_g"))
             if gw is None:
                 gw = _num(peak.get("Skew"))
-            n = lineshapes.gaussian_index("LA", _num(peak.get("FWHM")), gw)
-            if n <= 0:
+            fw = _num(peak.get("FWHM"))
+            if not (fw and fw > 0 and gw and gw > 0):
                 return ""
+            # CasaXPS's own LA(a,b,n) is a table (lineshapes._la_table), not
+            # "LA convolved with a Gaussian of any width": the width stated in
+            # eV is kept as it is, as LAG(a, b, gaussian FWHM / FWHM)
+            return f"LAG({a:g},{b:g},{gw / fw:.6g})"
         return f"LA({a:g},{b:g},{n:.6g})"
     return ""
 

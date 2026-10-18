@@ -281,9 +281,46 @@ class TestRealEndToEndMatch(unittest.TestCase):
                                dwell, scans, prefer_csv=False)[0]
         via_csv = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
                                  dwell, scans, prefer_csv=True)[0]
-        self.assertTrue(recon.approximate)
         self.assertFalse(via_csv.approximate)
-        self.assertLess(via_csv.residual_rms, recon.residual_rms)
+        # LA(m) is the program's own table now: the reconstruction is as good
+        # as CasaXPS's literal curves (it used to be worse)
+        self.assertLessEqual(recon.residual_rms, via_csv.residual_rms * 1.05)
+
+
+@unittest.skipUnless(HAVE_NP and _columns_csv() and _refitted_vms(),
+                     "PtCl2_refitted.vms + its CSV export not present")
+class TestLaMatchesCasaXpsCurves(unittest.TestCase):
+    """The strongest check of the ``LA`` table: CasaXPS's own exported
+    component curves (``LA(m)`` and ``LA(a,m)``, 3 regions x 2 samples)
+    against what ``lineshapes`` builds from the shape string alone. Peak
+    heights agree to 0.01 %; the old width rule was 7-24 % out."""
+
+    def test_la_components_equal_the_exported_curves(self):
+        doc = readers.load_file(_refitted_vms())
+        imp = casacsv.parse(_columns_csv())
+        casacsv.apply_matches(casacsv.match_to_regions(imp.blocks,
+                                                       doc.regions))
+        import numpy as np
+        checked = 0
+        for r in doc.regions:
+            if not (r.fit and r.fit.regions):
+                continue
+            dwell, scans = r.dwell_and_scans()
+            lit = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
+                                 dwell, scans, prefer_csv=True)[0]
+            if lit.fit_region.csv_curves is None:
+                continue
+            rec = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
+                                 dwell, scans, prefer_csv=False)[0]
+            for (c, vl), (_, vr) in zip(lit.components, rec.components):
+                if not c.shape.upper().startswith("LA"):
+                    continue
+                vl, vr = np.array(vl, float), np.array(vr, float)
+                ok = ~np.isnan(vl) & ~np.isnan(vr)
+                err = np.abs(vr - vl)[ok].max() / np.nanmax(vl)
+                self.assertLess(err, 0.005, f"{r.sample} {r.name} {c.shape}")
+                checked += 1
+        self.assertGreaterEqual(checked, 12)
 
 
 @unittest.skipUnless(HAVE_NP and _rows_csv() and _refitted_vms(),
@@ -328,7 +365,7 @@ class TestRealEndToEndMatchRowsLayout(unittest.TestCase):
         via_csv = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
                                  dwell, scans, prefer_csv=True)[0]
         self.assertFalse(via_csv.approximate)
-        self.assertLess(via_csv.residual_rms, recon.residual_rms)
+        self.assertLessEqual(recon.residual_rms, via_csv.residual_rms * 1.05)
 
 
 # ------------------------------------------------------------- matching

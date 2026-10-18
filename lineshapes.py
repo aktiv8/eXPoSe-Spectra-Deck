@@ -454,20 +454,21 @@ from __future__ import annotations
 import math
 import re
 
-GAUSS_K = {"LF": 0.60, "LA": 0.41, "DS": 1.8445, "A": 1.0, "TLA": 1.0}
-GAUSS_P = {"DS": 0.5737, "LA": 0.60, "A": 1.0, "TLA": 1.0}  # exponent on
+GAUSS_K = {"LF": 0.60, "DS": 1.8445, "A": 1.0, "TLA": 1.0}
+GAUSS_P = {"DS": 0.5737, "A": 1.0, "TLA": 1.0}  # exponent on
                                     # (25/m); every other shape is 1 (below)
 _LN2_4 = 2.772588722239781               # 4 ln 2
 
 
 def gaussian_index(kind, fwhm, gauss_fwhm):
     """The CasaXPS Gaussian index ``n`` whose convolution width, for a
-    ``kind`` (``"LA"``, ``"LF"``, ``"DS"``) component of width ``fwhm``,
+    ``kind`` (``"LF"``, ``"DS"``) component of width ``fwhm``,
     equals ``gauss_fwhm`` (same unit): the inverse of the width rule in
     :func:`component_curve`, ``gw = fwhm * GAUSS_K * (25/n) ** GAUSS_P``.
     ``0.0`` (no convolution) when either width is missing or not positive.
-    Used to read a source that states the Gaussian width directly, such as
-    KherveFitting's ``LA*G`` (its ``fwhm_g``, in eV), as a CasaXPS shape."""
+    ``LA`` is not a width rule any more (it is the program's own table, see
+    ``_la_table``): a source that states an LA's Gaussian width in eV is
+    ``LAG(a,b,width/fwhm)`` instead."""
     k = GAUSS_K.get(kind, 0.0)
     if not (k > 0 and fwhm and fwhm > 0 and gauss_fwhm and gauss_fwhm > 0):
         return 0.0
@@ -539,8 +540,15 @@ def parse_shape(text) -> dict:
             # (Cookbook 2026 p.19/66; Fairley et al., JVST A 41(1) 2023
             # supplementary, Eq. 6): the two run in opposite directions
             # (LA(0) -> n=1401, LA(100) -> n=0).
-            raw = ps[0] if ps else 0.0
-            out.update(m=1401.0 - 14.01 * raw)
+            raw = min(max(ps[0] if ps else 0.0, 0.0), 100.0)
+            out.update(m=float(_LA_MAX_N - math.floor(raw / 100.0 * _LA_MAX_N)))
+    elif kind == "LAG":
+        # LAG(a, b, r): this module's own name (not a CasaXPS shape) for
+        # KherveFitting's LA x G, the shared-width asymmetric Lorentzian
+        # convolved with a Gaussian of FWHM r * fwhm (see
+        # readers/khervefitting_kfit.py); a and b as for LA.
+        out.update(a=ps[0] if ps else 1.0, b=ps[1] if len(ps) > 1 else 1.0,
+                   m=ps[2] if len(ps) > 2 else 0.0)
     elif kind == "DS":
         out.update(a=ps[0] if ps else 0.0, m=ps[1] if len(ps) > 1 else 0.0)
     elif kind in ("GL", "SGL", "VOIGT"):
@@ -577,10 +585,17 @@ def parse_shape(text) -> dict:
 
 def is_exact(shape) -> bool:
     """True for shapes that are exact rather than reconstructed: a plain
-    ``GL(m)``/``SGL(m)``. A second argument (``GL(m,n)``, the extra Gaussian
+    ``GL(m)``/``SGL(m)`` and an ``LA`` with equal exponents. A second argument (``GL(m,n)``, the extra Gaussian
     convolution of Cookbook p.67) or anything after the parentheses is not
     drawn, so such a component is not exact whatever its first number."""
     ps = parse_shape(shape)
+    if ps["kind"] == "LA":
+        # the program's own table (see _la_table), checked against CasaXPS's
+        # exported component curves to the printed precision for a == b (the
+        # LA(m) and LA(a,m) forms); an unequal pair uses the same code but has
+        # no exported curves to compare with, so it stays flagged
+        return (not ps["tail"] and not ps["suffix"]
+                and abs(ps["a"] - ps["b"]) < 1e-9)
     return (ps["kind"] in ("GL", "SGL") and not ps["tail"]
             and len(ps["params"]) <= 1 and not ps["suffix"])
 
@@ -721,6 +736,149 @@ def gauss_conv(x, y, gfwhm):
     k /= k.sum()
     pad = np.concatenate([np.full(n, y[0]), y, np.full(n, y[-1])])
     return np.convolve(pad, k, mode="valid")
+
+
+# --- the CasaXPS ``LA`` shape table (read from the program, see below) -------
+#
+# CasaXPS does not evaluate ``LA(a, b, n)`` as a formula: it tabulates it once
+# and looks the table up (the routine that fills it, and the one that measures
+# it, are in the Ghidra analysis of CasaXPS.exe: functions at 0x14040dad0 and
+# 0x140416980). Every constant below is read from there:
+#
+# * A table of ``_TABLE_PTS_FINE`` samples on a grid of ``_TABLE_STEP`` (the
+#   class default, 0x140a6b0a8 = 0.025; a second, coarse array keeps every
+#   ``_TABLE_RATIO``-th point so the table reaches ``_TABLE_FINE_HALF`` *
+#   ``_TABLE_RATIO`` steps from the centre).
+# * ``y = 1 / (1 + 4 x^2) ** a`` for the low-KE (high-BE) side and ``** b`` for
+#   the other side (x is the grid position).
+# * ``n`` > 0 convolves it with a Gaussian of ``2 * floor(n/2) + 1`` samples,
+#   ``exp(-(3 j / half)^2)`` for j = -half..half (half = floor(n/2)), normalised.
+#   When ``n * step`` exceeds 2 the kernel is held at ``floor(2/step) + 1``
+#   samples and the *Lorentzian's* x axis is stretched by ``n * step / 2``
+#   instead, which is how a large ``n`` gives a wider Gaussian.
+# * The table is divided by its trapezoid area, its height and half-maximum
+#   points are found (parabola through the top three samples, linear
+#   interpolation at the crossings) and its width is taken as **twice the
+#   smaller of the two half-widths** (this is what CasaXPS scales a component's
+#   FWHM by: a sum or a larger-side width fitted the real files worse).
+#
+# ``LA(m)`` is ``LA(1, 1, 1401 - floor(m / 100 * 1401))`` (the program's own
+# clamp: m is limited to 0..100 and n to 0..1401).
+_TABLE_STEP = 0.025
+_TABLE_RATIO = 40
+_TABLE_FINE_HALF = 300
+_TABLE_SIZE = _TABLE_FINE_HALF * 2 * _TABLE_RATIO + 1
+_TABLE_CENTRE = _TABLE_SIZE // 2
+_KERNEL_SPAN = 3.0                       # kernel runs to +-3 "half" widths
+_LA_MAX_N = 1401
+
+
+def _la_n(m):
+    """The whole-number Gaussian index CasaXPS uses for ``m`` (its parser
+    truncates ``n`` and caps it at 1401); never negative."""
+    try:
+        v = int(math.floor(float(m)))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+    return max(0, min(_LA_MAX_N, v))
+
+
+def _measure_table(y):
+    """``(width, offset)`` of a table in grid units: twice the smaller
+    half-width at half maximum, and where the peak sits relative to the
+    centre. ``None`` when no half-maximum point is found."""
+    np = _np()
+    c = _TABLE_CENTRE
+    fine = y[c - _TABLE_FINE_HALF:c + _TABLE_FINE_HALF + 1]
+    coarse = y[c - _TABLE_FINE_HALF * _TABLE_RATIO:
+               c + _TABLE_FINE_HALF * _TABLE_RATIO + 1:_TABLE_RATIO]
+    mid = _TABLE_FINE_HALF
+    p = int(np.argmax(fine))
+    if fine[p] <= fine[mid]:
+        p = mid
+    pk, top = float(p), float(fine[p])
+    if 0 < p < len(fine) - 1:
+        d2 = (fine[p - 1] + fine[p + 1] - 2.0 * fine[p]) * 0.5
+        d1 = (fine[p + 1] - fine[p - 1]) * 0.5
+        if abs(d2) > 1e-200:
+            pk = p - d1 / (2.0 * d2)
+            top = float(fine[p]) - d1 * d1 / (4.0 * d2)
+    half = top * 0.5
+
+    def side(sign):
+        for arr, step in ((fine, _TABLE_STEP),
+                          (coarse, _TABLE_STEP * _TABLE_RATIO)):
+            seq = arr[p:] if sign > 0 else arr[:p + 1][::-1]
+            below = np.nonzero(seq < half)[0]
+            if len(below) == 0 or below[0] == 0:
+                continue
+            k = int(below[0])
+            y1, y0 = float(seq[k]), float(seq[k - 1])     # y0 above, y1 below
+            frac = (y0 - half) / (y0 - y1) if y0 != y1 else 1.0
+            # (the coarse array is read from the same index, as the program
+            # does, so it only matters for a table whose half maximum lies
+            # beyond the fine range)
+            return abs(p + sign * (k - 1 + frac) - pk) * step
+        return None
+
+    right, left = side(+1), side(-1)
+    if right is None or left is None or min(left, right) <= 0:
+        return None
+    return 2.0 * min(left, right), (p - mid) * _TABLE_STEP
+
+
+_TABLE_CACHE = {}
+
+
+def _la_table(a, b, n):
+    """``(y, width, offset)`` for ``LA(a, b, n)``: the area-normalised table
+    (``_TABLE_SIZE`` samples, ``_TABLE_STEP`` apart, centred on
+    ``_TABLE_CENTRE``), its measured width and its peak offset (grid units).
+    ``width`` is 1 when it cannot be measured."""
+    key = (round(float(a), 9), round(float(b), 9), int(n))
+    hit = _TABLE_CACHE.get(key)
+    if hit is not None:
+        return hit
+    np = _np()
+    a, b, n = key
+    scale, ne = 1.0, n
+    if 2.0 < n * _TABLE_STEP:
+        scale = 2.0 / (n * _TABLE_STEP)
+        ne = int(math.floor(2.0 / _TABLE_STEP)) + 1
+    idx = np.arange(_TABLE_SIZE)
+    x = _TABLE_STEP * (idx - _TABLE_CENTRE) / scale
+    lor = 1.0 / (1.0 + 4.0 * x * x)
+    y = np.where(idx > _TABLE_CENTRE, lor ** b, lor ** a)
+    if ne > 1:
+        if (ne // 2) * 2 == ne:
+            ne += 1
+        half = ne // 2
+        j = np.arange(ne) - half
+        kern = np.exp(-(_KERNEL_SPAN * j / half) ** 2)
+        kern /= kern.sum()
+        pad = np.concatenate([np.full(half, y[0]), y, np.full(half, y[-1])])
+        y = np.convolve(pad, kern, mode="valid")
+    area = (float(y.sum()) - 0.5 * float(y[0] + y[-1])) * _TABLE_STEP
+    y = y / area if area > 0 else y
+    m = _measure_table(y)
+    out = (y, m[0] if m else 1.0, m[1] if m else 0.0)
+    if len(_TABLE_CACHE) > 128:
+        _TABLE_CACHE.clear()
+    _TABLE_CACHE[key] = out
+    return out
+
+
+def _la_values(x, pos, fwhm, a, b, n, area):
+    """The ``LA(a, b, n)`` component of the given ``area`` on ``x``: the
+    table looked up at ``(x - pos) / fwhm`` in units of its own measured
+    width, so the area is the table's own (1) times ``area``."""
+    np = _np()
+    y, width, off = _la_table(a, b, n)
+    u = (np.asarray(x, dtype=float) - pos) / fwhm * width + off
+    grid = _TABLE_STEP * (np.arange(_TABLE_SIZE) - _TABLE_CENTRE)
+    # a position beyond the table (hundreds of FWHM away) counts as zero (the
+    # program's own lookup past its table was not read)
+    return np.interp(u, grid, y, left=0.0, right=0.0) * (area * width / fwhm)
 
 
 def _half_width_term(p):
@@ -944,13 +1102,20 @@ def component_curve(ke, shape, pos, fwhm, area):
     ke = np.asarray(ke, dtype=float)
     sp = parse_shape(shape)
     fwhm = fwhm if fwhm and fwhm > 0 else 1.0
+    if sp["kind"] == "LA":
+        # a table lookup, not a formula (see _la_table); its own area is 1
+        return _la_values(ke, pos, fwhm, sp["a"], sp["b"], _la_n(sp["m"]),
+                          area)
     v = _raw_values(ke, sp, pos, fwhm)
     if sp["kind"] in ("GL", "SGL", "VOIGT", "AV", "AVP"):
         conv = v
     else:
-        gw = fwhm * GAUSS_K.get(sp["kind"], 0.0) * (
-            (25.0 / sp["m"]) ** GAUSS_P.get(sp["kind"], 1.0)
-            if sp["m"] else 0.0)
+        if sp["kind"] == "LAG":
+            gw = fwhm * max(sp["m"], 0.0)          # the width, stated directly
+        else:
+            gw = fwhm * GAUSS_K.get(sp["kind"], 0.0) * (
+                (25.0 / sp["m"]) ** GAUSS_P.get(sp["kind"], 1.0)
+                if sp["m"] else 0.0)
         conv = gauss_conv(ke, v, gw)
     span = _NORM_HALF_WIDTH * fwhm
     n_points = _NORM_POINTS

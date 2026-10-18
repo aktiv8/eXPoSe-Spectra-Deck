@@ -158,11 +158,16 @@ class TestShapes(unittest.TestCase):
         self.assertAlmostEqual(ls._shared_width(1.3, 1.2, 5.0), want, 9)
         self.assertAlmostEqual(want / 1.3, 1.575, 3)   # wider than fwhm
 
-    def test_broadening_lowers_the_peak_and_keeps_the_area(self):
+    def test_gaussian_index_reshapes_the_peak_and_keeps_the_area(self):
+        # a larger n is a wider Gaussian in the program's table (the peak is
+        # rescaled to the same FWHM, so a Gaussian-cored peak is taller than
+        # the Lorentzian-cored one), and the area is the stored one either way
         sharp = ls.component_curve(self.ke, "LA(1.1,1.9,0)", 1005.0, 1.3, 1.0)
-        soft = ls.component_curve(self.ke, "LA(1.1,1.9,7)", 1005.0, 1.3, 1.0)
-        self.assertLess(soft.max(), sharp.max())
-        self.assertAlmostEqual(self.area(soft), self.area(sharp), 3)
+        soft = ls.component_curve(self.ke, "LA(1.1,1.9,300)", 1005.0, 1.3, 1.0)
+        self.assertGreater(soft.max(), sharp.max() * 1.1)
+        # (the window cuts both peaks' tails; the Lorentzian-cored one loses more)
+        self.assertAlmostEqual(self.area(soft), 1.0, delta=0.02)
+        self.assertGreater(self.area(sharp), 0.9)
 
     def test_lf_tail_is_suppressed_relative_to_plain_la(self):
         # The real LF formula (see the module docstring: Major, Shah, Avval,
@@ -212,8 +217,9 @@ class TestShapes(unittest.TestCase):
                          ("LA", 1.1, 1.9, 7.0))
         # The 2-argument shorthand maps m (0-100) onto the explicit form's own
         # n via CasaXPS's own Eq. (6) (Fairley et al., JVST A 41(1) 2023): the
-        # two run in opposite directions, LA(50) is n=700.5, not n=50.
-        self.assertEqual(ls.parse_shape("LA(50)")["m"], 700.5)
+        # two run in opposite directions, LA(50) is n=701 (1401 - floor(700.5),
+        # the program's own truncation), not n=50.
+        self.assertEqual(ls.parse_shape("LA(50)")["m"], 701.0)
         self.assertEqual(ls.parse_shape("LA(0)")["m"], 1401.0)
         self.assertEqual(ls.parse_shape("LA(100)")["m"], 0.0)
         p = ls.parse_shape("LF(1.1,1.2,75,200)")
@@ -221,7 +227,8 @@ class TestShapes(unittest.TestCase):
         self.assertEqual(ls.parse_shape("nonsense")["kind"], "GL")
         self.assertEqual(ls.parse_shape(None)["kind"], "GL")
         self.assertTrue(ls.is_exact("GL(30)") and ls.is_exact("SGL(50)"))
-        self.assertFalse(ls.is_exact("LA(1,1,1)") or ls.is_exact("LF(1,1,1,1)"))
+        self.assertTrue(ls.is_exact("LA(1,1,1)"))        # equal exponents
+        self.assertFalse(ls.is_exact("LA(1.1,1.9,1)") or ls.is_exact("LF(1,1,1,1)"))
 
     def test_parse_shape_la_2_argument_form(self):
         """CasaXPS Cookbook 2026 p.66: "Abbreviation for LA lineshape:
@@ -243,7 +250,7 @@ class TestShapes(unittest.TestCase):
         self.assertNotAlmostEqual(ls.parse_shape("LA(1,701)")["m"],
                                   ls.parse_shape("LA(701)")["m"], delta=1.0)
         # the 1-argument and 3-argument forms are unaffected
-        self.assertEqual(ls.parse_shape("LA(50)")["m"], 700.5)
+        self.assertEqual(ls.parse_shape("LA(50)")["m"], 701.0)
         p3 = ls.parse_shape("LA(1.1,1.9,7)")
         self.assertEqual((p3["a"], p3["b"], p3["m"]), (1.1, 1.9, 7.0))
 
@@ -1110,19 +1117,15 @@ def _ptcl2_refitted_file():
 @unittest.skipUnless(HAVE_NP and _ptcl2_refitted_file(),
                      "PtCl2_refitted.vms (LA(m) vs LA(a,m) comparison) not "
                      "present")
-class TestLAShorthandOvershootIsIntrinsic(unittest.TestCase):
+class TestLAShorthandOvershoot(unittest.TestCase):
     """``PtCl2_refitted.vms`` refits the same real Cl 2p / Pt 4d / Pt 4f data
     twice -- once with the 1-argument ``LA(m)`` shorthand (sample
-    ``"PtCl2 LA(m)"``), once with the explicit ``LA(a,m)`` form (sample
-    ``"PtCl2 LA(a,m)"``) -- specifically to compare the two reconstructions
-    against the same raw counts. See the module docstring: sweeping
-    ``GAUSS_K["LA"]``/``GAUSS_P["LA"]`` from today's values down to zero
-    moves the shorthand's overshoot by well under half a percentage point,
-    so it is not a calibration gap -- it is intrinsic to the shorthand's
-    fixed ``a=b=1``. This pins the real numbers as a canary (not a target to
-    chase): a future change should not make the shorthand's overshoot climb
-    well past where it sits today, and the explicit form should stay
-    measurably better on the same real components."""
+    ``"PtCl2 LA(m)"``), once with the explicit ``LA(a,m)`` form. The envelope
+    used to rise 3.5-6 % of the peak above the data for the shorthand while
+    the explicit form did not: that was the old reconstruction, not the
+    shorthand (``LA`` is now the program's own table, which agrees with
+    CasaXPS's exported component curves; see ``tests/test_casacsv.py``). This
+    keeps a loose ceiling as a canary."""
 
     def _overshoot(self, cv, counts):
         env = np.array(cv.envelope, dtype=float)
@@ -1132,36 +1135,17 @@ class TestLAShorthandOvershootIsIntrinsic(unittest.TestCase):
         peak = float(data[keep].max())
         return 100.0 * over / peak if peak > 0 else 0.0
 
-    def _overshoot_of(self, doc, sample, name):
-        r = next(r for r in doc.regions
-                 if r.sample == sample and r.name == name)
-        cv = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
-                            r.dwell, r.extra.get("n_scans", 1))[0]
-        return self._overshoot(cv, r.counts)
-
-    def test_shorthand_overshoot_stays_in_its_known_range(self):
+    def test_neither_form_overshoots_the_data(self):
         doc = readers.load_file(_ptcl2_refitted_file())
-        # Pt 4f's own region carries a real CasaXPS "St Offset" of 11.43%
-        # (see TestStEndOffsetOnRealShirleyRegions): now that the background
-        # reconstruction applies it, the background -- and so the envelope
-        # this overshoot is measured against -- sits lower near the peak,
-        # moving the measured overshoot from ~3.7% to ~3.2%. Cl 2p/Pt 4d's
-        # own offsets are small (Cl 2p) or zero (Pt 4d), so their ranges are
-        # unchanged.
-        for name, lo, hi in (("Cl 2p", 3.5, 6.0), ("Pt 4d", 3.5, 6.5),
-                              ("Pt 4f", 3.0, 6.0)):
-            pct = self._overshoot_of(doc, "PtCl2 LA(m)", name)
-            self.assertTrue(lo <= pct <= hi,
-                            f"{name}: {pct:.2f}% (expected {lo}-{hi}%)")
-
-    def test_explicit_form_measurably_beats_the_shorthand(self):
-        doc = readers.load_file(_ptcl2_refitted_file())
-        for name in ("Cl 2p", "Pt 4f"):
-            short = self._overshoot_of(doc, "PtCl2 LA(m)", name)
-            explicit = self._overshoot_of(doc, "PtCl2 LA(a,m)", name)
-            self.assertLess(explicit, short - 0.5,
-                            f"{name}: explicit {explicit:.2f}% vs "
-                            f"shorthand {short:.2f}%")
+        for sample in ("PtCl2 LA(m)", "PtCl2 LA(a,m)"):
+            for name in ("Cl 2p", "Pt 4d", "Pt 4f"):
+                r = next(r for r in doc.regions
+                         if r.sample == sample and r.name == name)
+                cv = casafit.curves(r.fit, r.energy, r.counts,
+                                    r.photon_energy, r.dwell,
+                                    r.extra.get("n_scans", 1))[0]
+                pct = self._overshoot(cv, r.counts)
+                self.assertLess(pct, 6.0, f"{sample} {name}: {pct:.2f}%")
 
 
 @unittest.skipUnless(HAVE_NP and _ptcl2_refitted_file(),
@@ -1326,7 +1310,7 @@ class TestLASweepShape(unittest.TestCase):
     components' stored Area is ~100-450x too small for the actual peak
     height, an unrelated data-quality artifact)."""
 
-    SPREAD_CEILING = 10.0   # % coefficient of variation; ~7.9% measured
+    SPREAD_CEILING = 10.0   # % coefficient of variation; ~9.0% measured
 
     @staticmethod
     def _voigt_fwhm(fl, fg):
@@ -1348,16 +1332,21 @@ class TestLASweepShape(unittest.TestCase):
     def test_effective_width_stays_close_to_constant_across_the_m_sweep(self):
         rows = self._n_and_fwhm(_pmma_file()) + self._n_and_fwhm(_pmma3_file())
         self.assertGreaterEqual(len(rows), 15)
-        widths = [self._voigt_fwhm(
-            fl, fl * ls.GAUSS_K["LA"] * (25.0 / n) ** ls.GAUSS_P["LA"])
-            for n, fl in rows]
+        # the full width at half maximum of the shape as the program's table
+        # builds it (every fit's FWHM is linked, and they all refit one peak)
+        x = np.linspace(-6.0, 6.0, 24001)
+        widths = []
+        for n, fl in rows:
+            shape = f"LA(1,1,{n:g})"
+            y = ls.component_curve(x, shape, 0.0, fl, 1.0)
+            above = np.nonzero(y >= y.max() / 2.0)[0]
+            widths.append(float(x[above[-1]] - x[above[0]]))
         mean = sum(widths) / len(widths)
         spread = (sum((w - mean) ** 2 for w in widths) / len(widths)) ** 0.5
         cv_pct = 100.0 * spread / mean
         self.assertLess(cv_pct, self.SPREAD_CEILING,
                         f"effective width spread {cv_pct:.2f}% across the "
-                        "m sweep -- see lineshapes.py's GAUSS_K[\"LA\"]/"
-                        "GAUSS_P[\"LA\"] calibration notes")
+                        "m sweep")
 
     def test_shorthand_m_lands_on_the_same_n_trend_as_the_explicit_form(self):
         # LA(m) shorthand and LA(1,1,m) explicit are the same physical

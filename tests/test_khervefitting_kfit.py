@@ -236,12 +236,11 @@ class TestShapeString(unittest.TestCase):
                 "fwhm_g": 0.16}
         shape = kf._shape_string(peak)
         sp = ls.parse_shape(shape)
-        self.assertEqual((sp["a"], sp["b"]), (0.92, 2.0))
-        self.assertGreater(sp["m"], 0)
-        # the Gaussian index reproduces the stated width through the rule
-        # component_curve applies
-        gw = 1.11 * ls.GAUSS_K["LA"] * (25.0 / sp["m"]) ** ls.GAUSS_P["LA"]
-        self.assertAlmostEqual(gw, 0.16, places=4)
+        # KherveFitting's LA x G is its own shape, LAG(a, b, Gaussian FWHM /
+        # FWHM): CasaXPS's LA(a,b,n) is a table that cannot take an arbitrary
+        # Gaussian width
+        self.assertEqual((sp["kind"], sp["a"], sp["b"]), ("LAG", 0.92, 2.0))
+        self.assertAlmostEqual(1.11 * sp["m"], 0.16, places=4)
         # the Skew column is the fallback when fwhm_g is absent
         del peak["fwhm_g"]
         self.assertEqual(kf._shape_string(peak), shape)
@@ -788,7 +787,6 @@ class TestPtCl2RealFile(unittest.TestCase):
         for c in la_regions[0].fit.components:
             if c.shape.startswith("LA"):
                 self.assertNotEqual(c.shape, "KFUnknown(0)")
-                self.assertFalse(lineshapes.is_exact(c.shape))
 
     def test_no_becorrection_or_sample_axis_data_in_this_file(self):
         # unlike RSF (a live file the user keeps re-fitting, see above),
