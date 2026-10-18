@@ -755,7 +755,8 @@ class TestPage(unittest.TestCase):
         # series, canvas drawing and controls) in viewer.js
         # +2_000: colour by CasaXPS INDEX and the merge of INDEX groups
         # +2_500: the fits of a stack (per-trace curves, offset, one legend)
-        self.assertLess(len(page), 191_500 + raw)     # far below plain JSON
+        # +500: the Residual StDev in each fit's header (when the app shows it)
+        self.assertLess(len(page), 192_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR

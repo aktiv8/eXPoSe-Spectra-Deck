@@ -434,7 +434,7 @@ def _page_rows(rows, budget):
                        "comps": [_round_curve(c) for c in cur["comps"]]}
         row["curve"] = cur
         for k in ("area", "area_t", "be_lo", "be_hi", "rms", "chi2_red",
-                  "photon_energy"):
+                  "residual_sd", "photon_energy"):
             if row.get(k) is not None:
                 row[k] = round_sig(row[k], 7)
         for c in row["components"]:
@@ -530,7 +530,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
                   calibration="", figures=(), calib=None, generated=None,
                   cameras=True, snapmaps=True, lines=None, casa_quant=None,
                   rsf_entries=None, prefer_csv=True, quant_overrides=None,
-                  ticked=None):
+                  ticked=None, show_sd=False):
     """The data of the browser as a JSON-able dict.
 
     ``figures`` is ``[{"name", "caption", "pages": [png bytes]}]``; ``calib``
@@ -758,6 +758,9 @@ def build_payload(docs, display=None, details=None, methods_text="",
                     "bg": {"light": light["plot_bg"], "dark": dark["plot_bg"]}},
         **({"quant_include": quant_include} if quant_include else {}),
         **({"fit_csv": {"default": bool(prefer_csv)}} if fit_csv else {}),
+        # the app's "Residual StDev" choice: the page shows CasaXPS's figure
+        # in each fit's header only when it was on at export
+        **({"fit_sd": True} if show_sd else {}),
         **({"casa_numbers": True} if casa_tagged else {}),
     }
 

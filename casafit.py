@@ -413,6 +413,10 @@ class Curves:
     chi2_red: float | None = None   # Poisson-weighted reduced chi-square
                                     # (None when dwell/scans are unknown, so
                                     # there are no true counts to weight by)
+    residual_sd: float | None = None    # CasaXPS's "Residual StDev",
+                                    # sqrt(mean(((d - e) / sqrt(d))^2)) over
+                                    # the region's points, d the counts (None
+                                    # as for chi2_red)
     background_known: bool = True   # False: this background type is not
                                     # reproduced (components only)
     fit_region: object = None       # the FitRegion these curves belong to
@@ -552,7 +556,7 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
         if comps and bg is not None and float(y.max() - y.min()) > 0:
             rms = float(np.sqrt(np.mean((y - total) ** 2))
                         / (y.max() - y.min()))
-        chi2 = None
+        chi2 = rsd = None
         if comps and bg is not None and scale is not None and len(sel) > 1:
             # Poisson-weighted reduced chi-square needs true counts, not the
             # counts/s "y"/"total" above -- undo the scaling with the same k.
@@ -560,13 +564,19 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
             var = np.maximum(raw_y, 1.0)
             chi2 = float(np.sum((raw_y - raw_total) ** 2 / var)
                         / (len(sel) - 1))
+            # CasaXPS's own "Residual StDev" (the paper's Eq. 3): the same
+            # Poisson-weighted residual, as a root mean square over all n
+            # points (chi2_red divides by n - 1 and keeps the square)
+            rsd = float(np.sqrt(np.sum((raw_y - raw_total) ** 2 / var)
+                                / len(sel)))
         out.append(Curves(
             region=reg.name, background_type=reg.background,
             background=None if bg is None else full(bg),
             components=[(c, full(v)) for c, v in comps],
             envelope=full(total) if comps and bg is not None else None,
             approximate=approx, scale_known=scale is not None,
-            residual_rms=rms, chi2_red=chi2, background_known=bg is not None,
+            residual_rms=rms, chi2_red=chi2, residual_sd=rsd,
+            background_known=bg is not None,
             fit_region=reg, notes=notes))
     return out
 

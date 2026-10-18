@@ -173,7 +173,7 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
         if names and fit.get("show", {}).get("components"):
             fit_legend = _fit_legend(ax, names, peak_at, below=boxed)
         if n == 1 and fit["per_trace"][0]:
-            _fit_rms_text(ax, fit["per_trace"][0], muted)
+            _fit_rms_text(ax, fit["per_trace"][0], muted, fit.get("sd"))
     elif fit and n == 1:               # a CasaXPS fit under a single spectrum
         draw_fit(ax, axes_x[0].x, fit, 1.0 / nf[0], muted, accent)
     if norm == "At cursor" and cursor is not None:
@@ -543,7 +543,7 @@ def draw_fit(ax, x, fit, scale, muted, accent, yoff=0.0, legend=True,
     if legend and names and show.get("components"):
         _fit_legend(ax, names, peak_at)
     if rms:
-        _fit_rms_text(ax, fit["curves"], muted)
+        _fit_rms_text(ax, fit["curves"], muted, fit.get("sd"))
     return names, peak_at
 
 
@@ -574,14 +574,24 @@ def _fit_legend(ax, names, peak_at, below=False):
                      frameon=False, handlelength=1.0)
 
 
-def _fit_rms_text(ax, curves, muted):
-    """Note the residual RMS of the curves that have one, top right."""
+def _fit_rms_text(ax, curves, muted, show_sd=False):
+    """Note the residual RMS of the curves that have one, top right; with
+    ``show_sd`` a second line gives CasaXPS's Residual StDev of those that
+    have one."""
     rms_bits = [(f"{cv.region}: " if len(curves) > 1 else "")
                 + f"{100 * cv.residual_rms:.1f}%"
                 for cv in curves if cv.residual_rms is not None]
-    if rms_bits:
+    lines = ["RMS " + ", ".join(rms_bits)] if rms_bits else []
+    if show_sd:
+        sd_bits = [(f"{cv.region}: " if len(curves) > 1 else "")
+                   + f"{cv.residual_sd:.2f}"
+                   for cv in curves
+                   if getattr(cv, "residual_sd", None) is not None]
+        if sd_bits:
+            lines.append("Residual StDev " + ", ".join(sd_bits))
+    if lines:
         fs = max(6, int(ax.xaxis.label.get_fontsize()) - 2)
-        ax.text(0.98, 0.98, "RMS " + ", ".join(rms_bits),
+        ax.text(0.98, 0.98, "\n".join(lines),
                 transform=ax.transAxes, ha="right", va="top",
                 fontsize=fs, color=muted)
 

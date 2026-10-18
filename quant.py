@@ -131,7 +131,7 @@ def fit_rows(r, curves=False, prefer_csv=False):
             "be_lo": None if hi is None else hv - (hi + rshift),
             "be_hi": None if lo is None else hv - (lo + rshift),
             "avg": getattr(reg, "avg", 1), "rms": cv.residual_rms,
-            "chi2_red": cv.chi2_red,
+            "chi2_red": cv.chi2_red, "residual_sd": cv.residual_sd,
             "approximate": bool(cv.approximate),
             **({"shape_notes": list(cv.notes)} if cv.notes else {}),
             "background_known": bool(cv.background_known),

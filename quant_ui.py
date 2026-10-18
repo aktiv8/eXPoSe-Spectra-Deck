@@ -271,8 +271,9 @@ class QuantPanel(ttk.Frame):
             eff = quantview.effective(s, shown, self.view)
             changed = quantview.changed(s, shown, self.view)
             self.tree.configure(show="tree headings")
-            header = resultspages.composition_header(eff)
-            cells = resultspages.composition_cells(eff)
+            sd = bool(self.app.fit_sd_var.get())
+            header = resultspages.composition_header(eff, sd)
+            cells = resultspages.composition_cells(eff, sd)
             if header is resultspages.CASA_HEADER:
                 # CasaXPS's own numbers: the region and the two percentages;
                 # background, RSF, area and fit quality are the recomputed

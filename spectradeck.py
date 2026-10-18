@@ -1283,6 +1283,7 @@ class Workspace:
             cfg["fit_" + k] = bool(v.get())
         cfg["fit_use_csv_curves"] = bool(self.csv_curves_var.get())
         cfg["fit_merge"] = bool(self.fit_merge_var.get())
+        cfg["fit_residual_sd"] = bool(self.fit_sd_var.get())
         for k, v in self.ident_vars.items():
             cfg["ident_" + k] = bool(v.get())
         cfg["axis_colour"] = self.axis_choice
@@ -1557,6 +1558,19 @@ class Workspace:
                 "only: the table, the quantification and the exports keep "
                 "every component. Components with no INDEX group are never "
                 "merged. A panel can override this (right-click ▸ Fit layers).")
+        self.fit_sd_var = tk.BooleanVar(
+            value=bool(cfg.get("fit_residual_sd", False)))
+        cb = ttk.Checkbutton(self.fit_frame, text="Residual StDev",
+                             variable=self.fit_sd_var,
+                             command=self._fit_sd_toggled)
+        cb.pack(side="left", padx=(0, 6))
+        tip(cb, "Show CasaXPS's own goodness-of-fit figure, the Residual "
+                "StDev: the root mean square of (data - envelope) / "
+                "sqrt(data) over the region's points (counts, so a value "
+                "near 1 means the fit explains the data to counting "
+                "statistics). Shown beside the RMS note on a fitted panel and "
+                "as a last column of the Quantification table, the reports "
+                "and the HTML page; off by default.")
         self.csv_curves_var = tk.BooleanVar(
             value=bool(cfg.get("fit_use_csv_curves", False)))
         self._csv_curves_cb = ttk.Checkbutton(
@@ -3001,6 +3015,11 @@ class Workspace:
         self._schedule_render()
         self.quant_panel.refresh()
 
+    def _fit_sd_toggled(self):
+        """The Residual StDev display: the plot note and every table."""
+        self._schedule_render()
+        self.quant_panel.refresh()
+
     def _refresh_csv_curves_availability(self):
         have = self._any_csv_curves()
         if hasattr(self, "_csv_curves_cb"):
@@ -3943,7 +3962,8 @@ class Workspace:
         if any(c.index >= len(cols) for cv in cvs for c, _v in cv.components):
             note("fit: INDEX groups beyond %d reuse colours "
                  "(the legend tells them apart)" % len(cols))
-        out = {"curves": cvs, "show": show, "colours": cols, "merge": merge}
+        out = {"curves": cvs, "show": show, "colours": cols, "merge": merge,
+               "sd": bool(self.fit_sd_var.get())}
         if stack:
             out["per_trace"] = per
         return out
@@ -4331,6 +4351,7 @@ class Workspace:
             "fit_show": {k: bool(v.get()) for k, v in self.fit_vars.items()},
             "csv_curves": bool(self.csv_curves_var.get()),
             "fit_merge": bool(self.fit_merge_var.get()),
+            "fit_sd": bool(self.fit_sd_var.get()),
             "quant_rsf": self.quant_panel.rsf_choice(),
             "quant_transmission": bool(self.quant_panel.view.transmission),
             "quant_casa": bool(self.quant_panel.view.casa_numbers),
@@ -4393,6 +4414,8 @@ class Workspace:
         # a figure saved before the choice existed drew every component, so a
         # missing key is "off", never whatever the live window has now
         self.fit_merge_var.set(bool(st.get("fit_merge", False)))
+        # (a state saved before the choice existed shows no Residual StDev)
+        self.fit_sd_var.set(bool(st.get("fit_sd", False)))
         if isinstance(st.get("csv_curves"), bool):
             self.csv_curves_var.set(st["csv_curves"])
         self._refresh_csv_curves_availability()   # open_workbook re-matches
@@ -5032,7 +5055,9 @@ class Workspace:
                 prefer_csv=bool(self.csv_curves_var.get()),
                 overrides=hand,
                 casa_numbers=self.quant_panel.view.casa_numbers))
-        return self._results_memo[1]
+        res = self._results_memo[1]
+        res.show_sd = bool(self.fit_sd_var.get())   # a display choice only
+        return res
 
     def quant_hand_count(self):
         """How many regions the report counts (or leaves out) differently
@@ -5096,7 +5121,8 @@ class Workspace:
             self.methods_text(), self.calibration_statement(), figures,
             self.calib, casa_quant=self.casa_quant,
             quant_overrides=dict(self.quant_panel.view.include),
-            ticked=lambda r: id(r) in self.checked)
+            ticked=lambda r: id(r) in self.checked,
+            show_sd=bool(self.fit_sd_var.get()))
 
     def export_html_browser(self):
         if not self._report_ready():

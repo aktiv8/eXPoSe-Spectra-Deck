@@ -65,11 +65,17 @@ class TestPanelViewsInApp(unittest.TestCase):
                                          for i in range(3)])}
         cls._load = ee.load_file
         ee.load_file = lambda p: cls.docs[os.path.basename(p)]
+        # the tests assume the program's own defaults, not the settings the
+        # person running them last saved (a saved fit_merge or colour scale
+        # made three of them fail)
+        cls._load_config = ee.load_config
+        ee.load_config = lambda: {}
         cls.ws = ee.Workspace(cls.root)
 
     @classmethod
     def tearDownClass(cls):
         ee.load_file = cls._load
+        ee.load_config = cls._load_config
         cls.root.destroy()
         import matplotlib
         matplotlib.rcParams.update(cls._rc)
@@ -272,6 +278,33 @@ class TestPanelViewsInApp(unittest.TestCase):
             self.assertFalse(self.ws.fit_merge_var.get())
         self.assertTrue(self.ws.fit_merge_var.get())
 
+    def test_residual_sd_round_trips_and_a_missing_key_is_off(self):
+        """The Fit row's "Residual StDev" is part of the saved look: a figure
+        saved before it existed must not inherit the live window's choice."""
+        self.addCleanup(self.ws.fit_sd_var.set, False)
+        self.ws.fit_sd_var.set(True)
+        st = self.ws.capture_state()
+        self.assertIs(st["fit_sd"], True)
+        self.ws.fit_sd_var.set(False)
+        self.ws.apply_state(st, render=False)
+        self.assertTrue(self.ws.fit_sd_var.get())
+        old = {k: v for k, v in st.items() if k != "fit_sd"}
+        self.ws.apply_state(old, render=False)
+        self.assertFalse(self.ws.fit_sd_var.get())
+        self.ws.fit_sd_var.set(True)
+        with self.ws._temp_state(old):
+            self.assertFalse(self.ws.fit_sd_var.get())
+        self.assertTrue(self.ws.fit_sd_var.get())
+
+    def test_residual_sd_is_part_of_the_signature_and_reaches_the_results(self):
+        self.addCleanup(self.ws.fit_sd_var.set, False)
+        before = self.ws._signature()
+        self.ws.fit_sd_var.set(True)
+        self.assertNotEqual(before, self.ws._signature())
+        self.assertTrue(self.ws._results().show_sd)       # reports follow it
+        self.ws.fit_sd_var.set(False)
+        self.assertFalse(self.ws._results().show_sd)
+
     def test_fit_merge_is_part_of_the_page_look_and_the_signature(self):
         self.addCleanup(self.ws.fit_merge_var.set, False)
         before = self.ws._signature()
@@ -352,11 +385,17 @@ class TestFitStackInApp(unittest.TestCase):
         cls.docs = {"fits.vms": doc("fits.vms", regs)}
         cls._load = ee.load_file
         ee.load_file = lambda p: cls.docs[os.path.basename(p)]
+        # the tests assume the program's own defaults, not the settings the
+        # person running them last saved (a saved fit_merge or colour scale
+        # made three of them fail)
+        cls._load_config = ee.load_config
+        ee.load_config = lambda: {}
         cls.ws = ee.Workspace(cls.root)
 
     @classmethod
     def tearDownClass(cls):
         ee.load_file = cls._load
+        ee.load_config = cls._load_config
         cls.root.destroy()
         import matplotlib
         matplotlib.rcParams.update(cls._rc)
