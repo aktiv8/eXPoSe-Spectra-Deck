@@ -426,7 +426,20 @@ def _shape_string(peak):
     if model.startswith("LA"):
         a = _num(peak.get("Sigma"), 1.0)
         b = _num(peak.get("Gamma"), 1.0)
-        return f"LA({a:g},{b:g},0)"
+        n = 0.0
+        if model.startswith("LA*G"):
+            # KherveFitting's LA convolved with a Gaussian whose FWHM is
+            # stated in eV (``fwhm_g``, the Skew column): drawn as plain LA
+            # this lost the Gaussian altogether. Read as CasaXPS's Gaussian
+            # index n that gives that width (lineshapes.gaussian_index); with
+            # no usable width it is left unreconstructed, never plain LA.
+            gw = _num(peak.get("fwhm_g"))
+            if gw is None:
+                gw = _num(peak.get("Skew"))
+            n = lineshapes.gaussian_index("LA", _num(peak.get("FWHM")), gw)
+            if n <= 0:
+                return ""
+        return f"LA({a:g},{b:g},{n:.6g})"
     return ""
 
 

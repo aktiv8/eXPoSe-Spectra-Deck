@@ -460,6 +460,20 @@ GAUSS_P = {"DS": 0.5737, "LA": 0.60, "A": 1.0, "TLA": 1.0}  # exponent on
 _LN2_4 = 2.772588722239781               # 4 ln 2
 
 
+def gaussian_index(kind, fwhm, gauss_fwhm):
+    """The CasaXPS Gaussian index ``n`` whose convolution width, for a
+    ``kind`` (``"LA"``, ``"LF"``, ``"DS"``) component of width ``fwhm``,
+    equals ``gauss_fwhm`` (same unit): the inverse of the width rule in
+    :func:`component_curve`, ``gw = fwhm * GAUSS_K * (25/n) ** GAUSS_P``.
+    ``0.0`` (no convolution) when either width is missing or not positive.
+    Used to read a source that states the Gaussian width directly, such as
+    KherveFitting's ``LA*G`` (its ``fwhm_g``, in eV), as a CasaXPS shape."""
+    k = GAUSS_K.get(kind, 0.0)
+    if not (k > 0 and fwhm and fwhm > 0 and gauss_fwhm and gauss_fwhm > 0):
+        return 0.0
+    return 25.0 * (fwhm * k / gauss_fwhm) ** (1.0 / GAUSS_P.get(kind, 1.0))
+
+
 _TAIL_SUFFIX_RE = re.compile(r"^(.*\))\s*T\(\s*([^()]*?)\s*\)\s*$", re.IGNORECASE)
 _SHAPE_RE = re.compile(r"^\s*([A-Za-z]+)\s*\(([^()]*)\)\s*(.*)$")
 _A_BASE_RE = re.compile(r"(?i)^(SGL|GL)\(([^()]*)\)")
@@ -551,9 +565,13 @@ def parse_shape(text) -> dict:
 
 
 def is_exact(shape) -> bool:
-    """True for shapes that are exact rather than reconstructed."""
+    """True for shapes that are exact rather than reconstructed: a plain
+    ``GL(m)``/``SGL(m)``. A second argument (``GL(m,n)``, the extra Gaussian
+    convolution of Cookbook p.67) or anything after the parentheses is not
+    drawn, so such a component is not exact whatever its first number."""
     ps = parse_shape(shape)
-    return ps["kind"] in ("GL", "SGL") and not ps["tail"]
+    return (ps["kind"] in ("GL", "SGL") and not ps["tail"]
+            and len(ps["params"]) <= 1 and not ps["suffix"])
 
 
 def check_shape(shape) -> list:

@@ -227,6 +227,33 @@ class TestShapeString(unittest.TestCase):
             {"Fitting Model": "LA (Area, \u03c3, \u03b3)", "Sigma": 1.35,
              "Gamma": 1.8}), "LA(1.35,1.8,0)")
 
+    def test_la_times_g_keeps_its_gaussian_width(self):
+        # RuO2_Kfitting's O1s oxide: LA*G with a 0.16 eV Gaussian. It used to
+        # come out as LA(a,b,0), i.e. with no Gaussian at all.
+        import lineshapes as ls
+        peak = {"Fitting Model": "LA*G (Area, σ/γ, γ)",
+                "Sigma": 0.92, "Gamma": 2.0, "FWHM": 1.11, "Skew": 0.16,
+                "fwhm_g": 0.16}
+        shape = kf._shape_string(peak)
+        sp = ls.parse_shape(shape)
+        self.assertEqual((sp["a"], sp["b"]), (0.92, 2.0))
+        self.assertGreater(sp["m"], 0)
+        # the Gaussian index reproduces the stated width through the rule
+        # component_curve applies
+        gw = 1.11 * ls.GAUSS_K["LA"] * (25.0 / sp["m"]) ** ls.GAUSS_P["LA"]
+        self.assertAlmostEqual(gw, 0.16, places=4)
+        # the Skew column is the fallback when fwhm_g is absent
+        del peak["fwhm_g"]
+        self.assertEqual(kf._shape_string(peak), shape)
+
+    def test_la_times_g_without_a_width_is_not_drawn_as_plain_la(self):
+        self.assertEqual(kf._shape_string(
+            {"Fitting Model": "LA*G (Area, σ/γ, γ)",
+             "Sigma": 0.92, "Gamma": 2.0, "FWHM": 1.11}), "")
+        self.assertEqual(kf._shape_string(
+            {"Fitting Model": "LA*G (Area, σ/γ, γ)",
+             "Sigma": 0.92, "Gamma": 2.0, "FWHM": 1.11, "Skew": 0.0}), "")
+
     def test_unrecognised_model_returns_empty(self):
         self.assertEqual(kf._shape_string(
             {"Fitting Model": "Skewed Voigt (Area, L/G, sigma, S)"}), "")
@@ -843,6 +870,65 @@ class TestPtCl2RefittedRealFile(unittest.TestCase):
         self.assertGreater(rows[0]["area"], 0)
         res = quant.normalise(rows)[0]
         self.assertEqual(res["why"], "no RSF")
+
+
+RUO2_JSON = os.path.join("3d Ge ... Nd", "44 - Ru - Ruthenium",
+                         "RuO2_Kfitting.json")
+
+
+@unittest.skipUnless(_real(RUO2_JSON), "RuO2_Kfitting.json not found "
+                     "(XPS_KFIT_DIR)")
+class TestLaTimesGRealFile(unittest.TestCase):
+    """The two LA*G peaks of RuO2_Kfitting's O1s, with the Gaussian read from
+    ``fwhm_g``. The reference is KherveFitting's own LA x G formula evaluated
+    on a fine grid: the curves stored in the file come from a 4x grid that
+    leaves them 1.4-2 % from that limit, so they are not used as the target.
+    Plain LA(a,b,0) (the old reading) is 0.8-1.4 % away, the mapped shape
+    0.3-0.4 %."""
+
+    HV = 1486.67
+
+    def _reference(self, x, pk):
+        import numpy as np
+        trapz = getattr(np, "trapezoid", None) or np.trapz
+        a, b = pk["Sigma"], pk["Gamma"]
+        fw, gw = pk["FWHM"], pk["fwhm_g"]
+        F = 2 * fw / (np.sqrt(2 ** (1 / a) - 1) + np.sqrt(2 ** (1 / b) - 1))
+        xr = max(x.max() - x.min(), 4 * fw)
+        xh = np.linspace(-xr / 2, xr / 2, len(x) * 40)
+        la = np.where(xh <= 0, 1 / (1 + 4 * (xh / F) ** 2) ** b,
+                      1 / (1 + 4 * (xh / F) ** 2) ** a)
+        g = np.exp(-4 * np.log(2) * (xh / gw) ** 2)
+        shape = np.interp(x - pk["Position"], xh,
+                          np.convolve(la, g, "same") / g.sum())
+        i = np.argsort(x)
+        return pk["Area"] / abs(trapz(shape[i], x[i])) * shape
+
+    def test_mapped_shape_follows_the_formula_closer_than_plain_la(self):
+        import numpy as np
+        import lineshapes as ls
+        trapz = getattr(np, "trapezoid", None) or np.trapz
+        with open(_real(RUO2_JSON), encoding="utf-8") as fh:
+            sheet = json.load(fh)["Core levels"]["O1s"]
+        x = np.array(sheet["B.E."])
+        i = np.argsort(x)
+        ke = self.HV - x
+        order = np.argsort(ke)
+        for name in ("O1s oxide", "O1s screened"):
+            pk = sheet["Fitting"]["Peaks"][name]
+            ref = self._reference(x, pk)
+            errs = []
+            for shape in (kf._shape_string(pk),
+                          f"LA({pk['Sigma']:g},{pk['Gamma']:g},0)"):
+                c = np.empty_like(x)
+                c[order] = ls.component_curve(
+                    ke[order], shape, self.HV - pk["Position"], pk["FWHM"],
+                    pk["Area"])
+                # the file's Area is the area inside the fitted window
+                c *= trapz(ref[i], x[i]) / trapz(c[i], x[i])
+                errs.append(np.abs(c - ref).max() / ref.max())
+            self.assertLess(errs[0], 0.01, name)
+            self.assertLess(errs[0], errs[1], name)
 
 
 if __name__ == "__main__":

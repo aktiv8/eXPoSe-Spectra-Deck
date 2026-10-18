@@ -265,6 +265,13 @@ class TestShapes(unittest.TestCase):
         self.assertFalse(ls.is_exact("SGL(50)T(0.3)"))
         self.assertTrue(ls.is_exact("GL(30)"))
 
+    def test_gl_with_a_second_gaussian_is_not_exact(self):
+        # GL(m,n) / SGL(m,n) (Cookbook p.67) are drawn as the plain base
+        # shape, so they must not pass for exact
+        self.assertFalse(ls.is_exact("GL(30,5)"))
+        self.assertFalse(ls.is_exact("SGL(50,12)"))
+        self.assertTrue(ls.is_exact("SGL(50)"))
+
     def test_ds_shape_is_recognised_not_reconstructed_as_exact(self):
         p = ls.parse_shape("DS(0.09,500)")
         self.assertEqual((p["kind"], p["a"], p["m"]), ("DS", 0.09, 500.0))
