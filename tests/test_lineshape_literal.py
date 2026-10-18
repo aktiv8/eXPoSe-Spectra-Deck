@@ -22,6 +22,8 @@ components in its header:
 * ``ds 3 param noe second cannot be 0.csv`` - C 1s, three ``DS(a,n,m)`` carbide
   components (a 0.01 and 0.1, n 2 and 3, m 400; the program refuses n of 0 and 1)
 * ``lsf_shape.csv`` - Au 4d, eight ``LSF(a,b,w,n)`` fits (w 0-100, n 0-500)
+* ``qa and qs.csv`` - Au 4d, six ``QA(a,b,n)`` and five ``QS(a,b,n)`` fits
+  (a 0.5-1, b 1-5, n 0-300; n above 80 takes the stretch / clamp path)
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -418,6 +420,34 @@ class TestLsfLiteral(unittest.TestCase):
                                 0.004, shape)
             seen += 1
         self.assertEqual(seen, 8)
+
+
+@unittest.skipUnless(HAVE_NP and _path("qa and qs.csv"), "qa and qs.csv not found")
+class TestQaQsLiteral(unittest.TestCase):
+    """``QA`` (the ``LA`` table with a ``16 x^4`` base) and ``QS`` (the same with
+    the boxcar kernel), the stated Area used as it is. QA agrees to 0.04-0.11 %
+    of the peak, QS to 0.19-0.63 % (the worst, QS(1,1,300), differs at the
+    boxcar's edge about one table unit from the peak; no width or shift
+    change improves it)."""
+
+    def test_every_fit_matches_casaxps(self):
+        seen = {"QA": 0, "QS": 0}
+        for info, head, cols in _blocks(_path("qa and qs.csv")):
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            lit = cols[:, 2] - bg
+            shape = info["Lineshape"][0]
+            mine = np.empty_like(lit)
+            mine[order] = ls.component_curve(
+                ke[order], shape, HV - float(info["Position"][0]),
+                float(info["FWHM"][0]), float(info["Area"][0]))
+            err = float(np.abs(mine - lit).max() / lit.max())
+            self.assertLess(err, 0.01 if shape.startswith("QS") else 0.003, shape)
+            self.assertTrue(ls.is_exact(shape), shape)
+            seen[shape[:2]] += 1
+        self.assertEqual(seen, {"QA": 6, "QS": 5})
 
 
 if __name__ == "__main__":

@@ -1396,11 +1396,12 @@ class TestProgramTables(unittest.TestCase):
                          - self._curve("LF(0.7,1.5,75,100)")).max()),
             0.03 * float(self._curve("LF(0.7,1.5,75,100)").max()))
 
-    def test_qa_and_qs_are_read_from_the_program_but_not_flagged_exact(self):
-        # LA builder types 4 and 5; no exported CasaXPS curve yet
+    def test_qa_and_qs_are_read_from_the_program_and_exact(self):
+        # LA builder types 4 and 5, checked against CasaXPS's exported curves
+        # (tests/test_lineshape_literal.py)
         for shape in ("QA(1,1,50)", "QA(1.2,50)", "QS(1,1,50)", "QS(0.8,50)"):
             self.assertIsNotNone(ls._table_for(ls.parse_shape(shape)), shape)
-            self.assertFalse(ls.is_exact(shape), shape)
+            self.assertTrue(ls.is_exact(shape), shape)
             self.assertEqual(ls.check_shape(shape), [], shape)
         # the two-number form is a = b
         np.testing.assert_allclose(self._curve("QA(1.2,40)"),
