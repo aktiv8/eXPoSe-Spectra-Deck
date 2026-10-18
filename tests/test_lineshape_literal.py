@@ -11,6 +11,8 @@ components in its header:
 
 * ``A_GL lineshapes.csv`` - HOPG C 1s, three fits of ``A(0.4,0.38,20)GL(20)``
   plus a ``GL(30)`` component each
+* ``GL SGL and T tail.csv`` - Au 4d doublet, eight fits: ``SGL(70)``,
+  ``SGL(70)T(1|1.5|2)``, ``SGL(90)``, ``GL(70)T(1|1.5|2)``
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -179,6 +181,41 @@ class TestAGlLiteral(unittest.TestCase):
 
     def test_gl_matches_casaxps_curves(self):
         self._check("GL(", 0.005)
+
+
+@unittest.skipUnless(HAVE_NP and _path("GL SGL and T tail.csv"),
+                     "GL SGL and T tail.csv not found")
+class TestTailLiteral(unittest.TestCase):
+    """``GL(m)T(k)`` / ``SGL(m)T(k)``, the stated Area used as it is."""
+
+    def test_every_component_matches_casaxps(self):
+        seen = {}
+        for info, head, cols in _blocks(_path("GL SGL and T tail.csv")):
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            for k, ci in enumerate((2, 3)):
+                shape = info["Lineshape"][k]
+                lit = cols[:, ci] - bg
+                mine = np.empty_like(lit)
+                mine[order] = ls.component_curve(
+                    ke[order], shape, HV - float(info["Position"][k]),
+                    float(info["FWHM"][k]), float(info["Area"][k]))
+                err = float(np.abs(mine - lit).max() / lit.max())
+                self.assertLess(err, 0.006, f"{shape} at {info['Position'][k]}")
+                seen[shape] = seen.get(shape, 0) + 1
+        self.assertEqual(sum(seen.values()), 16)
+        self.assertEqual(sum(1 for s in seen if "T(" in s), 6)
+
+    def test_a_larger_k_gives_a_shorter_tail(self):
+        x = np.linspace(990.0, 1020.0, 30001)
+        tails = []
+        for k in (1.0, 1.5, 2.0):
+            y = ls.component_curve(x, f"SGL(70)T({k})", 1005.0, 3.0, 1.0)
+            tails.append(float(y[x < 1000.0].sum() / y.sum()))
+        self.assertGreater(tails[0], tails[1])
+        self.assertGreater(tails[1], tails[2])
 
 
 if __name__ == "__main__":

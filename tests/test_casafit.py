@@ -281,8 +281,11 @@ class TestShapes(unittest.TestCase):
         p = ls.parse_shape("GL(70)T(2)")
         self.assertEqual((p["mix"], p["tail"]), (70.0, True))
         self.assertFalse(ls.parse_shape("GL(30)")["tail"])
-        self.assertFalse(ls.is_exact("GL(30)T(1.5)"))
-        self.assertFalse(ls.is_exact("SGL(50)T(0.3)"))
+        # a positive T(k) is the program's table with a tail, checked
+        # against CasaXPS's own curves (tests/test_lineshape_literal.py)
+        self.assertTrue(ls.is_exact("GL(30)T(1.5)"))
+        self.assertTrue(ls.is_exact("SGL(50)T(0.3)"))
+        self.assertFalse(ls.is_exact("GL(30)T(-1)"))
         self.assertTrue(ls.is_exact("GL(30)"))
 
     def test_gl_with_a_second_gaussian_is_not_exact(self):
@@ -634,11 +637,11 @@ class TestCurves(unittest.TestCase):
         diff = env[keep] - counts[keep]
         self.assertLessEqual(float(diff.max()), 1e-6 * float(counts.max()))
 
-    def test_tail_modified_component_is_marked_approximate(self):
-        """A GL/SGL component with a CasaXPS tail suffix is drawn with its
-        exponential tail (see tests/test_tailshape.py) but must be flagged
-        approximate, not silently treated as exact: no real Casa curve of
-        it has been checked."""
+    def test_tail_modified_component_is_exact_but_other_tails_are_not(self):
+        """A GL/SGL component with a CasaXPS T(k) tail is drawn with its
+        exponential tail (see tests/test_tailshape.py), checked against
+        CasaXPS's own curves (tests/test_lineshape_literal.py), so it is not
+        flagged approximate; a T() on any other shape still is."""
         reg = casafit.FitRegion(name="Tail", background="none",
                                 start_ke=1025.0, end_ke=1029.0)
         comp = casafit.FitComponent(name="Tail", shape="GL(30)T(1.5)",
@@ -650,9 +653,12 @@ class TestCurves(unittest.TestCase):
         ke = np.array([self.hv - b for b in be])
         counts = ls.component_curve(ke, "GL(30)", 1027.0, 4.0, 6000.0)
         cv = casafit.curves(fit, be, counts.tolist(), self.hv, None, 1)[0]
-        self.assertTrue(cv.approximate)
-        self.assertIsNotNone(cv.envelope)                # base shape drawn
+        self.assertFalse(cv.approximate)
+        self.assertIsNotNone(cv.envelope)
         self.assertTrue(np.isfinite(np.array(cv.envelope)).any())
+        comp.shape = "LA(1,1,0)T(1.5)"                   # not read from the program
+        cv = casafit.curves(fit, be, counts.tolist(), self.hv, None, 1)[0]
+        self.assertTrue(cv.approximate)
 
     def test_intensity_is_in_the_spectrums_own_counts(self):
         be, counts = model_data(self.fit, self.hv, 0.27, 25)

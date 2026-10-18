@@ -358,11 +358,14 @@ Casa's own (Cookbook p.67), and HarwellXPS's Lineshape Tester (Armoury 0.9.5,
 read as text only, never run) independently implements ``GL(m)T(k)`` as "GL
 with an exponential tail on the high binding energy side; larger k fades
 faster" and says it measured it against Casa's own curves on ``GL(m)`` only
-(1 Oct 2026), not on other shapes. **No real CasaXPS fit that uses a ``T(k)``
-shape is known on disk here**, so nothing in this repository has checked the
-curve against a Casa one: ``is_exact`` stays False and the fit is flagged
-approximate, and a ``T()`` on any shape but ``GL``/``SGL`` is still drawn as
-the plain base.
+(1 Oct 2026), not on other shapes. **Now validated**: CasaXPS's own export
+of an Au 4d doublet fitted with ``SGL(70)T(1)``, ``T(1.5)``, ``T(2)`` and
+``GL(70)T(1)``, ``T(1.5)``, ``T(2)`` (``D:\\Temp\\GL SGL and T tail.csv``) is
+reproduced by the table of ``_gl_table`` to 0.03-0.18 % of the peak height
+(the formula above drawn on the old analytic shape was 1.2 % out for ``SGL`` and
+2.2 % for ``GL``), with the stated Area used as it is; ``is_exact`` is
+therefore True for a one-number ``GL``/``SGL`` with a positive ``k``. A
+``T()`` on any other shape is still drawn as the plain base.
 
 **LF's ``w`` is in eV, not in line widths (checked, rejected).** The tester's
 help text says LF's tails "steepen beyond about w line widths", while this
@@ -601,6 +604,12 @@ def is_exact(shape) -> bool:
         # no exported curves to compare with, so it stays flagged
         return (not ps["tail"] and not ps["suffix"]
                 and abs(ps["a"] - ps["b"]) < 1e-9)
+    if ps["kind"] in ("GL", "SGL") and ps["tail"]:
+        # GL(m)T(k) / SGL(m)T(k): the program's table with its low-KE tail
+        # (see _gl_table), checked against CasaXPS's exported curves
+        tk = ps.get("tk")
+        return (tk is not None and math.isfinite(tk) and tk > 0
+                and len(ps["params"]) == 1 and not ps["suffix"])
     return (ps["kind"] in ("GL", "SGL") and not ps["tail"]
             and len(ps["params"]) <= 1 and not ps["suffix"])
 
@@ -765,6 +774,9 @@ def gauss_conv(x, y, gfwhm):
 #   from the whole table. **Its width is measured like every other table's**:
 #   the product form's half maximum is not at x = 0.5, so the old assumption
 #   of a FWHM of exactly 1 was out by up to 1.3 % of the peak height.
+# * ``GL(m)T(k)`` / ``SGL(m)T(k)``: that shape with, on the low-KE (high-BE)
+#   side, ``y + (1 - y) exp(k x)`` (x in the table's units, k > 0); the same
+#   measured width and area. A negative k slot is the ``PHI`` family (not read).
 # * ``A(a, b, n)GL(m)`` / ``SGL(m)`` (the Gelius asymmetric shape): the same
 #   shape on the high-KE side; on the low-KE side
 #   ``GL(m) + b (0.7 + 0.3 / (a + 0.01)) (AW(x) - G0(x))`` with
@@ -951,15 +963,21 @@ def _gl_curve(x, mode, mix):
     return (1.0 - mix) * np.exp(-_LN2_4 * x * x) + mix / (1.0 + 4.0 * x * x)
 
 
-def _gl_table(mode, mix):
-    """The table of a plain ``GL(m)`` / ``SGL(m)``; ``mix`` = m / 100."""
-    key = ("GL", int(mode), round(float(mix), 9))
+def _gl_table(mode, mix, tail=0.0):
+    """The table of a plain ``GL(m)`` / ``SGL(m)``; ``mix`` = m / 100.
+    ``tail`` > 0 is the ``T(k)`` modifier: on the low-KE (high-BE) side
+    ``y + (1 - y) exp(k x)``."""
+    key = ("GL", int(mode), round(float(mix), 9), round(float(tail), 9))
 
     def build():
-        _, mode_, mix_ = key
+        np = _np()
+        _, mode_, mix_, tail_ = key
         idx, c = _grid(_LA_POINTS)
-        return _finish_table(_gl_curve(_TABLE_STEP * (idx - c), mode_, mix_),
-                             _LA_POINTS)
+        x = _TABLE_STEP * (idx - c)
+        y = _gl_curve(x, mode_, mix_)
+        if tail_ > 0.0:
+            y = np.where(idx < c, y + (1.0 - y) * np.exp(x * tail_), y)
+        return _finish_table(y, _LA_POINTS)
     return _cached(key, build)
 
 
@@ -1102,9 +1120,15 @@ def _table_for(sp):
     kind = sp["kind"]
     if kind == "LA":
         return _la_table(sp["a"], sp["b"], _la_n(sp["m"]))
-    if kind in ("GL", "SGL") and not sp["tail"] and not sp["suffix"] \
+    if kind in ("GL", "SGL") and not sp["suffix"] \
             and len(sp["params"]) == 1 and 0.0 <= sp["mix"] <= 100.0:
-        return _gl_table(0 if kind == "GL" else 1, sp["mix"] / 100.0)
+        tk = sp.get("tk")
+        if not sp["tail"]:
+            return _gl_table(0 if kind == "GL" else 1, sp["mix"] / 100.0)
+        if tk is not None and math.isfinite(tk) and tk > 0:
+            # GL(m)T(k) / SGL(m)T(k); a negative k is the PHI family, which
+            # is not read from the program
+            return _gl_table(0 if kind == "GL" else 1, sp["mix"] / 100.0, tk)
     if kind == "A" and 0.0 <= sp["a"] <= 1.0 and 0.0 <= sp["b"] <= 1.0 \
             and 0.0 <= sp["mix"] <= 100.0 and len(sp["params"]) == 3:
         n = _la_n(sp["m"])

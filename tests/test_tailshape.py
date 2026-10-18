@@ -3,8 +3,8 @@ guards (``lineshapes.check_shape``), and how ``casafit.curves`` uses them.
 
 The tail is Casa's own formula (Cookbook 2026, p.67): the base shape plus
 ``(1 - base) * exp(k x)`` on the low-KE (high binding energy) side, x in FWHM.
-No real CasaXPS fit using it is known on disk, so these tests check the
-formula's own properties, not a Casa curve (see the lineshapes docstring).
+These tests check the formula's own properties; the agreement with CasaXPS's
+exported curves is in ``test_lineshape_literal.py`` (``GL SGL and T tail.csv``).
 
 Run:  python -m unittest discover tests
 """
@@ -90,8 +90,9 @@ class TestTail(unittest.TestCase):
         self.assertAlmostEqual(float(c.sum() * (ke[1] - ke[0])), 100.0,
                                delta=0.5)
 
-    def test_it_is_still_flagged_approximate_and_only_for_gl_and_sgl(self):
-        self.assertFalse(ls.is_exact("GL(30)T(1.5)"))
+    def test_it_is_exact_for_gl_and_sgl_only(self):
+        self.assertTrue(ls.is_exact("GL(30)T(1.5)"))
+        self.assertFalse(ls.is_exact("LA(1,1,0)T(1.5)"))
         la = ls._raw_values(self.X, ls.parse_shape("LA(1,1,0)T(1.5)"),
                             0.0, 1.0)
         plain = ls._raw_values(self.X, ls.parse_shape("LA(1,1,0)"), 0.0, 1.0)
