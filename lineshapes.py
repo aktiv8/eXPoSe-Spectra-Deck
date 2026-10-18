@@ -578,8 +578,13 @@ def parse_shape(text) -> dict:
         # TLA(alpha, mu, n): see the module docstring for how uncertain this
         # parameter order is. a = alpha (Lorentzian power), b = mu (tail
         # strength), m = n (Gaussian-conv code, same convention as DS/A).
-        out.update(a=ps[0] if ps else 1.0, b=ps[1] if len(ps) > 1 else 20.0,
-                   m=ps[2] if len(ps) > 2 else 0.0)
+        if len(ps) == 2:
+            # TLA(mu, n): the program reads it as TLA(1, mu, n)
+            out.update(a=1.0, b=ps[0], m=ps[1])
+        else:
+            out.update(a=ps[0] if ps else 1.0,
+                       b=ps[1] if len(ps) > 1 else 20.0,
+                       m=ps[2] if len(ps) > 2 else 0.0)
     return out
 
 
@@ -755,6 +760,9 @@ def gauss_conv(x, y, gfwhm):
 #   kernel is held at ``floor(2/step) + 1`` samples and the *Lorentzian's* x
 #   axis is stretched by ``n * step / 2`` instead, which is how a large ``n``
 #   gives a wide Gaussian.
+# * ``TLA(a, mu, n)`` (type 7 of the same routine, so the same kernel clamp and
+#   stretch): ``y = (pi/2 - atan(2x) + pi/mu) / (1 + 4 x^2) ** a`` on both
+#   sides (``TLA(mu, n)`` is ``a`` = 1; ``mu`` 0 drops the tail term).
 # * ``LF(a, b, w, n, k)``: the same with the exponent
 #   ``3 - (3 - a) / (1 + 4 x^2 / w^2)`` (``b`` on the other side), no stretch,
 #   and the Gaussian applied ``k`` times (``k`` = 1 for the four-number form).
@@ -923,6 +931,26 @@ def _la_table(a, b, n):
     return _cached(key, build)
 
 
+def _tla_table(a, mu, n):
+    """The table of ``TLA(a, mu, n)``; see the block comment above."""
+    key = ("TLA", round(float(a), 9), round(float(mu), 9), int(n))
+
+    def build():
+        np = _np()
+        _, a_, mu_, n_ = key
+        scale, ne = 1.0, n_
+        if 2.0 < n_ * _TABLE_STEP:
+            scale = 2.0 / (n_ * _TABLE_STEP)
+            ne = int(math.floor(2.0 / _TABLE_STEP)) + 1
+        idx, c = _grid(_LA_POINTS)
+        x = _TABLE_STEP * (idx - c) / scale
+        tail = math.pi / 2.0 - np.arctan(2.0 * x)
+        tail = tail + math.pi / mu_ if mu_ > 1e-200 else 1.0 + 0.0 * x
+        y = tail / (1.0 + 4.0 * x * x) ** a_
+        return _finish_table(_gauss_smooth(y, ne), _LA_POINTS)
+    return _cached(key, build)
+
+
 def _lf_table(a, b, w, n, k):
     """The table of ``LF(a, b, w, n, k)`` (``w`` in the table's own units)."""
     key = ("LF", round(float(a), 9), round(float(b), 9), round(float(w), 9),
@@ -1019,6 +1047,8 @@ def _table_for(sp):
     kind = sp["kind"]
     if kind == "LA":
         return _la_table(sp["a"], sp["b"], _la_n(sp["m"]))
+    if kind == "TLA" and sp["a"] > 0 and sp["b"] >= 0:
+        return _tla_table(sp["a"], sp["b"], _la_n(sp["m"]))
     if kind == "LF" and sp["w"] > 0 and len(sp["params"]) in (4, 5):
         ps = sp["params"]
         k = int(ps[4]) if len(ps) > 4 else 1

@@ -9,6 +9,8 @@ components in its header:
 * ``DS F and H lineshapes.csv`` - HOPG C 1s: ``DS(0.09,500)``,
   ``H(0.09,250)SGL(90)``, ``F(0.09,32,150)SGL(90)`` and ``LA(50)`` components
 
+* ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
+
 Only the shape is compared (the curve is scaled to the literal one); the
 position is the table's centre, not its maximum. Skipped when the files are
 not present (``XPS_LITERAL_DIR`` or ``D:\\Temp``).
@@ -117,6 +119,29 @@ class TestDsLaLiteral(unittest.TestCase):
         err = _errors(_path("DS F and H lineshapes.csv"), ("LA",))
         self.assertEqual(list(err), ["LA(50)"])
         self.assertLess(err["LA(50)"], 0.005)
+
+
+@unittest.skipUnless(HAVE_NP and _path("TLA lineshape.csv"),
+                     "TLA lineshape.csv not found")
+class TestTlaLiteral(unittest.TestCase):
+    def test_tla_matches_casaxps_curves(self):
+        # two components with the same shape string: the dict keeps the last,
+        # so check them one by one
+        for info, head, cols in _blocks(_path("TLA lineshape.csv")):
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            for k, ci in enumerate((2, 3)):
+                lit = cols[:, ci] - bg
+                mine = np.empty_like(lit)
+                mine[order] = ls.component_curve(
+                    ke[order], info["Lineshape"][k],
+                    HV - float(info["Position"][k]),
+                    float(info["FWHM"][k]), float(info["Area"][k]))
+                # the stated Area is the table's own: no free scale needed
+                self.assertLess(float(np.abs(mine - lit).max() / lit.max()),
+                                0.03, info["Position"][k])
 
 
 if __name__ == "__main__":
