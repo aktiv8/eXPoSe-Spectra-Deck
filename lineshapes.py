@@ -958,10 +958,14 @@ def _ds_table(a, n, mode, mix):
 def _table_values(table, x, pos, fwhm, area):
     """A component of the given ``area`` on ``x``: the table looked up at
     ``(x - pos) / fwhm`` in units of its own measured width, so its area is
-    the table's own (1) times ``area``."""
+    the table's own (1) times ``area``. The **position is the table's centre,
+    not its maximum**: CasaXPS's exported LF and DS curves peak 0.05-0.10 eV
+    away from the stated Position, and re-centring on the maximum (the
+    measured ``offset``, kept in the table but not used) put them 9 % of the
+    peak out against 0.5-1.3 % without it."""
     np = _np()
-    y, width, off, npts = table
-    u = (np.asarray(x, dtype=float) - pos) / fwhm * width + off
+    y, width, _off, npts = table
+    u = (np.asarray(x, dtype=float) - pos) / fwhm * width
     size = _table_size(npts)
     grid = _TABLE_STEP * (np.arange(size) - (size - 1) // 2)
     # a position beyond the table (hundreds of FWHM away) counts as zero (the
