@@ -1359,6 +1359,21 @@ class TestProgramTables(unittest.TestCase):
         # high-KE side is the Gaussian-Lorentzian shape
         self.assertLess(float(blend[far].sum()), 0.8 * float(plain[far].sum()))
 
+    def test_phi_and_sl_are_the_same_shape_and_a_tail_on_the_low_ke_side(self):
+        plain = self._curve("GL(30,40)")
+        phi = self._curve("GL(30,40)PHI(2,3)")
+        sl = self._curve("GL(30,40)SL(2,3)")
+        np.testing.assert_allclose(phi, sl)
+        self.assertGreater(float(phi[self.X < 1002.0].sum()),
+                           1.3 * float(plain[self.X < 1002.0].sum()))
+        # the added tail takes area, so at the same Area the peak is lower
+        self.assertLess(float(phi.max()), float(plain.max()))
+
+    def test_phi_with_a_bad_number_is_not_read_from_the_program(self):
+        for shape in ("GL(30)PHI(-1,3)", "GL(30)PHI(1,0)", "GL(30,2500)PHI(1,3)",
+                      "GL(30)PHI(1)"):
+            self.assertIsNone(ls._table_for(ls.parse_shape(shape)), shape)
+
     def test_e_is_read_from_the_program_and_exact(self):
         # E(a,b,n)GL(m): builder 0x14040f950; checked against CasaXPS's
         # exported curves (tests/test_lineshape_literal.py), a = 1, 0.5, 0.1

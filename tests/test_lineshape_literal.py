@@ -14,8 +14,8 @@ components in its header:
 * ``GL SGL and T tail.csv`` - Au 4d doublet, eight fits: ``SGL(70)``,
   ``SGL(70)T(1|1.5|2)``, ``SGL(90)``, ``GL(70)T(1|1.5|2)``
 * ``E with GL and SGL.csv`` - Au 4d, nine ``E(1,b,n)GL|SGL(m)`` fits
-* ``more E and PHI.csv`` - three more ``E`` fits (a = 1, 0.5, 0.1); its
-  ``GL(a,b)PHI(n,m)`` fits are not read from the program
+* ``more E and PHI.csv`` - three more ``E`` fits (a = 1, 0.5, 0.1) and six
+  ``GL(m,n)PHI(j,w)`` fits (``SL`` makes the same call as ``PHI``)
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -245,6 +245,28 @@ class TestELiteral(unittest.TestCase):
             self.assertLess(err, 0.004, shape)
             seen += 1
         self.assertEqual(seen, 9)
+
+    @unittest.skipUnless(_path("more E and PHI.csv"), "more E and PHI.csv not found")
+    def test_phi_matches_casaxps(self):
+        seen = 0
+        for info, head, cols in _blocks(_path("more E and PHI.csv")):
+            shape = info["Lineshape"][0]
+            if "PHI" not in shape:
+                continue
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            lit = cols[:, 2] - bg
+            mine = np.empty_like(lit)
+            mine[order] = ls.component_curve(
+                ke[order], shape, HV - float(info["Position"][0]),
+                float(info["FWHM"][0]), float(info["Area"][0]))
+            err = float(np.abs(mine - lit).max() / lit.max())
+            self.assertLess(err, 0.004, shape)
+            self.assertTrue(ls.is_exact(shape), shape)
+            seen += 1
+        self.assertEqual(seen, 6)
 
     @unittest.skipUnless(_path("more E and PHI.csv"), "more E and PHI.csv not found")
     def test_a_below_one_matches_casaxps(self):

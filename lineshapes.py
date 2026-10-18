@@ -608,6 +608,12 @@ def is_exact(shape) -> bool:
         # checked against CasaXPS's exported curves (a = 1, 0.5 and 0.1)
         bm = _A_BASE_RE.match(ps.get("suffix") or "")
         return len(ps["params"]) == 3 and bool(bm) and not ps["tail"]
+    if ps["kind"] in ("GL", "SGL") and ps["suffix"] and not ps["tail"]:
+        # GL(m)PHI(j,w) / GL(m,n)PHI(j,w) (and SL): checked against CasaXPS's
+        # exported curves for n of 30 and 80
+        return (len(ps["params"]) in (1, 2)
+                and bool(_PHI_RE.match(ps["suffix"]))
+                and _table_for(ps) is not None)
     if ps["kind"] in ("GL", "SGL") and ps["tail"]:
         # GL(m)T(k) / SGL(m)T(k): the program's table with its low-KE tail
         # (see _gl_table), checked against CasaXPS's exported curves
@@ -780,7 +786,13 @@ def gauss_conv(x, y, gfwhm):
 #   of a FWHM of exactly 1 was out by up to 1.3 % of the peak height.
 # * ``GL(m)T(k)`` / ``SGL(m)T(k)``: that shape with, on the low-KE (high-BE)
 #   side, ``y + (1 - y) exp(k x)`` (x in the table's units, k > 0); the same
-#   measured width and area. A negative k slot is the ``PHI`` family (not read).
+#   measured width and area.
+# * ``GL(m)PHI(j, w)`` / ``SL(j, w)`` (the two names make the same call, the
+#   negative-k slot of the builder): on the low-KE side ``y + j exp(13.8 x / w)
+#   (1 - y)`` (13.8 = ln 1e6, so ``w`` is the distance over which the added
+#   tail falls to a millionth; ``j`` may exceed 1); ``GL(m, n)`` adds a Gaussian
+#   kernel of ``n`` samples (0-1999) after the modifier, and the area is that
+#   of the whole table.
 # * ``A(a, b, n)GL(m)`` / ``SGL(m)`` (the Gelius asymmetric shape): the same
 #   shape on the high-KE side; on the low-KE side
 #   ``GL(m) + b (0.7 + 0.3 / (a + 0.01)) (AW(x) - G0(x))`` with
@@ -971,21 +983,32 @@ def _gl_curve(x, mode, mix):
     return (1.0 - mix) * np.exp(-_LN2_4 * x * x) + mix / (1.0 + 4.0 * x * x)
 
 
-def _gl_table(mode, mix, tail=0.0):
-    """The table of a plain ``GL(m)`` / ``SGL(m)``; ``mix`` = m / 100.
-    ``tail`` > 0 is the ``T(k)`` modifier: on the low-KE (high-BE) side
-    ``y + (1 - y) exp(k x)``."""
-    key = ("GL", int(mode), round(float(mix), 9), round(float(tail), 9))
+_PHI_DECAY = 13.8                        # 0x140a81650, ln(1e6)
+_PHI_RE = re.compile(r"(?i)^(PHI|SL)\(\s*([^(),]+?)\s*,\s*([^(),]+?)\s*\)$")
+_GL_MAX_N = 1999
+
+
+def _gl_table(mode, mix, tail=0.0, phi=(0.0, 0.0), n=0):
+    """The table of ``GL(m)`` / ``SGL(m)``; ``mix`` = m / 100. ``tail`` > 0
+    is the ``T(k)`` modifier and ``phi`` = (j, w) the ``PHI(j, w)`` / ``SL(j,
+    w)`` modifier, both on the low-KE (high-BE) side only: ``y + (1 - y)
+    exp(k x)`` and ``y + j exp(13.8 x / w) (1 - y)``. ``n`` > 1 is the
+    Gaussian kernel (``GL(m, n)``), applied after the modifier."""
+    key = ("GL", int(mode), round(float(mix), 9), round(float(tail), 9),
+           round(float(phi[0]), 9), round(float(phi[1]), 9), int(n))
 
     def build():
         np = _np()
-        _, mode_, mix_, tail_ = key
+        _, mode_, mix_, tail_, j_, w_, n_ = key
         idx, c = _grid(_LA_POINTS)
         x = _TABLE_STEP * (idx - c)
         y = _gl_curve(x, mode_, mix_)
         if tail_ > 0.0:
             y = np.where(idx < c, y + (1.0 - y) * np.exp(x * tail_), y)
-        return _finish_table(y, _LA_POINTS)
+        elif j_ > 0.0 and w_ > 1e-20:
+            fall = np.exp(np.minimum(x, 0.0) * _PHI_DECAY / w_)
+            y = np.where(idx < c, y + j_ * fall * (1.0 - y), y)
+        return _finish_table(_gauss_smooth(y, n_), _LA_POINTS)
     return _cached(key, build)
 
 
@@ -1146,15 +1169,32 @@ def _table_for(sp):
     kind = sp["kind"]
     if kind == "LA":
         return _la_table(sp["a"], sp["b"], _la_n(sp["m"]))
-    if kind in ("GL", "SGL") and not sp["suffix"] \
-            and len(sp["params"]) == 1 and 0.0 <= sp["mix"] <= 100.0:
-        tk = sp.get("tk")
-        if not sp["tail"]:
-            return _gl_table(0 if kind == "GL" else 1, sp["mix"] / 100.0)
-        if tk is not None and math.isfinite(tk) and tk > 0:
-            # GL(m)T(k) / SGL(m)T(k); a negative k is the PHI family, which
-            # is not read from the program
-            return _gl_table(0 if kind == "GL" else 1, sp["mix"] / 100.0, tk)
+    if kind in ("GL", "SGL") and len(sp["params"]) in (1, 2) \
+            and 0.0 <= sp["mix"] <= 100.0:
+        # GL(m), GL(m, n), each with an optional T(k) or PHI(j, w) / SL(j, w)
+        n = 0
+        if len(sp["params"]) == 2:
+            n = int(math.floor(sp["params"][1]))
+            if not 0 <= n <= _GL_MAX_N:
+                return None
+        mode, mix = (0 if kind == "GL" else 1), sp["mix"] / 100.0
+        tk, phi = 0.0, (0.0, 0.0)
+        if sp["tail"]:
+            tk = sp.get("tk")
+            if tk is None or not math.isfinite(tk) or tk < 0 or sp["suffix"]:
+                return None
+        elif sp["suffix"]:
+            pm = _PHI_RE.match(sp["suffix"])
+            if not pm:
+                return None
+            try:
+                phi = (float(pm.group(2)), float(pm.group(3)))
+            except ValueError:
+                return None
+            if not (math.isfinite(phi[0]) and math.isfinite(phi[1])
+                    and phi[0] >= 0 and phi[1] > 0):
+                return None
+        return _gl_table(mode, mix, tk, phi, n)
     if kind == "A" and 0.0 <= sp["a"] <= 1.0 and 0.0 <= sp["b"] <= 1.0 \
             and 0.0 <= sp["mix"] <= 100.0 and len(sp["params"]) == 3:
         n = _la_n(sp["m"])
