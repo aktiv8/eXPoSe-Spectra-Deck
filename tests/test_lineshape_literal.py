@@ -13,6 +13,7 @@ components in its header:
   plus a ``GL(30)`` component each
 * ``GL SGL and T tail.csv`` - Au 4d doublet, eight fits: ``SGL(70)``,
   ``SGL(70)T(1|1.5|2)``, ``SGL(90)``, ``GL(70)T(1|1.5|2)``
+* ``E with GL and SGL.csv`` - Au 4d, nine ``E(1,b,n)GL|SGL(m)`` fits
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -216,6 +217,31 @@ class TestTailLiteral(unittest.TestCase):
             tails.append(float(y[x < 1000.0].sum() / y.sum()))
         self.assertGreater(tails[0], tails[1])
         self.assertGreater(tails[1], tails[2])
+
+
+@unittest.skipUnless(HAVE_NP and _path("E with GL and SGL.csv"),
+                     "E with GL and SGL.csv not found")
+class TestELiteral(unittest.TestCase):
+    """``E(a,b,n)GL(m)`` / ``SGL(m)``, the stated Area used as it is. Every fit
+    has a = 1, so the ``(1 - a) / 2`` power is not tested, only b and n."""
+
+    def test_every_fit_matches_casaxps(self):
+        seen = 0
+        for info, head, cols in _blocks(_path("E with GL and SGL.csv")):
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            lit = cols[:, 2] - bg
+            shape = info["Lineshape"][0]
+            mine = np.empty_like(lit)
+            mine[order] = ls.component_curve(
+                ke[order], shape, HV - float(info["Position"][0]),
+                float(info["FWHM"][0]), float(info["Area"][0]))
+            err = float(np.abs(mine - lit).max() / lit.max())
+            self.assertLess(err, 0.004, shape)
+            seen += 1
+        self.assertEqual(seen, 9)
 
 
 if __name__ == "__main__":

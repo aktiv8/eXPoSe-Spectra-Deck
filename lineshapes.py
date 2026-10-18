@@ -604,6 +604,12 @@ def is_exact(shape) -> bool:
         # no exported curves to compare with, so it stays flagged
         return (not ps["tail"] and not ps["suffix"]
                 and abs(ps["a"] - ps["b"]) < 1e-9)
+    if ps["kind"] == "E":
+        # checked against CasaXPS's exported curves for a = 1 only (the power
+        # (1 - a) / 2 is then zero); another a uses the same code, unchecked
+        bm = _A_BASE_RE.match(ps.get("suffix") or "")
+        return (len(ps["params"]) == 3 and bool(bm) and not ps["tail"]
+                and abs(ps["params"][0] - 1.0) < 1e-9)
     if ps["kind"] in ("GL", "SGL") and ps["tail"]:
         # GL(m)T(k) / SGL(m)T(k): the program's table with its low-KE tail
         # (see _gl_table), checked against CasaXPS's exported curves
@@ -802,8 +808,9 @@ def gauss_conv(x, y, gfwhm):
 #   Gaussian-Lorentzian shape ``GL(m)`` / ``SGL(m)``; on the low-KE side that
 #   shape mixed with a power law, ``b/100 / (1 + 4x^2) ** ((1 - a) / 2) +
 #   (1 - b/100) * GL(m)``; same right-half area rule.
-# * ``E(a, b, n)GL(m)`` / ``SGL(m)`` (builder 0x14040f950, read from the
-#   program but **not yet checked against an exported CasaXPS curve**): as
+# * ``E(a, b, n)GL(m)`` / ``SGL(m)`` (builder 0x14040f950; checked against
+#   CasaXPS's exported curves, 9 fits, but only for a = 1, where the power is
+#   zero): as
 #   ``F``, but the low-KE term is the Gaussian-Lorentzian shape itself raised
 #   to a power, ``b/100 * GL(m) ** ((1 - a) / 2) + (1 - b/100) * GL(m)``.
 # * A Gaussian kernel of ``2 * floor(n/2) + 1`` samples (``n`` + 1 when even),

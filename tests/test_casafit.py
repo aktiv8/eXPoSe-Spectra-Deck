@@ -1359,12 +1359,13 @@ class TestProgramTables(unittest.TestCase):
         # high-KE side is the Gaussian-Lorentzian shape
         self.assertLess(float(blend[far].sum()), 0.8 * float(plain[far].sum()))
 
-    def test_e_is_read_from_the_program_but_not_flagged_exact(self):
-        # E(a,b,n)GL(m): builder 0x14040f950; no exported CasaXPS curve of it
-        # exists yet, so the structure is checked, not the numbers
+    def test_e_is_read_from_the_program_and_exact_only_where_checked(self):
+        # E(a,b,n)GL(m): builder 0x14040f950; CasaXPS's exported curves
+        # (tests/test_lineshape_literal.py) all have a = 1
         sp = ls.parse_shape("E(0.5,60,0)GL(30)")
         self.assertIsNotNone(ls._table_for(sp))
         self.assertFalse(ls.is_exact("E(0.5,60,0)GL(30)"))
+        self.assertTrue(ls.is_exact("E(1,5,50)SGL(30)"))
         y = self._curve("E(0.5,60,0)GL(30)")
         low = float(y[self.X < 1005.0].sum())
         high = float(y[self.X > 1005.0].sum())
