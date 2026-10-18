@@ -6,8 +6,8 @@ component column carries the background, so the peak is the column minus
 components in its header:
 
 * ``LF shape.csv`` - Mo 3d, ``LF(0.7,1.5,75,100)`` and ``LF(0.5,1,45,200)``
-* ``DS F and H lineshapes.csv`` - HOPG C 1s: ``DS(0.09,500)`` (plus ``H`` and
-  ``F`` shapes, not reconstructed) and ``LA(50)`` components
+* ``DS F and H lineshapes.csv`` - HOPG C 1s: ``DS(0.09,500)``,
+  ``H(0.09,250)SGL(90)``, ``F(0.09,32,150)SGL(90)`` and ``LA(50)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
 position is the table's centre, not its maximum. Skipped when the files are
@@ -102,6 +102,16 @@ class TestDsLaLiteral(unittest.TestCase):
         err = _errors(_path("DS F and H lineshapes.csv"), ("DS",))
         self.assertEqual(list(err), ["DS(0.09,500)"])
         self.assertLess(err["DS(0.09,500)"], 0.01)
+
+    def test_h_matches_casaxps_curve(self):
+        err = _errors(_path("DS F and H lineshapes.csv"), ("H(",))
+        self.assertEqual(list(err), ["H(0.09,250)SGL(90)"])
+        self.assertLess(err["H(0.09,250)SGL(90)"], 0.01)
+
+    def test_f_matches_casaxps_curve(self):
+        err = _errors(_path("DS F and H lineshapes.csv"), ("F(",))
+        self.assertEqual(list(err), ["F(0.09,32,150)SGL(90)"])
+        self.assertLess(err["F(0.09,32,150)SGL(90)"], 0.015)
 
     def test_la_matches_casaxps_curves(self):
         err = _errors(_path("DS F and H lineshapes.csv"), ("LA",))

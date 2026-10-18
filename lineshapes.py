@@ -763,6 +763,14 @@ def gauss_conv(x, y, gfwhm):
 #   shifted by ``-1 / tan(pi / (2 - a))``; with a ``GL(m)`` / ``SGL(m)``
 #   suffix the other side is that Gaussian-Lorentzian shape, otherwise the
 #   same form on both sides. One Gaussian kernel of ``n`` samples.
+# * ``H(a, n)GL(m)`` / ``H(a, n)SGL(m)``: the ``DS(a, n)GL(m)`` shape, but its
+#   area is taken from the **right half only, doubled** (the symmetric
+#   Gaussian-Lorentzian side), so the stated Area is that of the symmetric
+#   peak and the table's own area is larger (1.4 times for a = 0.09).
+# * ``F(a, b, n)GL(m)`` / ``F(a, b, n)SGL(m)``: on the high-KE side the
+#   Gaussian-Lorentzian shape ``GL(m)`` / ``SGL(m)``; on the low-KE side that
+#   shape mixed with a power law, ``b/100 / (1 + 4x^2) ** ((1 - a) / 2) +
+#   (1 - b/100) * GL(m)``; same right-half area rule.
 # * A Gaussian kernel of ``2 * floor(n/2) + 1`` samples (``n`` + 1 when even),
 #   ``exp(-(3 j / half)^2)`` for j = -half..half, normalised, applied by an
 #   edge-extended correlation.
@@ -868,11 +876,17 @@ def _grid(npts):
     return np.arange(size), (size - 1) // 2
 
 
-def _finish_table(y, npts):
+def _finish_table(y, npts, right_half=False):
     """``(y, width, offset, npts)``: the table divided by its trapezoid area,
     with its measured width and peak offset (width 1 when it cannot be
-    measured)."""
-    area = (float(y.sum()) - 0.5 * float(y[0] + y[-1])) * _TABLE_STEP
+    measured). ``right_half``: the area is that of the right half from the
+    centre, doubled (``H`` and ``F``)."""
+    if right_half:
+        c = (len(y) - 1) // 2
+        area = (float(y[c:].sum()) - 0.5 * float(y[c] + y[-1])) \
+            * _TABLE_STEP * 2.0
+    else:
+        area = (float(y.sum()) - 0.5 * float(y[0] + y[-1])) * _TABLE_STEP
     y = y / area if area > 0 else y
     m = _measure_table(y, npts)
     return (y, m[0] if m else 1.0, m[1] if m else 0.0, npts)
@@ -926,14 +940,16 @@ def _lf_table(a, b, w, n, k):
     return _cached(key, build)
 
 
-def _ds_table(a, n, mode, mix):
+def _ds_table(a, n, mode, mix, right_half=False):
     """The table of ``DS(a, n)`` (``mode`` 2), ``DS(a, n)GL(m)`` (0) or
-    ``DS(a, n)SGL(m)`` (1), ``mix`` = m / 100."""
-    key = ("DS", round(float(a), 9), int(n), int(mode), round(float(mix), 9))
+    ``DS(a, n)SGL(m)`` (1), ``mix`` = m / 100; ``right_half`` makes it the
+    ``H`` shape."""
+    key = ("DS", round(float(a), 9), int(n), int(mode), round(float(mix), 9),
+           bool(right_half))
 
     def build():
         np = _np()
-        _, a_, n_, mode_, mix_ = key
+        _, a_, n_, mode_, mix_, half_ = key
         idx, c = _grid(_DS_POINTS)
         shift = 0.0
         if 1e-8 < a_ < 0.9999999:
@@ -951,7 +967,31 @@ def _ds_table(a, n, mode, mix):
             right = ((1.0 - mix_) * np.exp(-_LN2_4 * x * x)
                      + mix_ / (1.0 + 4.0 * x * x))
             y = np.where(idx > c, right, ds)
-        return _finish_table(_gauss_smooth(y, n_), _DS_POINTS)
+        return _finish_table(_gauss_smooth(y, n_), _DS_POINTS, half_)
+    return _cached(key, build)
+
+
+def _f_table(a, b, n, mode, mix):
+    """The table of ``F(a, b, n)GL(m)`` (``mode`` 0) / ``SGL(m)`` (1); ``b``
+    is the per-cent weight of the power-law term, ``mix`` = m / 100."""
+    key = ("F", round(float(a), 9), round(float(b), 9), int(n), int(mode),
+           round(float(mix), 9))
+
+    def build():
+        np = _np()
+        _, a_, b_, n_, mode_, mix_ = key
+        idx, c = _grid(_LA_POINTS)
+        x = _TABLE_STEP * (idx - c)
+        if mode_ == 0:
+            gl = (np.exp(-(1.0 - mix_) * _LN2_4 * x * x)
+                  / (1.0 + mix_ * x * x * 4.0))
+        else:
+            gl = ((1.0 - mix_) * np.exp(-_LN2_4 * x * x)
+                  + mix_ / (1.0 + 4.0 * x * x))
+        w = b_ / 100.0
+        left = w / (1.0 + 4.0 * x * x) ** ((1.0 - a_) * 0.5) + (1.0 - w) * gl
+        y = np.where(idx > c, gl, left)
+        return _finish_table(_gauss_smooth(y, n_), _LA_POINTS, True)
     return _cached(key, build)
 
 
@@ -985,6 +1025,28 @@ def _table_for(sp):
         return _lf_table(sp["a"], sp["b"], min(sp["w"], _LF_MAX_W),
                          min(_la_n(sp["m"]), _LF_MAX_N),
                          min(max(k, 0), _LF_MAX_K))
+    if kind in ("H", "F"):
+        # H(a, n)GL(m) / H(a, n)SGL(m); F(a, b, n)GL(m) / F(a, b, n)SGL(m)
+        ps = sp["params"]
+        if len(ps) != (2 if kind == "H" else 3):
+            return None
+        n = _la_n(ps[-1])
+        n = n if 2 <= n <= 1400 else 0
+        bm = _A_BASE_RE.match(sp.get("suffix") or "")
+        if not (bm and bm.group(2)):
+            return None
+        try:
+            mix = float(bm.group(2)) / 100.0
+        except ValueError:
+            return None
+        mode = 0 if bm.group(1).upper() == "GL" else 1
+        if not (0.0 <= mix <= 1.0 and 0.0 <= ps[0] <= 1.0):
+            return None
+        if kind == "H":
+            return _ds_table(ps[0], n, mode, mix, True)
+        if not 0.0 <= ps[1] <= 100.0:
+            return None
+        return _f_table(ps[0], ps[1], n, mode, mix)
     if kind == "DS" and len(sp["params"]) in (1, 2):
         # DS(a, n)GL(m) / DS(a, n)SGL(m) / DS(a, n) / DS(a); n of 1 or past
         # 1400 is refused by the program, read here as none
