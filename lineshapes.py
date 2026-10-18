@@ -545,8 +545,8 @@ def parse_shape(text) -> dict:
             # (LA(0) -> n=1401, LA(100) -> n=0).
             raw = min(max(ps[0] if ps else 0.0, 0.0), 100.0)
             out.update(m=float(_LA_MAX_N - math.floor(raw / 100.0 * _LA_MAX_N)))
-    elif kind == "LS":
-        # LS(a, b, n); the two-number form LS(a, n) is LS(a, a, n)
+    elif kind in ("LS", "QA", "QS"):
+        # LS(a, b, n) and QA / QS alike; the two-number form is (a, a, n)
         if len(ps) >= 3:
             out.update(a=ps[0], b=ps[1], m=ps[2])
         elif len(ps) == 2:
@@ -708,13 +708,13 @@ def check_shape(shape) -> list:
             bad.append("LA's exponents must be positive")
         if n >= 2 and ps["m"] < 0:
             bad.append("LA's Gaussian index cannot be negative")
-    elif kind == "LS":
+    elif kind in ("LS", "QA", "QS"):
         if n not in (2, 3):
-            bad.append("LS needs two or three parameters")
+            bad.append(f"{kind} needs two or three parameters")
         elif ps["a"] <= 0 or ps["b"] <= 0:
-            bad.append("LS's exponents must be positive")
+            bad.append(f"{kind}'s exponents must be positive")
         elif ps["m"] < 0:
-            bad.append("LS's kernel width cannot be negative")
+            bad.append(f"{kind}'s kernel width cannot be negative")
     elif kind in ("LF", "LSF", "QF", "QSF"):
         if n < 4:
             bad.append(f"{kind} needs four (or five) parameters")
@@ -842,6 +842,11 @@ def gauss_conv(x, y, gfwhm):
 #   ``QF`` has ``16 x^4`` where ``LF`` has ``4 x^2`` in the base,
 #   ``1 / (1 + 16 x^4) ** p``, with the same exponent p; ``QSF`` is ``QF`` with
 #   the boxcar. ``k`` = 0 applies the kernel no times.
+# * ``QA(a, b, n)`` / ``QA(a, n)`` / ``QS(...)`` (types 4 and 5 of the same
+#   builder; **read from the program, not yet checked against exported
+#   curves**): ``LA`` with ``16 x^4`` where it has ``4 x^2``, ``1 / (1 + 16 x^4)
+#   ** a`` (``** b`` on the other side), the same stretch / clamp; ``QA`` has the
+#   Gaussian, ``QS`` the boxcar.
 # * ``LF(a, b, w, n, k)``: the same with the exponent
 #   ``3 - (3 - a) / (1 + 4 x^2 / w^2)`` (``b`` on the other side), no stretch,
 #   and the Gaussian applied ``k`` times (``k`` = 1 for the four-number form).
@@ -1018,11 +1023,12 @@ def _cached(key, build):
     return hit
 
 
-def _la_table(a, b, n, boxcar=False):
-    """The table of ``LA(a, b, n)`` (``boxcar`` False) or ``LS(a, b, n)``
-    (True); see the block comment above."""
-    key = ("LS" if boxcar else "LA", round(float(a), 9), round(float(b), 9),
-           int(n))
+def _la_table(a, b, n, boxcar=False, quartic=False):
+    """The table of ``LA(a, b, n)``, ``LS`` (``boxcar``), ``QA`` (``quartic``,
+    the ``16 x^4`` base) or ``QS`` (both); see the block comment above."""
+    key = (("QS" if boxcar else "QA") if quartic
+           else ("LS" if boxcar else "LA"),
+           round(float(a), 9), round(float(b), 9), int(n))
 
     def build():
         np = _np()
@@ -1033,9 +1039,10 @@ def _la_table(a, b, n, boxcar=False):
             ne = int(math.floor(2.0 / _TABLE_STEP)) + 1
         idx, c = _grid(_LA_POINTS)
         x = _TABLE_STEP * (idx - c) / scale
-        lor = 1.0 / (1.0 + 4.0 * x * x)
+        lor = 1.0 / (1.0 + (16.0 * x ** 4 if kind_ in ("QA", "QS")
+                            else 4.0 * x * x))
         y = np.where(idx > c, lor ** b_, lor ** a_)
-        smooth = _boxcar_smooth if kind_ == "LS" else _gauss_smooth
+        smooth = _boxcar_smooth if kind_ in ("LS", "QS") else _gauss_smooth
         return _finish_table(smooth(y, ne), _LA_POINTS)
     return _cached(key, build)
 
@@ -1291,9 +1298,10 @@ def _table_for(sp):
     kind = sp["kind"]
     if kind == "LA":
         return _la_table(sp["a"], sp["b"], _la_n(sp["m"]))
-    if kind == "LS" and sp["a"] > 0 and sp["b"] > 0 \
+    if kind in ("LS", "QA", "QS") and sp["a"] > 0 and sp["b"] > 0 \
             and len(sp["params"]) in (2, 3):
-        return _la_table(sp["a"], sp["b"], _la_n(sp["m"]), True)
+        return _la_table(sp["a"], sp["b"], _la_n(sp["m"]), kind in ("LS", "QS"),
+                         kind in ("QA", "QS"))
     if kind in ("GL", "SGL") and len(sp["params"]) in (1, 2) \
             and 0.0 <= sp["mix"] <= 100.0:
         # GL(m), GL(m, n), each with an optional T(k) or PHI(j, w) / SL(j, w)

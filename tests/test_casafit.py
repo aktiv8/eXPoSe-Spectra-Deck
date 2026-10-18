@@ -1396,6 +1396,31 @@ class TestProgramTables(unittest.TestCase):
                          - self._curve("LF(0.7,1.5,75,100)")).max()),
             0.03 * float(self._curve("LF(0.7,1.5,75,100)").max()))
 
+    def test_qa_and_qs_are_read_from_the_program_but_not_flagged_exact(self):
+        # LA builder types 4 and 5; no exported CasaXPS curve yet
+        for shape in ("QA(1,1,50)", "QA(1.2,50)", "QS(1,1,50)", "QS(0.8,50)"):
+            self.assertIsNotNone(ls._table_for(ls.parse_shape(shape)), shape)
+            self.assertFalse(ls.is_exact(shape), shape)
+            self.assertEqual(ls.check_shape(shape), [], shape)
+        # the two-number form is a = b
+        np.testing.assert_allclose(self._curve("QA(1.2,40)"),
+                                   self._curve("QA(1.2,1.2,40)"))
+        # no kernel (n = 0): QS is QA; the 16 x^4 base has lighter tails and a
+        # taller peak than LA's 4 x^2
+        np.testing.assert_allclose(self._curve("QS(1,1,0)"),
+                                   self._curve("QA(1,1,0)"), atol=1e-12)
+        far = np.abs(self.X - 1005.0) > 5.0
+        qa, la = self._curve("QA(1,1,0)"), self._curve("LA(1,1,0)")
+        self.assertLess(float(qa[far].sum()), 0.2 * float(la[far].sum()))
+        self.assertGreater(float(qa.max()), float(la.max()))
+        # the boxcar is a different kernel from the Gaussian
+        self.assertGreater(float(np.abs(self._curve("QS(1,1,150)")
+                                        - self._curve("QA(1,1,150)")).max()),
+                           0.02 * float(qa.max()))
+        self.assertTrue(ls.check_shape("QA(0,1,10)"))
+        self.assertTrue(ls.check_shape("QS(1,1,-3)"))
+        self.assertTrue(ls.check_shape("QA(1,1,10,4)"))
+
     def test_the_x4_base_has_lighter_tails_and_a_taller_peak(self):
         far = np.abs(self.X - 1005.0) > 5.0
         for lin, quart in (("LF(0.7,1.5,75,50)", "QF(0.7,1.5,75,50)"),
