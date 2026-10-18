@@ -760,6 +760,17 @@ def gauss_conv(x, y, gfwhm):
 #   kernel is held at ``floor(2/step) + 1`` samples and the *Lorentzian's* x
 #   axis is stretched by ``n * step / 2`` instead, which is how a large ``n``
 #   gives a wide Gaussian.
+# * ``GL(m)`` / ``SGL(m)``: the plain analytic shape (``GL`` the product
+#   ``exp(-(1-m) 4 ln2 x^2) / (1 + 4 m x^2)``, ``SGL`` the sum), no kernel, area
+#   from the whole table. **Its width is measured like every other table's**:
+#   the product form's half maximum is not at x = 0.5, so the old assumption
+#   of a FWHM of exactly 1 was out by up to 1.3 % of the peak height.
+# * ``A(a, b, n)GL(m)`` / ``SGL(m)`` (the Gelius asymmetric shape): the same
+#   shape on the high-KE side; on the low-KE side
+#   ``GL(m) + b (0.7 + 0.3 / (a + 0.01)) (AW(x) - G0(x))`` with
+#   ``G0 = exp(-4 ln2 x^2)`` and ``AW = exp(-4 ln2 x^2 / (1 - 2 a sqrt(ln2) x)^2)``
+#   (zero where ``|1 - a x|`` is below 1e-100); ``n`` (0 or 2-1199) a Gaussian
+#   kernel; area from the right half doubled.
 # * ``TLA(a, mu, n)`` (type 7 of the same routine, so the same kernel clamp and
 #   stretch): ``y = (pi/2 - atan(2x) + pi/mu) / (1 + 4 x^2) ** a`` on both
 #   sides (``TLA(mu, n)`` is ``a`` = 1; ``mu`` 0 drops the tail term).
@@ -931,6 +942,50 @@ def _la_table(a, b, n):
     return _cached(key, build)
 
 
+def _gl_curve(x, mode, mix):
+    """The ``GL(m)`` (``mode`` 0, product) or ``SGL(m)`` (1, sum) shape."""
+    np = _np()
+    if mode == 0:
+        return (np.exp(-(1.0 - mix) * _LN2_4 * x * x)
+                / (1.0 + mix * x * x * 4.0))
+    return (1.0 - mix) * np.exp(-_LN2_4 * x * x) + mix / (1.0 + 4.0 * x * x)
+
+
+def _gl_table(mode, mix):
+    """The table of a plain ``GL(m)`` / ``SGL(m)``; ``mix`` = m / 100."""
+    key = ("GL", int(mode), round(float(mix), 9))
+
+    def build():
+        _, mode_, mix_ = key
+        idx, c = _grid(_LA_POINTS)
+        return _finish_table(_gl_curve(_TABLE_STEP * (idx - c), mode_, mix_),
+                             _LA_POINTS)
+    return _cached(key, build)
+
+
+def _a_table(a, b, n, mode, mix):
+    """The table of ``A(a, b, n)GL(m)`` (``mode`` 0) / ``SGL(m)`` (1)."""
+    key = ("A", round(float(a), 9), round(float(b), 9), int(n), int(mode),
+           round(float(mix), 9))
+
+    def build():
+        np = _np()
+        _, a_, b_, n_, mode_, mix_ = key
+        idx, c = _grid(_LA_POINTS)
+        x = _TABLE_STEP * (idx - c)
+        gl = _gl_curve(x, mode_, mix_)
+        g0 = np.exp(-_LN2_4 * x * x)
+        den = 1.0 - a_ * 2.0 * math.sqrt(math.log(2.0)) * x
+        ok = np.abs(1.0 - a_ * x) > 1e-100
+        with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+            aw = np.where(ok, np.exp(-_LN2_4 * x * x / (den * den)), 0.0)
+        aw = np.nan_to_num(aw, nan=0.0, posinf=0.0)
+        w = b_ * (0.7 + 0.3 / (a_ + 0.01))
+        y = np.where(idx > c, gl, gl + w * (aw - g0))
+        return _finish_table(_gauss_smooth(y, n_), _LA_POINTS, True)
+    return _cached(key, build)
+
+
 def _tla_table(a, mu, n):
     """The table of ``TLA(a, mu, n)``; see the block comment above."""
     key = ("TLA", round(float(a), 9), round(float(mu), 9), int(n))
@@ -1047,6 +1102,15 @@ def _table_for(sp):
     kind = sp["kind"]
     if kind == "LA":
         return _la_table(sp["a"], sp["b"], _la_n(sp["m"]))
+    if kind in ("GL", "SGL") and not sp["tail"] and not sp["suffix"] \
+            and len(sp["params"]) == 1 and 0.0 <= sp["mix"] <= 100.0:
+        return _gl_table(0 if kind == "GL" else 1, sp["mix"] / 100.0)
+    if kind == "A" and 0.0 <= sp["a"] <= 1.0 and 0.0 <= sp["b"] <= 1.0 \
+            and 0.0 <= sp["mix"] <= 100.0 and len(sp["params"]) == 3:
+        n = _la_n(sp["m"])
+        n = n if 2 <= n <= 1199 else 0
+        return _a_table(sp["a"], sp["b"], n, 0 if sp["base"] == "GL" else 1,
+                        sp["mix"] / 100.0)
     if kind == "TLA" and sp["a"] > 0 and sp["b"] >= 0:
         return _tla_table(sp["a"], sp["b"], _la_n(sp["m"]))
     if kind == "LF" and sp["w"] > 0 and len(sp["params"]) in (4, 5):

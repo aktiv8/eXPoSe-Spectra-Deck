@@ -9,6 +9,8 @@ components in its header:
 * ``DS F and H lineshapes.csv`` - HOPG C 1s: ``DS(0.09,500)``,
   ``H(0.09,250)SGL(90)``, ``F(0.09,32,150)SGL(90)`` and ``LA(50)`` components
 
+* ``A_GL lineshapes.csv`` - HOPG C 1s, three fits of ``A(0.4,0.38,20)GL(20)``
+  plus a ``GL(30)`` component each
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -142,6 +144,41 @@ class TestTlaLiteral(unittest.TestCase):
                 # the stated Area is the table's own: no free scale needed
                 self.assertLess(float(np.abs(mine - lit).max() / lit.max()),
                                 0.03, info["Position"][k])
+
+
+@unittest.skipUnless(HAVE_NP and _path("A_GL lineshapes.csv"),
+                     "A_GL lineshapes.csv not found")
+class TestAGlLiteral(unittest.TestCase):
+    """The stated Area is the table's own, so no scale is fitted: the A
+    shape's Area is its symmetric half doubled (the whole peak is 1.35 times
+    larger), and a GL(30)'s is its whole integral."""
+
+    def _check(self, prefix, tol):
+        seen = 0
+        for info, head, cols in _blocks(_path("A_GL lineshapes.csv")):
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            for k, ci in enumerate((2, 3)):
+                shape = info["Lineshape"][k]
+                if not shape.startswith(prefix):
+                    continue
+                lit = cols[:, ci] - bg
+                mine = np.empty_like(lit)
+                mine[order] = ls.component_curve(
+                    ke[order], shape, HV - float(info["Position"][k]),
+                    float(info["FWHM"][k]), float(info["Area"][k]))
+                self.assertLess(float(np.abs(mine - lit).max() / lit.max()),
+                                tol, f"{shape} at {info['Position'][k]}")
+                seen += 1
+        self.assertEqual(seen, 3)
+
+    def test_a_matches_casaxps_curves(self):
+        self._check("A(", 0.025)
+
+    def test_gl_matches_casaxps_curves(self):
+        self._check("GL(", 0.005)
 
 
 if __name__ == "__main__":

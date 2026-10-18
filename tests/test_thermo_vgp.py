@@ -257,7 +257,9 @@ class TestAvantageShape(unittest.TestCase):
         ke = np.linspace(1190.0, 1214.0, 2401)
         s = ls.component_curve(ke, "AV(23,0,1,0,0.01)", 1202.0, 1.3, 100.0)
         b = ls.component_curve(ke, "SGL(23)", 1202.0, 1.3, 100.0)
-        self.assertTrue(np.allclose(s, b))                    # the sum is SGL
+        # the sum is SGL (which is the program's table, so a part in a
+        # thousand apart, with the tail area measured over another range)
+        self.assertTrue(np.allclose(s, b, rtol=3e-3, atol=3e-3 * float(b.max())))
         # the product, 1 / ([1 + M t^2] exp{(1 - M) ln2 t^2}), t = 2 dx / FWHM
         raw = ls._raw_values(np.array([1202.0, 1202.65, 1203.9]),
                              ls.parse_shape("AVP(40,0,1,0,0.01)"), 1202.0, 1.3)

@@ -113,11 +113,13 @@ class TestShapes(unittest.TestCase):
         sig = 1.3 / 2.3548200450309493
         want = np.exp(-0.5 * ((self.ke - 1005.0) / sig) ** 2)
         want *= g.max() / want.max()
-        self.assertLess(float(np.abs(g - want).max()) / g.max(), 1e-6)
+        # (GL and SGL are the program's tables now: a linear lookup in a
+        # grid of 0.025 FWHM, so a part in a thousand, not rounding error)
+        self.assertLess(float(np.abs(g - want).max()) / g.max(), 1e-3)
         lor = ls.component_curve(self.ke, "GL(100)", 1005.0, 1.3, 1.0)
         want = 1 / (1 + 4 * ((self.ke - 1005.0) / 1.3) ** 2)
         want *= lor.max() / want.max()
-        self.assertLess(float(np.abs(lor - want).max()) / lor.max(), 1e-9)
+        self.assertLess(float(np.abs(lor - want).max()) / lor.max(), 1e-3)
 
     def test_sgl_is_the_sum_and_gl_the_product(self):
         # compares shapes (each normalised to its own peak), not the area
@@ -128,10 +130,21 @@ class TestShapes(unittest.TestCase):
         gau = np.exp(-4 * np.log(2) * t * t)
         sgl = ls.component_curve(self.ke, "SGL(30)", 1005.0, 1.3, 1.0)
         want = 0.3 * lor + 0.7 * gau
-        np.testing.assert_allclose(sgl / sgl.max(), want / want.max(), rtol=1e-9)
+        np.testing.assert_allclose(sgl / sgl.max(), want / want.max(),
+                                   rtol=2e-3, atol=2e-4)
+        # the program's GL(m) is exp(-(1-m) 4 ln2 t^2) / (1 + 4 m t^2) (read
+        # from CasaXPS.exe and checked against its exported curves, 0.04-0.12 %
+        # of the peak; the former lor**m * gau**(1-m) was 1.25 % out), and
+        # the table is scaled so its measured FWHM is the component's
         gl = ls.component_curve(self.ke, "GL(30)", 1005.0, 1.3, 1.0)
-        want = lor ** 0.3 * gau ** 0.7
-        np.testing.assert_allclose(gl / gl.max(), want / want.max(), rtol=1e-9)
+        i = int(np.argmax(gl))
+        half = gl[i] / 2.0
+        above = np.nonzero(gl >= half)[0]
+        # the table's measured width is the narrower half-width, doubled
+        hw = min(self.ke[i] - self.ke[above[0]], self.ke[above[-1]] - self.ke[i])
+        self.assertAlmostEqual(2 * hw, 1.3, delta=0.01)
+        want = np.exp(-0.7 * 4 * np.log(2) * t * t) / (1 + 4 * 0.3 * t * t)
+        self.assertLess(float(np.abs(gl / gl.max() - want).max()), 0.03)
 
     def test_la_asymmetry_puts_the_tail_on_the_high_ke_side(self):
         y = ls.component_curve(self.ke, "LA(1.0,3.0,0)", 1005.0, 1.3, 1.0)
@@ -1575,7 +1588,12 @@ class TestGeliusShape(unittest.TestCase):
         area = 500.0
         curve = ls.component_curve(ke, "A(0.15,0.7,25)SGL(15)", 0.0, 1.5,
                                    area)
-        self.assertAlmostEqual(_trapz(curve, ke), area, delta=area * 0.05)
+        # the program's Area is the symmetric (high-KE) half doubled: the
+        # tail makes the whole peak larger (CasaXPS's own export: 1.35 times)
+        right = ke >= 0
+        self.assertAlmostEqual(2.0 * _trapz(curve[right], ke[right]), area,
+                               delta=area * 0.03)
+        self.assertGreater(_trapz(curve, ke), area)
 
     def test_degenerate_inputs_do_not_blow_up(self):
         ke = np.linspace(-10, 10, 101)
