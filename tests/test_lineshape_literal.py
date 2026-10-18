@@ -24,6 +24,8 @@ components in its header:
 * ``lsf_shape.csv`` - Au 4d, eight ``LSF(a,b,w,n)`` fits (w 0-100, n 0-500)
 * ``qa and qs.csv`` - Au 4d, six ``QA(a,b,n)`` and five ``QS(a,b,n)`` fits
   (a 0.5-1, b 1-5, n 0-300; n above 80 takes the stretch / clamp path)
+* ``ds 3 param v2csv`` (tab-delimited) - C 1s, 22 ``DS(a,n,m)`` fits: m 0.2-20
+  at a = 0.1, n = 50; a 0-0.7 at m = 5, n = 50; n 2-800 at a = 0.1, m = 5
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -57,7 +59,10 @@ def _path(name):
 
 def _blocks(path):
     with open(path, encoding="utf-8-sig") as fh:
-        rows = list(csv.reader(fh))
+        first = fh.readline()
+        fh.seek(0)
+        delim = "\t" if first.count("\t") > first.count(",") else ","
+        rows = list(csv.reader(fh, delimiter=delim))
     hdr = next(i for i, r in enumerate(rows) if r and r[0] == "B.E.")
     meta, head = rows[:hdr], rows[hdr]
     data = [r for r in rows[hdr + 1:] if r and r[0]]
@@ -448,6 +453,52 @@ class TestQaQsLiteral(unittest.TestCase):
             self.assertTrue(ls.is_exact(shape), shape)
             seen[shape[:2]] += 1
         self.assertEqual(seen, {"QA": 6, "QS": 5})
+
+
+@unittest.skipUnless(HAVE_NP and _path("ds 3 param v2csv"), "ds 3 param v2csv not found")
+class TestDsCutoffGridLiteral(unittest.TestCase):
+    """``DS(a,n,m)`` over a grid: the stated Area used as it is. The 20 fits with
+    a cut-off of 1 or more agree to 0.1-1.3 % of the peak (a few tenths of
+    a per cent with a sub-sample shift / 0.5 % width change: sampling, not
+    the formula); a cut-off of 0.5 or less has no positive area and CasaXPS
+    draws nothing (Area 0.00), which the signed table reproduces."""
+
+    def _fits(self):
+        for info, head, cols in _blocks(_path("ds 3 param v2csv")):
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ci = [i for i, h in enumerate(head)
+                  if i > 1 and h not in ("Background", "Envelope")][0]
+            yield (info["Lineshape"][0], float(info["Position"][0]),
+                   float(info["FWHM"][0]), float(info["Area"][0]), be,
+                   cols[:, ci] - bg)
+
+    def test_the_live_fits_match_casaxps(self):
+        seen = 0
+        for shape, pos, fwhm, area, be, lit in self._fits():
+            if area == 0:
+                continue
+            ke = HV - be
+            order = np.argsort(ke)
+            mine = np.empty_like(lit)
+            mine[order] = ls.component_curve(ke[order], shape, HV - pos, fwhm, area)
+            err = float(np.abs(mine - lit).max() / lit.max())
+            self.assertLess(err, 0.02, shape)
+            self.assertTrue(ls.is_exact(shape), shape)
+            seen += 1
+        self.assertEqual(seen, 20)
+
+    def test_a_cut_off_with_no_positive_area_draws_nothing(self):
+        seen = 0
+        for shape, pos, fwhm, area, be, lit in self._fits():
+            if area != 0:
+                continue
+            ke = HV - be
+            mine = ls.component_curve(ke, shape, HV - pos, fwhm, area)
+            self.assertEqual(float(np.abs(lit).max()), 0.0, shape)
+            self.assertEqual(float(np.abs(mine).max()), 0.0, shape)
+            seen += 1
+        self.assertEqual(seen, 2)
 
 
 if __name__ == "__main__":

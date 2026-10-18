@@ -610,6 +610,11 @@ def is_exact(shape) -> bool:
         # no exported curves to compare with, so it stays flagged
         return (not ps["tail"] and not ps["suffix"]
                 and abs(ps["a"] - ps["b"]) < 1e-9)
+    if ps["kind"] == "DS" and len(ps["params"]) == 3 and not ps["suffix"]:
+        # DS(a, n, m): checked against CasaXPS's exported curves (a 0-0.7,
+        # n 2-800, m 1-20; a cut-off of 0.5 or less has no positive area and
+        # CasaXPS draws nothing, as the table does at an Area of 0)
+        return _table_for(ps) is not None
     if ps["kind"] in ("LSF", "QF", "QSF"):
         # the program's table with the boxcar (LSF, QSF) and / or the 16 x^4
         # base (QF, QSF), checked against CasaXPS's exported curves (QF / QSF:
@@ -856,9 +861,8 @@ def gauss_conv(x, y, gfwhm):
 #   shifted by ``-1 / tan(pi / (2 - a))``; with a ``GL(m)`` / ``SGL(m)``
 #   suffix the other side is that Gaussian-Lorentzian shape, otherwise the
 #   same form on both sides. One Gaussian kernel of ``n`` samples.
-# * ``DS(a, n, m)`` (builder type 3; checked against three exported curves to
-#   0.9-1.4 % of the peak, the plain ``DS`` it is built on to 0.6-1.3 % for
-#   these small n, so not flagged exact): the Doniach-Sunjic form on both sides, zeroed
+# * ``DS(a, n, m)`` (builder type 3; checked against 20 exported curves,
+#   a 0-0.7, n 2-800, m 1-20, to 0.1-1.3 % of the peak): the Doniach-Sunjic form on both sides, zeroed
 #   below ``m`` (table units) to the low-KE side of the centre, then
 #   ``y - (y_cut / I_cut) * I`` where ``I(x)`` is the integral of that table from
 #   ``x`` up to the table's high-KE end (Savitzky-Golay window 5, order 2
@@ -996,18 +1000,21 @@ def _grid(npts):
     return np.arange(size), (size - 1) // 2
 
 
-def _finish_table(y, npts, right_half=False):
+def _finish_table(y, npts, right_half=False, signed=False):
     """``(y, width, offset, npts)``: the table divided by its trapezoid area,
     with its measured width and peak offset (width 1 when it cannot be
     measured). ``right_half``: the area is that of the right half from the
-    centre, doubled (``H`` and ``F``)."""
+    centre, doubled (``H`` and ``F``). ``signed``: divide by the area even when
+    it is negative (``DS(a, n, m)`` with a very short cut-off: the program does
+    the same, its table is then negative and a fit can only give the component
+    an Area of 0)."""
     if right_half:
         c = (len(y) - 1) // 2
         area = (float(y[c:].sum()) - 0.5 * float(y[c] + y[-1])) \
             * _TABLE_STEP * 2.0
     else:
         area = (float(y.sum()) - 0.5 * float(y[0] + y[-1])) * _TABLE_STEP
-    y = y / area if area > 0 else y
+    y = y / area if (area > 0 or (signed and area < 0)) else y
     m = _measure_table(y, npts)
     return (y, m[0] if m else 1.0, m[1] if m else 0.0, npts)
 
@@ -1233,7 +1240,8 @@ def _ds_table(a, n, mode, mix, right_half=False, cutoff=0.0):
             right = ((1.0 - mix_) * np.exp(-_LN2_4 * x * x)
                      + mix_ / (1.0 + 4.0 * x * x))
             y = np.where(idx > c, right, ds)
-        return _finish_table(_gauss_smooth(y, n_), _DS_POINTS, half_)
+        return _finish_table(_gauss_smooth(y, n_), _DS_POINTS, half_,
+                             signed=(mode_ == 3))
     return _cached(key, build)
 
 

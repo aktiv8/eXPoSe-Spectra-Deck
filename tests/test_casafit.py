@@ -1506,12 +1506,13 @@ class TestProgramTables(unittest.TestCase):
         f = self._curve("F(0.09,32,150)SGL(90)")
         self.assertLess(float(np.abs(e - f).max()), 0.05 * float(f.max()))
 
-    def test_ds_with_a_cut_off_is_zero_beyond_it_and_not_flagged_exact(self):
-        # DS(a,n,m): builder type 3, read from the program; no exported
-        # CasaXPS curve of it yet
+    def test_ds_with_a_cut_off_is_zero_beyond_it_and_exact(self):
+        # DS(a,n,m): builder type 3, checked against CasaXPS's exported curves
+        # (tests/test_lineshape_literal.py)
         sp = ls.parse_shape("DS(0.1,200,5)")
         self.assertIsNotNone(ls._table_for(sp))
-        self.assertFalse(ls.is_exact("DS(0.1,200,5)"))
+        self.assertTrue(ls.is_exact("DS(0.1,200,5)"))
+        self.assertFalse(ls.is_exact("DS(0.1,200,0)"))     # refused: older path
         x = np.linspace(960.0, 1020.0, 60001)
         y = ls.component_curve(x, "DS(0.1,200,5)", 1005.0, 1.0, 1.0)
         # m is in table units (FWHM): nothing further than ~m below the centre
