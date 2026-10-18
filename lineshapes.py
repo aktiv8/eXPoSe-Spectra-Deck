@@ -734,6 +734,8 @@ def check_shape(shape) -> list:
                 bad.append("DS's asymmetry must be at least 0 and below 1")
             if ps["m"] < 0:
                 bad.append("DS's Gaussian index cannot be negative")
+            if n >= 3 and vals[2] < 0:
+                bad.append("DS's cut-off width cannot be negative")
     elif kind in ("GL", "SGL"):
         if n < 1:
             bad.append(f"{kind} needs one parameter")
@@ -847,6 +849,12 @@ def gauss_conv(x, y, gfwhm):
 #   shifted by ``-1 / tan(pi / (2 - a))``; with a ``GL(m)`` / ``SGL(m)``
 #   suffix the other side is that Gaussian-Lorentzian shape, otherwise the
 #   same form on both sides. One Gaussian kernel of ``n`` samples.
+# * ``DS(a, n, m)`` (builder type 3; **read from the program, not yet checked
+#   against exported curves**): the Doniach-Sunjic form on both sides, zeroed
+#   below ``m`` (table units) to the low-KE side of the centre, then
+#   ``y - (y_cut / I_cut) * I`` where ``I(x)`` is the integral of that table from
+#   ``x`` up to the table's high-KE end (Savitzky-Golay window 5, order 2
+#   integration kernel, then a running sum), so the shape reaches 0 at the cut.
 # * ``H(a, n)GL(m)`` / ``H(a, n)SGL(m)``: the ``DS(a, n)GL(m)`` shape, but its
 #   area is taken from the **right half only, doubled** (the symmetric
 #   Gaussian-Lorentzian side), so the stated Area is that of the symmetric
@@ -1152,16 +1160,52 @@ def _lf_table(a, b, w, n, k, quartic=False, boxcar=False):
     return _cached(key, build)
 
 
-def _ds_table(a, n, mode, mix, right_half=False):
+def _sg_integration_kernel():
+    """The Savitzky-Golay (window 5, order 2) kernel of the program's
+    "integration" filter: ``c0 - c1/2 + c2/3`` of the least-squares
+    polynomial coefficients, i.e. the area under the local quadratic over the
+    sample interval before the window centre."""
+    np = _np()
+    t = np.arange(-2, 3, dtype=float)
+    design = np.vander(t, 3, increasing=True)          # 1, t, t^2
+    w = np.linalg.pinv(design)                          # rows: c0, c1, c2 kernels
+    return w[0] - w[1] / 2.0 + w[2] / 3.0
+
+
+def _ds_cut(y, m):
+    """The ``DS(a, n, m)`` block: ``y`` zeroed below ``m`` table units to the
+    low-KE side of the centre, then ``y - (y_cut / I_cut) * I``."""
+    np = _np()
+    size = len(y)
+    c = (size - 1) // 2
+    cut = c - int(math.floor(m / _TABLE_STEP))
+    cut = 0 if cut < 0 else (size - 1 if cut >= size else cut)
+    a = np.where(np.arange(size) < cut, 0.0, y)
+    # integral from each point up to the high-KE end, by integrating the
+    # reversed table: correlate with the kernel, then a running sum x step
+    rev = a[::-1]
+    kern = _sg_integration_kernel()
+    pad = np.concatenate([np.full(2, rev[0]), rev, np.full(2, rev[-1])])
+    filt = np.correlate(pad, kern, mode="valid")
+    running = np.concatenate([[0.0], np.cumsum(filt[1:]) * _TABLE_STEP])
+    integ = running[::-1]
+    if integ[cut] == 0.0:
+        return a
+    out = a - (a[cut] / integ[cut]) * integ
+    out[:cut] = 0.0
+    return out
+
+
+def _ds_table(a, n, mode, mix, right_half=False, cutoff=0.0):
     """The table of ``DS(a, n)`` (``mode`` 2), ``DS(a, n)GL(m)`` (0) or
     ``DS(a, n)SGL(m)`` (1), ``mix`` = m / 100; ``right_half`` makes it the
     ``H`` shape."""
     key = ("DS", round(float(a), 9), int(n), int(mode), round(float(mix), 9),
-           bool(right_half))
+           bool(right_half), round(float(cutoff), 9))
 
     def build():
         np = _np()
-        _, a_, n_, mode_, mix_, half_ = key
+        _, a_, n_, mode_, mix_, half_, cut_ = key
         idx, c = _grid(_DS_POINTS)
         shift = 0.0
         if 1e-8 < a_ < 0.9999999:
@@ -1169,8 +1213,8 @@ def _ds_table(a, n, mode, mix, right_half=False):
         x = _TABLE_STEP * (idx - c) - shift
         ds = (np.cos(math.pi * a_ * 0.5 + (1.0 - a_) * np.arctan(2.0 * x))
               / (1.0 + 4.0 * x * x) ** ((1.0 - a_) * 0.5))
-        if mode_ == 2:
-            y = ds
+        if mode_ in (2, 3):
+            y = _ds_cut(ds, cut_) if mode_ == 3 else ds
         elif mode_ == 0:
             right = (np.exp(-(1.0 - mix_) * _LN2_4 * x * x)
                      / (1.0 + mix_ * x * x * 4.0))
@@ -1301,6 +1345,16 @@ def _table_for(sp):
         if kind == "E":
             return _e_table(ps[0], ps[1], n, mode, mix)
         return _f_table(ps[0], ps[1], n, mode, mix)
+    if kind == "DS" and len(sp["params"]) == 3 and not sp["suffix"]:
+        # DS(a, n, m): the finite-extent form; a in [0, 1], n 0 or 2-1400, m >= 0
+        a, n, m = sp["params"]
+        n = int(math.floor(n))
+        # (the program also accepts m = 0, which cuts at the centre and leaves
+        # a table of negative area; that case is left on the older path)
+        if 0.0 <= a <= 1.0 and m > 0.0 and math.isfinite(m) \
+                and (n == 0 or 2 <= n <= 1400):
+            return _ds_table(a, n, 3, 0.0, False, m)
+        return None
     if kind == "DS" and len(sp["params"]) in (1, 2):
         # DS(a, n)GL(m) / DS(a, n)SGL(m) / DS(a, n) / DS(a); n of 1 or past
         # 1400 is refused by the program, read here as none

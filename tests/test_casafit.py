@@ -1460,9 +1460,37 @@ class TestProgramTables(unittest.TestCase):
         f = self._curve("F(0.09,32,150)SGL(90)")
         self.assertLess(float(np.abs(e - f).max()), 0.05 * float(f.max()))
 
-    def test_ds_three_number_form_is_not_read_from_the_program(self):
-        sp = ls.parse_shape("DS(0.1,200,0.5)")
-        self.assertIsNone(ls._table_for(sp))
+    def test_ds_with_a_cut_off_is_zero_beyond_it_and_not_flagged_exact(self):
+        # DS(a,n,m): builder type 3, read from the program; no exported
+        # CasaXPS curve of it yet
+        sp = ls.parse_shape("DS(0.1,200,5)")
+        self.assertIsNotNone(ls._table_for(sp))
+        self.assertFalse(ls.is_exact("DS(0.1,200,5)"))
+        x = np.linspace(960.0, 1020.0, 60001)
+        y = ls.component_curve(x, "DS(0.1,200,5)", 1005.0, 1.0, 1.0)
+        # m is in table units (FWHM): nothing further than ~m below the centre
+        self.assertEqual(float(y[x < 1005.0 - 5.2].max()), 0.0)
+        self.assertGreater(float(y[(x > 1005.0 - 4.0) & (x < 1005.0)].sum()), 0.0)
+        self.assertGreaterEqual(float(y.min()), -1e-9)       # reaches zero, not below
+        self.assertAlmostEqual(float(y.sum() * (x[1] - x[0])), 1.0, delta=0.03)
+
+    def test_a_longer_cut_off_lowers_the_peak_towards_plain_ds(self):
+        x = np.linspace(-120.0, 20.0, 40001) + 1005.0
+        peaks = [float(ls.component_curve(x, f"DS(0.1,100,{m})", 1005.0, 1.0, 1.0).max())
+                 for m in (5, 20, 80)]
+        self.assertGreater(peaks[0], peaks[1])
+        self.assertGreater(peaks[1], peaks[2])
+
+    def test_ds_cut_off_bad_numbers_stay_on_the_older_path(self):
+        for shape in ("DS(0.1,200,0)", "DS(0.1,1,5)", "DS(1.5,200,5)",
+                      "DS(0.1,2000,5)"):
+            self.assertIsNone(ls._table_for(ls.parse_shape(shape)), shape)
+        self.assertTrue(ls.check_shape("DS(0.1,200,-1)"))
+
+    def test_the_sg_integration_kernel_sums_to_one(self):
+        k = ls._sg_integration_kernel()
+        self.assertEqual(len(k), 5)
+        self.assertAlmostEqual(float(k.sum()), 1.0, 12)
 
 
 @unittest.skipUnless(HAVE_NP and _pmma_file() and _pmma3_file(),
