@@ -1291,6 +1291,60 @@ def _pmma3_file():
     return path if os.path.isfile(path) else None
 
 
+@unittest.skipUnless(HAVE_NP, "numpy not installed")
+class TestProgramTables(unittest.TestCase):
+    """``LA`` / ``LF`` / ``DS`` are the program's own tables (read from the
+    Ghidra analysis of CasaXPS.exe, see lineshapes._la_table)."""
+
+    X = np.linspace(990.0, 1020.0, 30001)
+
+    def _curve(self, shape, fwhm=1.3):
+        return ls.component_curve(self.X, shape, 1005.0, fwhm, 1.0)
+
+    def _area(self, y):
+        return float(np.sum(y) * (self.X[1] - self.X[0]))
+
+    def test_lf_with_a_distant_tail_cutoff_is_the_la_shape(self):
+        # w -> the cut-off lies far away: the exponent is a/b near the peak,
+        # so the peak matches LA with no Gaussian
+        lf = self._curve("LF(1.1,1.4,1000,0)")
+        la = self._curve("LA(1.1,1.4,0)")
+        self.assertAlmostEqual(float(lf.max()), float(la.max()), delta=0.02 * float(la.max()))
+
+    def test_lf_tail_falls_faster_than_the_la_tail(self):
+        lf = self._curve("LF(1,1,10,0)")
+        la = self._curve("LA(1,1,0)")
+        far = np.abs(self.X - 1005.0) > 10.0
+        self.assertLess(float(lf[far].sum()), 0.5 * float(la[far].sum()))
+
+    def test_lf_repeat_count_is_read_as_the_fifth_number(self):
+        once = self._curve("LF(1,1,50,100)")
+        also_once = self._curve("LF(1,1,50,100,1)")
+        three = self._curve("LF(1,1,50,100,3)")
+        np.testing.assert_allclose(once, also_once)
+        self.assertGreater(float(np.abs(three - once).max()), 0.01 * float(once.max()))
+
+    def test_ds_is_asymmetric_to_low_kinetic_energy(self):
+        y = self._curve("DS(0.1,200)")
+        i = int(np.argmax(y))
+        self.assertAlmostEqual(float(self.X[i]), 1005.0, delta=0.05)
+        low = float(y[self.X < 1005.0].sum())          # high binding energy
+        high = float(y[self.X > 1005.0].sum())
+        self.assertGreater(low, high * 1.05)
+
+    def test_ds_with_gl_suffix_replaces_the_high_ke_tail(self):
+        plain = self._curve("DS(0.1,100)")
+        blend = self._curve("DS(0.1,100)GL(30)")
+        far = self.X > 1008.0
+        # the plain form keeps its power-law tail on both sides; the blend's
+        # high-KE side is the Gaussian-Lorentzian shape
+        self.assertLess(float(blend[far].sum()), 0.8 * float(plain[far].sum()))
+
+    def test_ds_three_number_form_is_not_read_from_the_program(self):
+        sp = ls.parse_shape("DS(0.1,200,0.5)")
+        self.assertIsNone(ls._table_for(sp))
+
+
 @unittest.skipUnless(HAVE_NP and _pmma_file() and _pmma3_file(),
                      "synthetic PMMA LA(m) sweep not present")
 class TestLASweepShape(unittest.TestCase):

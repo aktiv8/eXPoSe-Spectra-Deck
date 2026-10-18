@@ -738,24 +738,34 @@ def gauss_conv(x, y, gfwhm):
     return np.convolve(pad, k, mode="valid")
 
 
-# --- the CasaXPS ``LA`` shape table (read from the program, see below) -------
+# --- the CasaXPS shape tables (read from the program, see below) -------------
 #
-# CasaXPS does not evaluate ``LA(a, b, n)`` as a formula: it tabulates it once
-# and looks the table up (the routine that fills it, and the one that measures
-# it, are in the Ghidra analysis of CasaXPS.exe: functions at 0x14040dad0 and
-# 0x140416980). Every constant below is read from there:
+# CasaXPS does not evaluate ``LA`` / ``LF`` / ``DS`` as formulas: it tabulates
+# each shape once and looks the table up (the routines that fill it, and the
+# one that measures it, are in the Ghidra analysis of CasaXPS.exe: ``LA``
+# 0x14040dad0, ``LF`` 0x14040ead0, ``DS`` 0x14040c5b0, measure 0x140416980).
+# Every constant below is read from there:
 #
-# * A table of ``_TABLE_PTS_FINE`` samples on a grid of ``_TABLE_STEP`` (the
-#   class default, 0x140a6b0a8 = 0.025; a second, coarse array keeps every
-#   ``_TABLE_RATIO``-th point so the table reaches ``_TABLE_FINE_HALF`` *
-#   ``_TABLE_RATIO`` steps from the centre).
-# * ``y = 1 / (1 + 4 x^2) ** a`` for the low-KE (high-BE) side and ``** b`` for
-#   the other side (x is the grid position).
-# * ``n`` > 0 convolves it with a Gaussian of ``2 * floor(n/2) + 1`` samples,
-#   ``exp(-(3 j / half)^2)`` for j = -half..half (half = floor(n/2)), normalised.
-#   When ``n * step`` exceeds 2 the kernel is held at ``floor(2/step) + 1``
-#   samples and the *Lorentzian's* x axis is stretched by ``n * step / 2``
-#   instead, which is how a large ``n`` gives a wider Gaussian.
+# * A table of ``npts`` samples (601 for LA / LF, 1203 for DS) on a grid of
+#   ``_TABLE_STEP`` (the class default, 0x140a6b0a8 = 0.025); a second, coarse
+#   array keeps every ``_TABLE_RATIO``-th point, so the table reaches ``npts``
+#   * ``_TABLE_RATIO`` / 2 steps from the centre.
+# * ``LA(a, b, n)``: ``y = 1 / (1 + 4 x^2) ** a`` for the low-KE (high-BE) side
+#   and ``** b`` for the other side. When ``n * step`` exceeds 2 the Gaussian
+#   kernel is held at ``floor(2/step) + 1`` samples and the *Lorentzian's* x
+#   axis is stretched by ``n * step / 2`` instead, which is how a large ``n``
+#   gives a wide Gaussian.
+# * ``LF(a, b, w, n, k)``: the same with the exponent
+#   ``3 - (3 - a) / (1 + 4 x^2 / w^2)`` (``b`` on the other side), no stretch,
+#   and the Gaussian applied ``k`` times (``k`` = 1 for the four-number form).
+# * ``DS(a, n)``: the Doniach-Sunjic form on the low-KE side
+#   ``cos(pi a / 2 + (1 - a) atan(2x)) / (1 + 4x^2) ** ((1 - a) / 2)``, with x
+#   shifted by ``-1 / tan(pi / (2 - a))``; with a ``GL(m)`` / ``SGL(m)``
+#   suffix the other side is that Gaussian-Lorentzian shape, otherwise the
+#   same form on both sides. One Gaussian kernel of ``n`` samples.
+# * A Gaussian kernel of ``2 * floor(n/2) + 1`` samples (``n`` + 1 when even),
+#   ``exp(-(3 j / half)^2)`` for j = -half..half, normalised, applied by an
+#   edge-extended correlation.
 # * The table is divided by its trapezoid area, its height and half-maximum
 #   points are found (parabola through the top three samples, linear
 #   interpolation at the crossings) and its width is taken as **twice the
@@ -766,11 +776,17 @@ def gauss_conv(x, y, gfwhm):
 # clamp: m is limited to 0..100 and n to 0..1401).
 _TABLE_STEP = 0.025
 _TABLE_RATIO = 40
-_TABLE_FINE_HALF = 300
-_TABLE_SIZE = _TABLE_FINE_HALF * 2 * _TABLE_RATIO + 1
-_TABLE_CENTRE = _TABLE_SIZE // 2
 _KERNEL_SPAN = 3.0                       # kernel runs to +-3 "half" widths
 _LA_MAX_N = 1401
+_LA_POINTS = 601
+_DS_POINTS = 1203
+_LF_MAX_W = 1000.0
+_LF_MAX_N = 1401
+_LF_MAX_K = 20
+
+
+def _table_size(npts):
+    return (npts - 1) * _TABLE_RATIO + 1
 
 
 def _la_n(m):
@@ -783,16 +799,17 @@ def _la_n(m):
     return max(0, min(_LA_MAX_N, v))
 
 
-def _measure_table(y):
+def _measure_table(y, npts):
     """``(width, offset)`` of a table in grid units: twice the smaller
     half-width at half maximum, and where the peak sits relative to the
     centre. ``None`` when no half-maximum point is found."""
     np = _np()
-    c = _TABLE_CENTRE
-    fine = y[c - _TABLE_FINE_HALF:c + _TABLE_FINE_HALF + 1]
-    coarse = y[c - _TABLE_FINE_HALF * _TABLE_RATIO:
-               c + _TABLE_FINE_HALF * _TABLE_RATIO + 1:_TABLE_RATIO]
-    mid = _TABLE_FINE_HALF
+    c = (len(y) - 1) // 2
+    half_n = (npts - 1) // 2
+    fine = y[c - half_n:c + half_n + 1]
+    coarse = y[c - half_n * _TABLE_RATIO:c + half_n * _TABLE_RATIO + 1:
+               _TABLE_RATIO]
+    mid = half_n
     p = int(np.argmax(fine))
     if fine[p] <= fine[mid]:
         p = mid
@@ -827,58 +844,162 @@ def _measure_table(y):
     return 2.0 * min(left, right), (p - mid) * _TABLE_STEP
 
 
+def _gauss_smooth(y, n, repeats=1):
+    """``y`` correlated with the Gaussian kernel of ``n`` samples (made odd),
+    ``repeats`` times, the ends extended flat. ``n`` < 2 changes nothing."""
+    np = _np()
+    if n <= 1:
+        return y
+    if (n // 2) * 2 == n:
+        n += 1
+    half = n // 2
+    j = np.arange(n) - half
+    kern = np.exp(-(_KERNEL_SPAN * j / half) ** 2)
+    kern /= kern.sum()
+    for _ in range(max(1, int(repeats))):
+        pad = np.concatenate([np.full(half, y[0]), y, np.full(half, y[-1])])
+        y = np.convolve(pad, kern, mode="valid")
+    return y
+
+
+def _grid(npts):
+    np = _np()
+    size = _table_size(npts)
+    return np.arange(size), (size - 1) // 2
+
+
+def _finish_table(y, npts):
+    """``(y, width, offset, npts)``: the table divided by its trapezoid area,
+    with its measured width and peak offset (width 1 when it cannot be
+    measured)."""
+    area = (float(y.sum()) - 0.5 * float(y[0] + y[-1])) * _TABLE_STEP
+    y = y / area if area > 0 else y
+    m = _measure_table(y, npts)
+    return (y, m[0] if m else 1.0, m[1] if m else 0.0, npts)
+
+
 _TABLE_CACHE = {}
 
 
-def _la_table(a, b, n):
-    """``(y, width, offset)`` for ``LA(a, b, n)``: the area-normalised table
-    (``_TABLE_SIZE`` samples, ``_TABLE_STEP`` apart, centred on
-    ``_TABLE_CENTRE``), its measured width and its peak offset (grid units).
-    ``width`` is 1 when it cannot be measured."""
-    key = (round(float(a), 9), round(float(b), 9), int(n))
+def _cached(key, build):
     hit = _TABLE_CACHE.get(key)
-    if hit is not None:
-        return hit
-    np = _np()
-    a, b, n = key
-    scale, ne = 1.0, n
-    if 2.0 < n * _TABLE_STEP:
-        scale = 2.0 / (n * _TABLE_STEP)
-        ne = int(math.floor(2.0 / _TABLE_STEP)) + 1
-    idx = np.arange(_TABLE_SIZE)
-    x = _TABLE_STEP * (idx - _TABLE_CENTRE) / scale
-    lor = 1.0 / (1.0 + 4.0 * x * x)
-    y = np.where(idx > _TABLE_CENTRE, lor ** b, lor ** a)
-    if ne > 1:
-        if (ne // 2) * 2 == ne:
-            ne += 1
-        half = ne // 2
-        j = np.arange(ne) - half
-        kern = np.exp(-(_KERNEL_SPAN * j / half) ** 2)
-        kern /= kern.sum()
-        pad = np.concatenate([np.full(half, y[0]), y, np.full(half, y[-1])])
-        y = np.convolve(pad, kern, mode="valid")
-    area = (float(y.sum()) - 0.5 * float(y[0] + y[-1])) * _TABLE_STEP
-    y = y / area if area > 0 else y
-    m = _measure_table(y)
-    out = (y, m[0] if m else 1.0, m[1] if m else 0.0)
-    if len(_TABLE_CACHE) > 128:
-        _TABLE_CACHE.clear()
-    _TABLE_CACHE[key] = out
-    return out
+    if hit is None:
+        if len(_TABLE_CACHE) > 96:
+            _TABLE_CACHE.clear()
+        hit = _TABLE_CACHE[key] = build()
+    return hit
 
 
-def _la_values(x, pos, fwhm, a, b, n, area):
-    """The ``LA(a, b, n)`` component of the given ``area`` on ``x``: the
-    table looked up at ``(x - pos) / fwhm`` in units of its own measured
-    width, so the area is the table's own (1) times ``area``."""
+def _la_table(a, b, n):
+    """The table of ``LA(a, b, n)``; see the block comment above."""
+    key = ("LA", round(float(a), 9), round(float(b), 9), int(n))
+
+    def build():
+        np = _np()
+        _, a_, b_, n_ = key
+        scale, ne = 1.0, n_
+        if 2.0 < n_ * _TABLE_STEP:
+            scale = 2.0 / (n_ * _TABLE_STEP)
+            ne = int(math.floor(2.0 / _TABLE_STEP)) + 1
+        idx, c = _grid(_LA_POINTS)
+        x = _TABLE_STEP * (idx - c) / scale
+        lor = 1.0 / (1.0 + 4.0 * x * x)
+        y = np.where(idx > c, lor ** b_, lor ** a_)
+        return _finish_table(_gauss_smooth(y, ne), _LA_POINTS)
+    return _cached(key, build)
+
+
+def _lf_table(a, b, w, n, k):
+    """The table of ``LF(a, b, w, n, k)`` (``w`` in the table's own units)."""
+    key = ("LF", round(float(a), 9), round(float(b), 9), round(float(w), 9),
+           int(n), int(k))
+
+    def build():
+        np = _np()
+        _, a_, b_, w_, n_, k_ = key
+        idx, c = _grid(_LA_POINTS)
+        x = _TABLE_STEP * (idx - c)
+        suppress = 1.0 / (1.0 + 4.0 * x * x / (w_ * w_))
+        side = np.where(idx > c, b_, a_)
+        y = 1.0 / (1.0 + 4.0 * x * x) ** (3.0 - (3.0 - side) * suppress)
+        return _finish_table(_gauss_smooth(y, n_, k_), _LA_POINTS)
+    return _cached(key, build)
+
+
+def _ds_table(a, n, mode, mix):
+    """The table of ``DS(a, n)`` (``mode`` 2), ``DS(a, n)GL(m)`` (0) or
+    ``DS(a, n)SGL(m)`` (1), ``mix`` = m / 100."""
+    key = ("DS", round(float(a), 9), int(n), int(mode), round(float(mix), 9))
+
+    def build():
+        np = _np()
+        _, a_, n_, mode_, mix_ = key
+        idx, c = _grid(_DS_POINTS)
+        shift = 0.0
+        if 1e-8 < a_ < 0.9999999:
+            shift = -1.0 / math.tan(math.pi / (2.0 - a_))
+        x = _TABLE_STEP * (idx - c) - shift
+        ds = (np.cos(math.pi * a_ * 0.5 + (1.0 - a_) * np.arctan(2.0 * x))
+              / (1.0 + 4.0 * x * x) ** ((1.0 - a_) * 0.5))
+        if mode_ == 2:
+            y = ds
+        elif mode_ == 0:
+            right = (np.exp(-(1.0 - mix_) * _LN2_4 * x * x)
+                     / (1.0 + mix_ * x * x * 4.0))
+            y = np.where(idx > c, right, ds)
+        else:
+            right = ((1.0 - mix_) * np.exp(-_LN2_4 * x * x)
+                     + mix_ / (1.0 + 4.0 * x * x))
+            y = np.where(idx > c, right, ds)
+        return _finish_table(_gauss_smooth(y, n_), _DS_POINTS)
+    return _cached(key, build)
+
+
+def _table_values(table, x, pos, fwhm, area):
+    """A component of the given ``area`` on ``x``: the table looked up at
+    ``(x - pos) / fwhm`` in units of its own measured width, so its area is
+    the table's own (1) times ``area``."""
     np = _np()
-    y, width, off = _la_table(a, b, n)
+    y, width, off, npts = table
     u = (np.asarray(x, dtype=float) - pos) / fwhm * width + off
-    grid = _TABLE_STEP * (np.arange(_TABLE_SIZE) - _TABLE_CENTRE)
+    size = _table_size(npts)
+    grid = _TABLE_STEP * (np.arange(size) - (size - 1) // 2)
     # a position beyond the table (hundreds of FWHM away) counts as zero (the
     # program's own lookup past its table was not read)
     return np.interp(u, grid, y, left=0.0, right=0.0) * (area * width / fwhm)
+
+
+def _table_for(sp):
+    """The table of a parsed shape, or ``None`` for a shape that is not (or
+    not yet) read from the program."""
+    kind = sp["kind"]
+    if kind == "LA":
+        return _la_table(sp["a"], sp["b"], _la_n(sp["m"]))
+    if kind == "LF" and sp["w"] > 0 and len(sp["params"]) in (4, 5):
+        ps = sp["params"]
+        k = int(ps[4]) if len(ps) > 4 else 1
+        return _lf_table(sp["a"], sp["b"], min(sp["w"], _LF_MAX_W),
+                         min(_la_n(sp["m"]), _LF_MAX_N),
+                         min(max(k, 0), _LF_MAX_K))
+    if kind == "DS" and len(sp["params"]) in (1, 2):
+        # DS(a, n)GL(m) / DS(a, n)SGL(m) / DS(a, n) / DS(a); n of 1 or past
+        # 1400 is refused by the program, read here as none
+        n = _la_n(sp["m"])
+        n = n if 2 <= n <= 1400 else 0
+        suffix = sp.get("suffix") or ""
+        bm = _A_BASE_RE.match(suffix)
+        if bm and bm.group(2):
+            try:
+                mix = float(bm.group(2)) / 100.0
+            except ValueError:
+                return None
+            if not 0.0 <= mix <= 1.0:
+                return None
+            return _ds_table(sp["a"], n, 0 if bm.group(1).upper() == "GL" else 1,
+                             mix)
+        if not suffix:
+            return _ds_table(sp["a"], n, 2, 0.0)
+    return None
 
 
 def _half_width_term(p):
@@ -1102,10 +1223,10 @@ def component_curve(ke, shape, pos, fwhm, area):
     ke = np.asarray(ke, dtype=float)
     sp = parse_shape(shape)
     fwhm = fwhm if fwhm and fwhm > 0 else 1.0
-    if sp["kind"] == "LA":
-        # a table lookup, not a formula (see _la_table); its own area is 1
-        return _la_values(ke, pos, fwhm, sp["a"], sp["b"], _la_n(sp["m"]),
-                          area)
+    table = _table_for(sp)
+    if table is not None:
+        # LA / LF / DS: a table lookup, not a formula (see _la_table)
+        return _table_values(table, ke, pos, fwhm, area)
     v = _raw_values(ke, sp, pos, fwhm)
     if sp["kind"] in ("GL", "SGL", "VOIGT", "AV", "AVP"):
         conv = v
