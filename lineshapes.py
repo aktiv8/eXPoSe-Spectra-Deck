@@ -545,6 +545,12 @@ def parse_shape(text) -> dict:
             # (LA(0) -> n=1401, LA(100) -> n=0).
             raw = min(max(ps[0] if ps else 0.0, 0.0), 100.0)
             out.update(m=float(_LA_MAX_N - math.floor(raw / 100.0 * _LA_MAX_N)))
+    elif kind == "LS":
+        # LS(a, b, n); the two-number form LS(a, n) is LS(a, a, n)
+        if len(ps) >= 3:
+            out.update(a=ps[0], b=ps[1], m=ps[2])
+        elif len(ps) == 2:
+            out.update(a=ps[0], b=ps[0], m=ps[1])
     elif kind == "LAG":
         # LAG(a, b, r): this module's own name (not a CasaXPS shape) for
         # KherveFitting's LA x G, the shared-width asymmetric Lorentzian
@@ -604,6 +610,11 @@ def is_exact(shape) -> bool:
         # no exported curves to compare with, so it stays flagged
         return (not ps["tail"] and not ps["suffix"]
                 and abs(ps["a"] - ps["b"]) < 1e-9)
+    if ps["kind"] == "LS":
+        # the program's table with the "Moving Average" kernel, checked against
+        # CasaXPS's exported curves (a and b of 0.5-1.5, n of 10-500)
+        return (len(ps["params"]) in (2, 3) and not ps["tail"]
+                and not ps["suffix"] and ps["a"] > 0 and ps["b"] > 0)
     if ps["kind"] == "E":
         # checked against CasaXPS's exported curves (a = 1, 0.5 and 0.1)
         bm = _A_BASE_RE.match(ps.get("suffix") or "")
@@ -689,6 +700,13 @@ def check_shape(shape) -> list:
             bad.append("LA's exponents must be positive")
         if n >= 2 and ps["m"] < 0:
             bad.append("LA's Gaussian index cannot be negative")
+    elif kind == "LS":
+        if n not in (2, 3):
+            bad.append("LS needs two or three parameters")
+        elif ps["a"] <= 0 or ps["b"] <= 0:
+            bad.append("LS's exponents must be positive")
+        elif ps["m"] < 0:
+            bad.append("LS's kernel width cannot be negative")
     elif kind == "LF":
         if n < 4:
             bad.append("LF needs four (or five) parameters")
@@ -802,6 +820,10 @@ def gauss_conv(x, y, gfwhm):
 # * ``TLA(a, mu, n)`` (type 7 of the same routine, so the same kernel clamp and
 #   stretch): ``y = (pi/2 - atan(2x) + pi/mu) / (1 + 4 x^2) ** a`` on both
 #   sides (``TLA(mu, n)`` is ``a`` = 1; ``mu`` 0 drops the tail term).
+# * ``LS(a, b, n)`` / ``LS(a, n)`` (b = a): type 1 of the same builder, which
+#   takes the kernel by name, ``Moving Average``: a boxcar of ``2 * floor(n/2) +
+#   1`` equal samples (the "square Lorentzian" of the literature) in place of
+#   the Gaussian; the stretch / clamp at ``n * step > 2`` is the same.
 # * ``LF(a, b, w, n, k)``: the same with the exponent
 #   ``3 - (3 - a) / (1 + 4 x^2 / w^2)`` (``b`` on the other side), no stretch,
 #   and the Gaussian applied ``k`` times (``k`` = 1 for the four-number form).
@@ -921,6 +943,22 @@ def _gauss_smooth(y, n, repeats=1):
     return y
 
 
+def _boxcar_smooth(y, n, repeats=1):
+    """``y`` correlated with the "Moving Average" kernel of ``n`` samples (made
+    odd): all samples equal, normalised; the ends extended flat."""
+    np = _np()
+    if n <= 1:
+        return y
+    if (n // 2) * 2 == n:
+        n += 1
+    half = n // 2
+    kern = np.full(n, 1.0 / n)
+    for _ in range(max(1, int(repeats))):
+        pad = np.concatenate([np.full(half, y[0]), y, np.full(half, y[-1])])
+        y = np.convolve(pad, kern, mode="valid")
+    return y
+
+
 def _grid(npts):
     np = _np()
     size = _table_size(npts)
@@ -955,13 +993,15 @@ def _cached(key, build):
     return hit
 
 
-def _la_table(a, b, n):
-    """The table of ``LA(a, b, n)``; see the block comment above."""
-    key = ("LA", round(float(a), 9), round(float(b), 9), int(n))
+def _la_table(a, b, n, boxcar=False):
+    """The table of ``LA(a, b, n)`` (``boxcar`` False) or ``LS(a, b, n)``
+    (True); see the block comment above."""
+    key = ("LS" if boxcar else "LA", round(float(a), 9), round(float(b), 9),
+           int(n))
 
     def build():
         np = _np()
-        _, a_, b_, n_ = key
+        kind_, a_, b_, n_ = key
         scale, ne = 1.0, n_
         if 2.0 < n_ * _TABLE_STEP:
             scale = 2.0 / (n_ * _TABLE_STEP)
@@ -970,7 +1010,8 @@ def _la_table(a, b, n):
         x = _TABLE_STEP * (idx - c) / scale
         lor = 1.0 / (1.0 + 4.0 * x * x)
         y = np.where(idx > c, lor ** b_, lor ** a_)
-        return _finish_table(_gauss_smooth(y, ne), _LA_POINTS)
+        smooth = _boxcar_smooth if kind_ == "LS" else _gauss_smooth
+        return _finish_table(smooth(y, ne), _LA_POINTS)
     return _cached(key, build)
 
 
@@ -1169,6 +1210,9 @@ def _table_for(sp):
     kind = sp["kind"]
     if kind == "LA":
         return _la_table(sp["a"], sp["b"], _la_n(sp["m"]))
+    if kind == "LS" and sp["a"] > 0 and sp["b"] > 0 \
+            and len(sp["params"]) in (2, 3):
+        return _la_table(sp["a"], sp["b"], _la_n(sp["m"]), True)
     if kind in ("GL", "SGL") and len(sp["params"]) in (1, 2) \
             and 0.0 <= sp["mix"] <= 100.0:
         # GL(m), GL(m, n), each with an optional T(k) or PHI(j, w) / SL(j, w)

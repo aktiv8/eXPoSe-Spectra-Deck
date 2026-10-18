@@ -306,7 +306,7 @@ class TestShapes(unittest.TestCase):
         using its first parameter as a 0-100 % mix -- e.g. DS(0.09,500) drew
         as an almost-pure Gaussian GL(0.09) and reported itself as exact.
         parse_shape must keep the real name and is_exact must say False."""
-        for shape in ("QF(1,2,3,4)", "H(0.09,250)", "LS(1.53,243,0.2)"):
+        for shape in ("QF(1,2,3,4)", "H(0.09,250)", "SS(1.53,243,0.2)"):
             p = ls.parse_shape(shape)
             self.assertNotEqual(p["kind"], "GL", shape)
             self.assertFalse(ls.is_exact(shape), shape)
@@ -1373,6 +1373,31 @@ class TestProgramTables(unittest.TestCase):
         for shape in ("GL(30)PHI(-1,3)", "GL(30)PHI(1,0)", "GL(30,2500)PHI(1,3)",
                       "GL(30)PHI(1)"):
             self.assertIsNone(ls._table_for(ls.parse_shape(shape)), shape)
+
+    def test_ls_is_la_with_a_boxcar_kernel(self):
+        # n = 0: no kernel at all, so LS and LA are the same table
+        np.testing.assert_allclose(self._curve("LS(1,1,0)"),
+                                   self._curve("LA(1,1,0)"), atol=1e-12)
+        # the two-number form is a = b
+        np.testing.assert_allclose(self._curve("LS(1.2,40)"),
+                                   self._curve("LS(1.2,1.2,40)"))
+        # the boxcar is a different kernel from the Gaussian: same n, a
+        # visibly different peak
+        ls_c, la_c = self._curve("LS(1,1,150)"), self._curve("LA(1,1,150)")
+        self.assertGreater(float(np.abs(ls_c - la_c).max()),
+                           0.05 * float(la_c.max()))
+        # and an invalid exponent is refused
+        self.assertTrue(ls.check_shape("LS(0,1,10)"))
+        self.assertEqual(ls.check_shape("LS(1,1,10)"), [])
+
+    def test_the_boxcar_kernel_is_normalised_and_odd(self):
+        y = np.zeros(101)
+        y[50] = 1.0
+        for n in (2, 3, 10, 11):
+            out = ls._boxcar_smooth(y, n)
+            self.assertAlmostEqual(float(out.sum()), 1.0, 12)
+            width = int(np.count_nonzero(out > 1e-12))
+            self.assertEqual(width, n + 1 if n % 2 == 0 else n)
 
     def test_e_is_read_from_the_program_and_exact(self):
         # E(a,b,n)GL(m): builder 0x14040f950; checked against CasaXPS's

@@ -16,6 +16,7 @@ components in its header:
 * ``E with GL and SGL.csv`` - Au 4d, nine ``E(1,b,n)GL|SGL(m)`` fits
 * ``more E and PHI.csv`` - three more ``E`` fits (a = 1, 0.5, 0.1) and six
   ``GL(m,n)PHI(j,w)`` fits (``SL`` makes the same call as ``PHI``)
+* ``ls shapes.csv`` - Au 4d, ten ``LS(a,b,n)`` fits (a, b 0.5-1.5, n 10-500)
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -290,6 +291,32 @@ class TestELiteral(unittest.TestCase):
                                         "E(1,1,50)SGL(90)"])
         for shape, err in seen.items():
             self.assertLess(err, 0.004, shape)
+
+
+@unittest.skipUnless(HAVE_NP and _path("ls shapes.csv"), "ls shapes.csv not found")
+class TestLsLiteral(unittest.TestCase):
+    """``LS(a,b,n)``: the ``LA`` table with the "Moving Average" (boxcar)
+    kernel, the stated Area used as it is. n above 80 takes the stretch /
+    clamp path."""
+
+    def test_every_fit_matches_casaxps(self):
+        seen = 0
+        for info, head, cols in _blocks(_path("ls shapes.csv")):
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            lit = cols[:, 2] - bg
+            shape = info["Lineshape"][0]
+            mine = np.empty_like(lit)
+            mine[order] = ls.component_curve(
+                ke[order], shape, HV - float(info["Position"][0]),
+                float(info["FWHM"][0]), float(info["Area"][0]))
+            err = float(np.abs(mine - lit).max() / lit.max())
+            self.assertLess(err, 0.005, shape)
+            self.assertTrue(ls.is_exact(shape), shape)
+            seen += 1
+        self.assertEqual(seen, 10)
 
 
 if __name__ == "__main__":
