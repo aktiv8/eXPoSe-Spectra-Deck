@@ -342,10 +342,14 @@ class StubVgd(SpectrumFile):
     """Stands in for ``ThermoVgdFile``: one synthetic spectrum per file name,
     a flat 1000 counts/s plus the fitted peaks of the demo project drawn in
     ``MODE`` (the Avantage sum ``AV`` or product ``AVP``, tail included).
-    ``TWO`` gives the Pd file a second, identical trace (a "Compare" overlay)."""
+    ``TWO`` gives the Pd file a second trace (a "Compare" overlay): ``True``
+    an identical one, ``"second"`` a first trace that is only the background,
+    so that only the second one is described by the fit. ``DROP`` leaves the
+    named peak out of the data (a project whose fit is incomplete)."""
     format_name = "stub"
     MODE = "AV"
     TWO = False
+    DROP = None
 
     def load(self, path):
         import numpy as np
@@ -356,16 +360,18 @@ class StubVgd(SpectrumFile):
         ke = np.arange(lo, hi, 0.1)
         y = np.full(len(ke), 1000.0)
         for p in PEAKS:
-            if lo < p["ke"] < hi:
+            if lo < p["ke"] < hi and p["name"] != self.DROP:
                 sp = ls.parse_shape(_peak_shape(p, self.MODE))
                 y += p["height"] / DWELL * ls._raw_values(ke, sp, p["ke"],
                                                           p["fwhm"])
         self.kind = "spectrum"
         self.regions = []
         for i in range(2 if (self.TWO and base == "Pd") else 1):
+            flat = self.TWO == "second" and i == 0
             self.regions.append(Region(
                 name=name, index=i, offset=i, decodable=True,
-                energy=list(HV - ke), counts=list(y * DWELL),
+                energy=list(HV - ke),
+                counts=list((np.full(len(ke), 1000.0) if flat else y) * DWELL),
                 photon_energy=HV, dwell=DWELL, extra={"n_scans": 1}))
         return self._finish()
 
@@ -389,7 +395,7 @@ class TestProjectFile(unittest.TestCase):
 
     def tearDown(self):
         V.ThermoVgdFile = self._real
-        StubVgd.MODE, StubVgd.TWO = "AV", False
+        StubVgd.MODE, StubVgd.TWO, StubVgd.DROP = "AV", False, None
         import shutil
         shutil.rmtree(self.dir, ignore_errors=True)
 
@@ -469,13 +475,41 @@ class TestProjectFile(unittest.TestCase):
         cv = casafit.curves(c1s.fit, c1s.energy, c1s.counts, HV, DWELL, 1)[0]
         self.assertTrue(any("neither" in n for n in cv.notes))
 
-    def test_only_the_first_of_several_traces_carries_the_fit(self):
+    def test_of_several_identical_traces_the_first_carries_the_fit(self):
         StubVgd.TWO = True
         regs = self._doc().regions
         self.assertEqual([r.name for r in regs],
                          ["C 1s", "Pd 3d", "Pd 3d", "O 1s"])
         self.assertIsNotNone(regs[1].fit)
         self.assertIsNone(regs[2].fit)
+        self.assertEqual(regs[1].extra["avantage_level"], 0)
+
+    def test_the_fit_goes_to_the_trace_it_describes(self):
+        import casafit
+        StubVgd.TWO = "second"            # the first trace is only background
+        regs = self._doc().regions
+        self.assertIsNone(regs[1].fit)
+        self.assertIsNotNone(regs[2].fit)
+        self.assertEqual(regs[2].extra["avantage_level"], 1)
+        r = regs[2]
+        cv = casafit.curves(r.fit, r.energy, r.counts, HV, DWELL, 1)[0]
+        self.assertLess(cv.residual_rms, 0.05)
+        self.assertTrue(any("trace 2" in n for n in cv.notes))
+
+    def test_a_fit_that_leaves_much_unexplained_says_so(self):
+        import casafit
+        c1s = self._doc().regions[0]
+        cv = casafit.curves(c1s.fit, c1s.energy, c1s.counts, HV, DWELL, 1)[0]
+        self.assertFalse(any("unexplained" in n for n in cv.notes))
+        StubVgd.DROP = "C1s C-C"          # the data lack the project's main peak
+        try:
+            c1s = self._doc().regions[0]
+        finally:
+            StubVgd.DROP = None
+        cv = casafit.curves(c1s.fit, c1s.energy, c1s.counts, HV, DWELL, 1)[0]
+        self.assertGreater(cv.residual_rms, V.POOR_FIT)
+        note = next(n for n in cv.notes if "unexplained" in n)
+        self.assertIn("2 peaks", note)
 
     def test_members_name_the_project_and_its_spectra(self):
         doc = self._doc()
@@ -628,7 +662,7 @@ class TestRealProjects(unittest.TestCase):
         import casafit
         import quant
         np = self.np
-        sym, tails, n_fits, modes = [], [], 0, set()
+        sym, tails, n_fits, modes, poor = [], [], 0, set(), []
         for path, prj in self.projects:
             doc = readers.load_file(path)
             self.assertIsInstance(doc, V.ThermoProjectFile, path)
@@ -643,6 +677,9 @@ class TestRealProjects(unittest.TestCase):
                 self.assertTrue(cv, path)
                 self.assertTrue(cv[0].approximate)       # never claimed exact
                 self.assertTrue(quant.fit_rows(r), path)
+                if cv[0].residual_rms > V.POOR_FIT:
+                    poor.append((r.source, any("unexplained" in n
+                                               for n in cv[0].notes)))
                 has_tail = any(
                     not (abs(t[0]) < 1e-9 and abs(t[1] - 1.0) < 1e-9)
                     for t in (self.ls.parse_shape(c.shape)["tail_terms"]
@@ -653,13 +690,32 @@ class TestRealProjects(unittest.TestCase):
         self.assertEqual(modes, {"AV", "AVP"})            # both are found
         # measured on the 129 projects (114 fitted spectra): no tail median
         # 1.1 % of the range (p90 2.8 %, max 5.7 %); with the manual's tail
-        # median 1.3 % (p90 2.8 %). Two spectra do not match their fit at all
-        # (native Al oxide on Al's second spectrum, Cd native oxide on metal)
+        # median 1.3 % (p90 2.8 %). One spectrum does not match its fit:
+        # native Al oxide on Al's al2p_1, whose project lists no oxide peak
+        # for it; it says so (the Cd native oxide file's fit sits on its
+        # second trace and is read as the product shape, 7 %)
         self.assertLess(float(np.median(sym)), 0.02)
         self.assertLess(float(np.max(sym)), 0.08)
         self.assertLess(float(np.median(tails)), 0.025)
         self.assertLess(float(np.percentile(tails, 90)), 0.05)
-        self.assertLessEqual(int(np.sum(np.array(tails) > 0.1)), 3)
+        self.assertEqual([src for src, said in poor], ["al2p_1.VGD"])
+        self.assertTrue(all(said for _src, said in poor))
+
+    def test_a_two_level_file_gets_its_fit_on_the_level_it_describes(self):
+        path = os.path.join(CORPUS, "Cd native oxide on metal.vgp")
+        if not os.path.isfile(path):
+            self.skipTest("Cd native oxide on metal.vgp not in the corpus")
+        doc = readers.load_file(path)
+        fitted = [r for r in doc.regions if r.fit is not None]
+        self.assertEqual(len(fitted), 1)
+        self.assertEqual(fitted[0].extra["avantage_level"], 1)
+        self.assertEqual(fitted[0].fit.components[0].shape.split("(")[0], "AVP")
+        import casafit
+        r = fitted[0]
+        dwell, scans = r.dwell_and_scans()
+        cv = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
+                            dwell, scans)[0]
+        self.assertLess(cv.residual_rms, 0.09)
 
 
 if __name__ == "__main__":

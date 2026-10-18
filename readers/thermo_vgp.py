@@ -405,6 +405,7 @@ def load(path: str) -> Project:
 SOURCE = "Avantage"
 PRODUCT_TOL = 0.02        # stored area within this of the product's: product
 MATCH_TOL = 0.05          # within this of either shape: the unit is understood
+POOR_FIT = 0.10           # residual (share of the data range) said on the plot
 
 
 def sniff(head: bytes, ext: str) -> bool:
@@ -440,6 +441,15 @@ def shape_of(peak: FittedPeak, mode: str = "AV", step: float = 0.0) -> str:
     t = peak.tail
     return (f"{mode}({100.0 * peak.mix:.6g},{t[0]:.6g},{t[1]:.6g},{t[2]:.6g},"
             f"{step:.6g})")
+
+
+def residual_of(fit, region):
+    """The reconstructed fit's rms residual as a share of the data range on
+    ``region``, or None when it cannot be worked out."""
+    dwell, scans = region.dwell_and_scans()
+    cv = casafit.curves(fit, region.energy, region.counts,
+                        region.photon_energy, dwell, scans)
+    return cv[0].residual_rms if cv else None
 
 
 def detect_mode(peaks, k: float, step: float, lo: float, hi: float):
@@ -584,11 +594,10 @@ class ThermoProjectFile(ThermoExperiment):
                        and r.photon_energy]
             peaks = prj.peaks_of(di)
             bg = prj.background_of(di)
-            # A .VGD can hold several traces (the "Compare" overlays of the
-            # Knowledge projects): the fit belongs to the first one that
-            # holds its peaks (6 of the 7 such files; on the second trace the
-            # same fit leaves 28-38 % of the range unexplained), so the
-            # others are shown without it.
+            # A .VGD can hold several traces (the two levels of a "Compare"
+            # file): the file does not say which one a fit belongs to, so the
+            # fit goes to the one it describes best (the first on a tie).
+            cands = []
             for r in regions:
                 if len(regions) == 1:
                     mine = peaks
@@ -604,9 +613,29 @@ class ThermoProjectFile(ThermoExperiment):
                         f"{r.name}: the dwell time is unknown, so the fit "
                         "cannot be drawn (its heights are in counts)")
                     continue
-                r.fit = fit_for(mine, bg, r, dwell, scans)
-                r.extra["fit_source"] = SOURCE
-                r.extra["avantage_peaks"] = [
-                    {"name": p.name, "area": p.area, "height_counts": p.height,
-                     "tail": list(p.tail)} for p in mine]
-                break
+                fit = fit_for(mine, bg, r, dwell, scans)
+                cands.append((r, mine, fit, residual_of(fit, r)))
+            if not cands:
+                continue
+            best = min(range(len(cands)), key=lambda i: (
+                cands[i][3] if cands[i][3] is not None else float("inf"), i))
+            r, mine, fit, rms = cands[best]
+            extra = []
+            if best:
+                extra.append(f"the project's fit matches trace {best + 1} of "
+                             "this file; the first fits far worse")
+            if rms is not None and rms > POOR_FIT:
+                n = len(mine)
+                extra.append(f"the project's fit leaves {100 * rms:.0f} % of "
+                             "the range unexplained (the project lists "
+                             f"{n} peak{'s' if n != 1 else ''} for this "
+                             "spectrum)")
+            if extra:
+                reg = fit.regions[0]
+                reg.note = "; ".join(x for x in [reg.note] + extra if x)
+            r.fit = fit
+            r.extra["fit_source"] = SOURCE
+            r.extra["avantage_level"] = best
+            r.extra["avantage_peaks"] = [
+                {"name": p.name, "area": p.area, "height_counts": p.height,
+                 "tail": list(p.tail)} for p in mine]
