@@ -19,6 +19,8 @@ components in its header:
 * ``ls shapes.csv`` - Au 4d, ten ``LS(a,b,n)`` fits (a, b 0.5-1.5, n 10-500)
 * ``qf.csv`` - Au 4d, 13 fits: nine ``QF(a,b,w,n[,k])`` and four ``QSF``
   (a 0.5-1, b 1-12, w 20-50, n 0-100, k 1-12)
+* ``ds 3 param noe second cannot be 0.csv`` - C 1s, three ``DS(a,n,m)`` carbide
+  components (a 0.01 and 0.1, n 2 and 3, m 400; the program refuses n of 0 and 1)
 * ``TLA lineshape.csv`` - Si 2p, two ``TLA(1,9.46667,222)`` components
 
 Only the shape is compared (the curve is scaled to the literal one); the
@@ -344,6 +346,43 @@ class TestQfLiteral(unittest.TestCase):
             self.assertTrue(ls.is_exact(shape), shape)
             seen[shape.split("(")[0]] += 1
         self.assertEqual(seen, {"QF": 9, "QSF": 4})
+
+
+@unittest.skipUnless(HAVE_NP and _path("ds 3 param noe second cannot be 0.csv"),
+                     "ds 3 param noe second cannot be 0.csv not found")
+class TestDsCutoffLiteral(unittest.TestCase):
+    """``DS(a,n,m)``: the DS form with the program's finite-extent correction.
+    The stated Area is used as it is. Agreement is 0.9-1.4 % of the peak (the
+    older code, which read m as nothing, was 73-82 % out); the plain DS(a,n)
+    under it is 0.6-1.3 % out against the same curves at these small n, so the
+    remainder is not the cut-off."""
+
+    def test_the_three_fits_are_close_to_casaxps(self):
+        seen = 0
+        for info, head, cols in _blocks(_path("ds 3 param noe second cannot be 0.csv")):
+            k = 4                      # the carbide DS component of each block
+            shape = info["Lineshape"][k]
+            if shape.count(",") != 2:
+                continue
+            be = cols[:, 0]
+            bg = cols[:, head.index("Background")]
+            ke = HV - be
+            order = np.argsort(ke)
+            ci = [i for i, h in enumerate(head)
+                  if i > 1 and h not in ("Background", "Envelope")][k]
+            lit = cols[:, ci] - bg
+            mine = np.empty_like(lit)
+            mine[order] = ls.component_curve(
+                ke[order], shape, HV - float(info["Position"][k]),
+                float(info["FWHM"][k]), float(info["Area"][k]))
+            err = float(np.abs(mine - lit).max() / lit.max())
+            self.assertLess(err, 0.02, shape)
+            # the far tails, where the cut-off correction acts, agree to a
+            # few tenths of a per cent of the peak
+            tail = float(np.abs(mine - lit)[(be > 290) | (be < 279)].max() / lit.max())
+            self.assertLess(tail, 0.005, shape)
+            seen += 1
+        self.assertEqual(seen, 3)
 
 
 if __name__ == "__main__":

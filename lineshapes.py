@@ -849,8 +849,9 @@ def gauss_conv(x, y, gfwhm):
 #   shifted by ``-1 / tan(pi / (2 - a))``; with a ``GL(m)`` / ``SGL(m)``
 #   suffix the other side is that Gaussian-Lorentzian shape, otherwise the
 #   same form on both sides. One Gaussian kernel of ``n`` samples.
-# * ``DS(a, n, m)`` (builder type 3; **read from the program, not yet checked
-#   against exported curves**): the Doniach-Sunjic form on both sides, zeroed
+# * ``DS(a, n, m)`` (builder type 3; checked against three exported curves to
+#   0.9-1.4 % of the peak, the plain ``DS`` it is built on to 0.6-1.3 % for
+#   these small n, so not flagged exact): the Doniach-Sunjic form on both sides, zeroed
 #   below ``m`` (table units) to the low-KE side of the centre, then
 #   ``y - (y_cut / I_cut) * I`` where ``I(x)`` is the integral of that table from
 #   ``x`` up to the table's high-KE end (Savitzky-Golay window 5, order 2
