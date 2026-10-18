@@ -1374,6 +1374,36 @@ class TestProgramTables(unittest.TestCase):
                       "GL(30)PHI(1)"):
             self.assertIsNone(ls._table_for(ls.parse_shape(shape)), shape)
 
+    def test_lsf_qf_qsf_are_read_from_the_program_but_not_flagged_exact(self):
+        # builder 0x14040ead0 types 1, 4, 5; no exported CasaXPS curve yet
+        for shape in ("LSF(0.7,1.5,75,100)", "QF(0.7,1.5,75,100)",
+                      "QSF(0.7,1.5,75,100,2)"):
+            self.assertIsNotNone(ls._table_for(ls.parse_shape(shape)), shape)
+            self.assertFalse(ls.is_exact(shape), shape)
+            self.assertEqual(ls.check_shape(shape), [], shape)
+        # LSF is LF with another kernel: no kernel (n = 0 or k = 0), no difference
+        for tail in ("0", "100,0"):
+            np.testing.assert_allclose(
+                self._curve(f"LSF(0.7,1.5,75,{tail})"),
+                self._curve(f"LF(0.7,1.5,75,{tail})"), atol=1e-12)
+        self.assertGreater(
+            float(np.abs(self._curve("LSF(0.7,1.5,75,100)")
+                         - self._curve("LF(0.7,1.5,75,100)")).max()),
+            0.03 * float(self._curve("LF(0.7,1.5,75,100)").max()))
+
+    def test_the_x4_base_has_lighter_tails_and_a_taller_peak(self):
+        far = np.abs(self.X - 1005.0) > 5.0
+        for lin, quart in (("LF(0.7,1.5,75,50)", "QF(0.7,1.5,75,50)"),
+                           ("LSF(0.7,1.5,75,50)", "QSF(0.7,1.5,75,50)")):
+            a, b = self._curve(lin), self._curve(quart)
+            self.assertLess(float(b[far].sum()), 0.5 * float(a[far].sum()))
+            self.assertGreater(float(b.max()), float(a.max()))
+
+    def test_a_repeat_count_outside_the_programs_range_is_refused(self):
+        self.assertTrue(ls.check_shape("LSF(0.7,1.5,75,100,21)"))
+        self.assertTrue(ls.check_shape("QF(0.7,1.5,75,100,-1)"))
+        self.assertTrue(ls.check_shape("QSF(0.7,1.5,75)"))
+
     def test_ls_is_la_with_a_boxcar_kernel(self):
         # n = 0: no kernel at all, so LS and LA are the same table
         np.testing.assert_allclose(self._curve("LS(1,1,0)"),

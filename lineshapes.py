@@ -523,7 +523,7 @@ def parse_shape(text) -> dict:
     suffix = m.group(3).strip()
     out = {"kind": kind, "a": 1.0, "b": 1.0, "w": 0.0, "m": 0.0, "mix": 0.0,
            "tail": tail, "tk": tk, "suffix": suffix, "params": ps}
-    if kind == "LF":
+    if kind in ("LF", "LSF", "QF", "QSF"):
         out.update(a=ps[0] if ps else 1.0, b=ps[1] if len(ps) > 1 else 1.0,
                    w=ps[2] if len(ps) > 2 else 0.0,
                    m=ps[3] if len(ps) > 3 else 0.0)
@@ -707,16 +707,18 @@ def check_shape(shape) -> list:
             bad.append("LS's exponents must be positive")
         elif ps["m"] < 0:
             bad.append("LS's kernel width cannot be negative")
-    elif kind == "LF":
+    elif kind in ("LF", "LSF", "QF", "QSF"):
         if n < 4:
-            bad.append("LF needs four (or five) parameters")
+            bad.append(f"{kind} needs four (or five) parameters")
         else:
             if ps["a"] <= 0 or ps["b"] <= 0:
-                bad.append("LF's exponents must be positive")
+                bad.append(f"{kind}'s exponents must be positive")
             if ps["w"] < 0:
-                bad.append("LF's tail width cannot be negative")
+                bad.append(f"{kind}'s tail width cannot be negative")
             if ps["m"] < 0:
-                bad.append("LF's Gaussian parameter m cannot be negative")
+                bad.append(f"{kind}'s Gaussian parameter m cannot be negative")
+            if n >= 5 and not 0 <= vals[4] <= _LF_MAX_K:
+                bad.append(f"{kind}'s repeat count must be 0 to {_LF_MAX_K}")
     elif kind == "DS":
         if n < 2:
             bad.append("DS needs two parameters")
@@ -824,6 +826,12 @@ def gauss_conv(x, y, gfwhm):
 #   takes the kernel by name, ``Moving Average``: a boxcar of ``2 * floor(n/2) +
 #   1`` equal samples (the "square Lorentzian" of the literature) in place of
 #   the Gaussian; the stretch / clamp at ``n * step > 2`` is the same.
+# * ``LSF(a, b, w, n, k)`` / ``QF`` / ``QSF`` (builder 0x14040ead0 types 1, 4,
+#   5; **read from the program, not yet checked against exported curves**):
+#   ``LSF`` is ``LF`` with the "Moving Average" boxcar in place of the Gaussian;
+#   ``QF`` has ``16 x^4`` where ``LF`` has ``4 x^2`` in the base,
+#   ``1 / (1 + 16 x^4) ** p``, with the same exponent p; ``QSF`` is ``QF`` with
+#   the boxcar. ``k`` = 0 applies the kernel no times.
 # * ``LF(a, b, w, n, k)``: the same with the exponent
 #   ``3 - (3 - a) / (1 + 4 x^2 / w^2)`` (``b`` on the other side), no stretch,
 #   and the Gaussian applied ``k`` times (``k`` = 1 for the four-number form).
@@ -1114,20 +1122,26 @@ def _tla_table(a, mu, n):
     return _cached(key, build)
 
 
-def _lf_table(a, b, w, n, k):
-    """The table of ``LF(a, b, w, n, k)`` (``w`` in the table's own units)."""
+def _lf_table(a, b, w, n, k, quartic=False, boxcar=False):
+    """The table of ``LF(a, b, w, n, k)`` (``w`` in the table's own units);
+    ``quartic`` gives ``QF`` (``16 x^4`` in the base), ``boxcar`` the ``S``
+    variants (``LSF``, ``QSF``)."""
     key = ("LF", round(float(a), 9), round(float(b), 9), round(float(w), 9),
-           int(n), int(k))
+           int(n), int(k), bool(quartic), bool(boxcar))
 
     def build():
         np = _np()
-        _, a_, b_, w_, n_, k_ = key
+        _, a_, b_, w_, n_, k_, quartic_, boxcar_ = key
         idx, c = _grid(_LA_POINTS)
         x = _TABLE_STEP * (idx - c)
         suppress = 1.0 / (1.0 + 4.0 * x * x / (w_ * w_))
         side = np.where(idx > c, b_, a_)
-        y = 1.0 / (1.0 + 4.0 * x * x) ** (3.0 - (3.0 - side) * suppress)
-        return _finish_table(_gauss_smooth(y, n_, k_), _LA_POINTS)
+        base = 1.0 + (16.0 * x ** 4 if quartic_ else 4.0 * x * x)
+        y = 1.0 / base ** (3.0 - (3.0 - side) * suppress)
+        if k_ > 0:                       # the program applies the kernel k times
+            smooth = _boxcar_smooth if boxcar_ else _gauss_smooth
+            y = smooth(y, n_, k_)
+        return _finish_table(y, _LA_POINTS)
     return _cached(key, build)
 
 
@@ -1247,12 +1261,14 @@ def _table_for(sp):
                         sp["mix"] / 100.0)
     if kind == "TLA" and sp["a"] > 0 and sp["b"] >= 0:
         return _tla_table(sp["a"], sp["b"], _la_n(sp["m"]))
-    if kind == "LF" and sp["w"] > 0 and len(sp["params"]) in (4, 5):
+    if kind in ("LF", "LSF", "QF", "QSF") and sp["w"] > 0 \
+            and sp["a"] > 0 and sp["b"] > 0 and len(sp["params"]) in (4, 5):
         ps = sp["params"]
         k = int(ps[4]) if len(ps) > 4 else 1
         return _lf_table(sp["a"], sp["b"], min(sp["w"], _LF_MAX_W),
                          min(_la_n(sp["m"]), _LF_MAX_N),
-                         min(max(k, 0), _LF_MAX_K))
+                         min(max(k, 0), _LF_MAX_K),
+                         kind in ("QF", "QSF"), kind in ("LSF", "QSF"))
     if kind in ("H", "F", "E"):
         # H(a, n)GL(m) / H(a, n)SGL(m); F(a, b, n)GL(m) / F(a, b, n)SGL(m);
         # E(a, b, n)GL(m) / E(a, b, n)SGL(m)

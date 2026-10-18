@@ -104,7 +104,7 @@ class TestCheckShape(unittest.TestCase):
         for s in ("GL(30)", "SGL(50)", "GL(30)T(1.5)", "LA(1.2,5,8)",
                   "LA(1.53,243)", "LA(30)", "LF(0.5,0.6,45,180,1)",
                   "LF(1.1,1.2,75,200)", "DS(0.09,500)", "A(0.15,0.7,20)SGL(12)",
-                  "TLA(1,20,0)", "QF(1,2)", "H(0.09,250)SGL(90)"):
+                  "TLA(1,20,0)", "SS(1,2)", "H(0.09,250)SGL(90)"):
             self.assertEqual(ls.check_shape(s), [], s)
 
     def test_the_testers_refusals(self):
