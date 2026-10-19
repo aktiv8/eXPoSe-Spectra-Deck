@@ -628,7 +628,9 @@ def build_payload(docs, display=None, details=None, methods_text="",
                 marks = [{"be": round(m["be"] + (0.0 if m.get("kin") else shift),
                                       3),
                           "label": str(m.get("label", "")),
-                          **({"kin": True} if m.get("kin") else {})}
+                          **({"kin": True} if m.get("kin") else {}),
+                          **({"src": "casa"} if m.get("src") == "casa"
+                             else {})}
                          for m in ann.markers_for(fid, r.sample, r.name)]
             reg = {
                 "name": d.name, "e": pack_axis(list(d.energy)),

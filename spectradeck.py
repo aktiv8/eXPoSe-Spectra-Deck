@@ -3126,7 +3126,7 @@ class Workspace:
         if found:               # replace earlier labels (Auto-label ...)
             self.ann.clear_markers(*self._marker_key(r))
         for be, label in found:
-            self.ann.add_marker(*self._marker_key(r), be, label)
+            self.ann.add_marker(*self._marker_key(r), be, label, src="casa")
         self._ann_changed(relabel=False)
         return len(found)
 
@@ -3876,8 +3876,8 @@ class Workspace:
                     if prim and want_nearby:
                         hv_r = self.identify_frame(reg)[1]
                         for m in prim:
-                            if m.get("kin"):
-                                continue
+                            if m.get("kin") or m.get("src") == "casa":
+                                continue   # the file names its own regions
                             # tables are in the shown frame: search there
                             # and draw what comes back as it is
                             for pos, lbl, tier in xpslines.nearby_lines(

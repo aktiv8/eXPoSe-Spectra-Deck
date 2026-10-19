@@ -1936,7 +1936,7 @@
          markers, when the Secondary/Auger toggles ask for them */
       if (S.ident.secondary || S.ident.auger) {
         (s.reg.markers || []).forEach(function (m) {
-          if (m.kin) return;
+          if (m.kin || m.src) return;
           V.nearbyLines(m.be, S.ident.win, S.data.elements, s.reg.hv, m.label,
                         S.ident.secondary, S.ident.auger, 2, S.ident.split).forEach(function (x) {
             mark(x.be, x.label, false, s.reg.hv, false, false, x.tier);

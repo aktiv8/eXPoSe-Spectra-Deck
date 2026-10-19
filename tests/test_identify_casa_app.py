@@ -136,6 +136,16 @@ class TestCasaLabelsAcrossMultipleSurveys(unittest.TestCase):
         labels = [m["label"] for m in ws.identify_markers(r)]
         self.assertEqual(labels, ["C 1s"])
 
+    def test_no_alternatives_beside_casa_markers(self):
+        ws = self.ws
+        ws.ident_vars["secondary"].set(True)
+        self.addCleanup(ws.ident_vars["secondary"].set, False)
+        r = self.docs["a.vms"].regions[0]
+        ws.identify_from_casa(r)
+        self.assertEqual(ws.identify_markers(r)[0].get("src"), "casa")
+        tiers = [m for m in self._rendered_markers() if len(m) > 3]
+        self.assertEqual(tiers, [])
+
     def test_only_labelling_one_region_leaves_the_other_unlabelled(self):
         ws = self.ws
         a_region = self.docs["a.vms"].regions[0]

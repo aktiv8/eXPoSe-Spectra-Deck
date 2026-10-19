@@ -207,16 +207,19 @@ class Annotations:
     def markers_for(self, fid, sample, name):
         return list(self.markers.get(region_key(fid, sample, name), []))
 
-    def add_marker(self, fid, sample, name, be, label, kin=False):
+    def add_marker(self, fid, sample, name, be, label, kin=False, src=""):
         """A peak marker. ``be`` is a binding energy, or with ``kin=True`` a
         kinetic energy (ISS peaks): it then does not move with an energy
-        calibration."""
+        calibration. ``src="casa"`` marks a name taken from the file's own
+        CasaXPS regions, which needs no alternative lines beside it."""
         lst = self.markers.setdefault(region_key(fid, sample, name), [])
         if not any(abs(m["be"] - be) < 1e-6 and m["label"] == label
                    for m in lst):
             m = {"be": float(be), "label": label}
             if kin:
                 m["kin"] = True
+            if src == "casa":
+                m["src"] = "casa"
             lst.append(m)
 
     # -- REELS band gaps (per spectrum) ---------------------------------------
@@ -379,6 +382,8 @@ class Annotations:
                         item = {"be": float(m["be"]), "label": str(m["label"])}
                         if m.get("kin") is True:
                             item["kin"] = True
+                        if m.get("src") == "casa":
+                            item["src"] = "casa"
                         good.append(item)
                     except (KeyError, TypeError, ValueError):
                         pass
