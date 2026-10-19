@@ -535,7 +535,7 @@ def build_chapters(doc):
     para(doc,
         "The view row sets the default for every panel, but any panel can "
         "differ: right-click it and choose View, Normalise, Offset, Z axis, "
-        "Fit layers or Nearby lines for that panel alone, so one page can hold "
+        "Fit layers or Other possible lines for that panel alone, so one page can hold "
         "a waterfall, a stack and a fitted spectrum. Identify peaks… is on the "
         "same menu, “Use the page’s view” takes a panel back to the default, and "
         "View → Reset panel views clears every override. A panel is identified "
@@ -549,7 +549,7 @@ def build_chapters(doc):
         "stays switched on after a zoom until you press its button again. "
         "With it on, a drag still zooms or pans, but a plain click now works "
         "as usual: right-click opens the panel menu (so Identify peaks… and "
-        "Nearby lines can be used on the zoomed view) and, with Identify "
+        "Other possible lines can be used on the zoomed view) and, with Identify "
         "open, a left click adds the element line at the clicked energy."
     )
     para(doc,

@@ -1610,13 +1610,14 @@ class Workspace:
         ctl3.add(self.fit_frame)
 
         self.ident_frame = ttk.Frame(ctl3)
-        ttk.Label(self.ident_frame, text="Nearby lines").pack(
+        ttk.Label(self.ident_frame, text="Other possible lines").pack(
             side="left", padx=(0, 4))
         self.ident_vars = {}
         for key, text, tipt in (
-                ("secondary", "Secondary",
-                 "Other candidate photoelectron lines near an identified "
-                 "peak (up to 2, nearest first)."),
+                ("secondary", "Alternatives",
+                 "Other elements' lines that could also explain an "
+                 "identified peak (up to 2, nearest first). They are "
+                 "possibilities, not assignments."),
                 ("auger", "Auger",
                  "Candidate Auger lines near an identified peak.")):
             v = tk.BooleanVar(value=bool(cfg.get("ident_" + key, False)))
@@ -1626,7 +1627,7 @@ class Workspace:
             cb.pack(side="left", padx=(0, 6))
             tip(cb, tipt + " Shown in a different colour beside each peak "
                            "already labelled with Identify peaks, to help "
-                           "confirm speciation.")
+                           "check the assignment.")
         ctl3.add(self.ident_frame)
 
         sty = ttk.Button(ctl3, text="Style…", style="Tool.TButton",
@@ -4122,7 +4123,7 @@ class Workspace:
         for layer in panelview.IDENT_LAYERS:
             on = look["ident_show"].get(layer, False)
             pm["ident"].add_command(
-                label=mark(on, layer.capitalize()),
+                label=mark(on, panelview.IDENT_LABELS[layer]),
                 command=lambda layer=layer, on=on: self._set_panel_view(
                     key, "ident_show", (layer, not on)))
         root = pm["root"]
@@ -4141,7 +4142,7 @@ class Workspace:
                                                  not look["reverse"]))
         root.add_cascade(label="Fit layers", menu=pm["fit"],
                          state="disabled" if series else "normal")
-        root.add_cascade(label="Nearby lines", menu=pm["ident"],
+        root.add_cascade(label="Other possible lines", menu=pm["ident"],
                          state="disabled" if series else "normal")
         root.add_command(label="Identify peaks…",
                          state="disabled" if series else "normal",

@@ -216,7 +216,7 @@ class TestDescribe(unittest.TestCase):
     def test_nearby_lines_shown(self):
         s = pv.describe({"ident_show": {"secondary": True, "auger": True}},
                         DEFAULTS)
-        self.assertEqual(s, "Stack, nearby lines: secondary, auger")
+        self.assertEqual(s, "Stack, other possible lines: alternatives, auger")
 
 
 if __name__ == "__main__":

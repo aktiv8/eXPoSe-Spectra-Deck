@@ -17,6 +17,9 @@ SERIES = ("Waterfall 3D", "Heatmap")           # read in z order
 NORMS = ("None", "Max = 1", "Area = 1", "At cursor")
 FIT_LAYERS = ("components", "envelope", "background")
 IDENT_LAYERS = ("secondary", "auger")
+# What the user sees: the "secondary" tier is other elements' lines that could
+# also explain a peak (possibilities), not secondary lines of the same element.
+IDENT_LABELS = {"secondary": "Alternatives", "auger": "Auger"}
 KEYS = ("view", "norm", "offset", "z_axis", "reverse", "fit_show",
         "fit_merge", "ident_show")
 OFFSET_RANGE = (0.0, 3.0)
@@ -142,5 +145,5 @@ def describe(override, defaults=None):
             parts.append("showing " + (", ".join(on) if on else "no layers"))
     ident_on = [k for k in IDENT_LAYERS if look.get("ident_show", {}).get(k)]
     if ident_on:
-        parts.append("nearby lines: " + ", ".join(ident_on))
+        parts.append("other possible lines: " + ", ".join(IDENT_LABELS[k].lower() for k in ident_on))
     return ", ".join(parts)
