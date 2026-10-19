@@ -1,0 +1,49 @@
+name: Portable Windows build
+
+# Builds the portable folder (SpectraDeck.exe + _internal) with build_exe.py.
+#   - push a tag such as v1.0.1  -> tests, build, and attach the zip to a
+#     GitHub release for that tag
+#   - Run workflow (manual)      -> tests, build, zip kept as a workflow
+#     artifact only
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write        # to create the release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+
+      - name: Install the app requirements and run the tests
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt h5py tkinterdnd2
+          python -m unittest discover tests
+
+      - name: Build the portable copy
+        run: python build_exe.py
+
+      - name: Keep the zip as a workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SpectraDeck-win64
+          path: dist/SpectraDeck-*-win64.zip
+          if-no-files-found: error
+
+      - name: Attach the zip to the release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/SpectraDeck-*-win64.zip
+          generate_release_notes: true

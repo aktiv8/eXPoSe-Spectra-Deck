@@ -113,6 +113,7 @@ python3 launch.py           # macOS / Linux
 
 - Settings are kept in your user folder as usual. Put an empty file called `portable.txt` next to the exe to keep them in a `data` folder beside it instead (a USB stick carries its own settings).
 - The exe is not code-signed, so Windows may say *Windows protected your PC*: choose *More info*, then *Run anyway*.
+- Releases: pushing a tag such as `v1.0.1` runs `.github/workflows/release.yml` (tests, `build_exe.py`) and attaches the zip to that GitHub release; *Run workflow* on the Actions page builds one without releasing.
 - Prefer source? `run_portable.bat` uses a full python.org install copied into a `python` folder beside it (it includes tkinter), otherwise it behaves like `run.bat`.
 
 ## Using the app
