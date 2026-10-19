@@ -150,7 +150,7 @@ from nexus_export import export_nexus
 # ==========================================================================
 #  GUI
 # ==========================================================================
-_HOME = os.path.expanduser("~")
+_HOME = appinfo.data_dir()      # ~ , or ./data beside a portable copy
 CALIB_PATH = os.path.join(_HOME, ".spectradeck_calib.json")
 # files written under the application's former name (ESCApe Explorer): read
 # when the new file does not exist yet, so nobody loses their settings

@@ -7,6 +7,7 @@ the plain-text version report the About box copies. Tk-free."""
 
 import os
 import platform
+import sys
 
 NAME = "eXPoSe SpectraDeck"
 VERSION = "1.0"
@@ -27,6 +28,43 @@ LIBRARIES = (("matplotlib", "matplotlib", "matplotlib"),
              ("reportlab", "reportlab", "reportlab"),
              ("PyMuPDF", "fitz", "pymupdf"),
              ("python-pptx", "pptx", "python-pptx"))
+
+
+def frozen():
+    """True in the packaged (PyInstaller) build."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def app_dir():
+    """The folder the program runs from: next to the .exe in the packaged
+    build, else the source folder."""
+    if frozen():
+        return os.path.dirname(os.path.abspath(sys.executable))
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+PORTABLE_MARKER = "portable.txt"
+
+
+def portable(base=None):
+    """Whether settings are kept beside the program: a file named
+    ``portable.txt`` next to it (a USB-stick copy keeps its own settings)."""
+    return os.path.isfile(os.path.join(base or app_dir(), PORTABLE_MARKER))
+
+
+def data_dir(base=None, home=None):
+    """Where settings, calibration, the log and cached icons live: ``data``
+    beside the program in portable mode (created when needed), else the
+    user's home folder, as always."""
+    base = base or app_dir()
+    if portable(base):
+        path = os.path.join(base, "data")
+        try:
+            os.makedirs(path, exist_ok=True)
+            return path
+        except OSError:
+            pass
+    return home or os.path.expanduser("~")
 
 
 def image_path(kind="splash"):
@@ -112,6 +150,9 @@ def version_report():
              f"({platform.system()} {platform.release()}, "
              f"{platform.machine()})",
              f"Tk {tk_version}"]
+    if frozen():
+        lines.append("Portable build" + (" (settings in data/)"
+                                          if portable() else ""))
     for label, version in library_versions():
         lines.append(f"{label} {version}" if version
                      else f"{label} (not installed)")

@@ -16,7 +16,7 @@ from logging.handlers import RotatingFileHandler
 
 import appinfo
 
-LOG_PATH = os.path.join(os.path.expanduser("~"), ".spectradeck.log")
+LOG_PATH = os.path.join(appinfo.data_dir(), ".spectradeck.log")
 MAX_BYTES = 200_000
 BACKUPS = 3
 LOGGER = "spectradeck.crash"

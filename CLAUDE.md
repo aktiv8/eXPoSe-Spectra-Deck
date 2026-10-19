@@ -13,6 +13,7 @@ python launch.py                # create ./.venv, install deps, start the app (p
 python launch.py --setup-only   # build the venv without starting the app
 python launch.py --reinstall    # rebuild the venv from scratch
 python launch.py --check        # report venv / tkinter / app-file status
+python build_exe.py         # portable Windows folder + zip in ./dist (PyInstaller one-folder, own ./.buildvenv; settings beside the exe when portable.txt exists: appinfo.data_dir)
 python spectradeck.py       # run directly with the current interpreter
 python -m unittest discover tests            # unit tests (synthetic files, no instrument data needed; includes palette contrast/separation and colour-rule tests)
 XPS_CORPUS=<folder> python -m unittest tests.test_corpus   # every recognised file in a folder must load

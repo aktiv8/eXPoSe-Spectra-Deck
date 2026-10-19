@@ -37,7 +37,7 @@ REQS = os.path.join(HERE, "requirements.txt")
 STAMP = os.path.join(VENV_DIR, ".requirements.sha1")
 
 REQUIRED = ["matplotlib>=3.5", "pillow>=9.0", "reportlab>=3.6", "pymupdf>=1.24",
-            "python-pptx>=0.6.23", "python-docx>=1.1"]
+            "python-pptx>=0.6.23", "python-docx>=1.1", "numpy>=1.23"]
 OPTIONAL = ["tkinterdnd2>=0.3",         # drag-and-drop of files onto the window
             "h5py>=3.8"]                # .kfit and .nxs files, NeXus export
 

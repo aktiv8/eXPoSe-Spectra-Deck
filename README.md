@@ -107,6 +107,14 @@ python3 launch.py           # macOS / Linux
 | `--reinstall`  | rebuild the environment from scratch |
 | `--check`      | report environment status and exit |
 
+## Portable Windows build (no Python needed)
+
+`python build_exe.py` makes `dist/SpectraDeck/` (and `SpectraDeck-<version>-win64.zip`): `SpectraDeck.exe` plus an `_internal` folder holding the Python runtime and every library as `.dll` / `.pyd` files. Unzip it anywhere and double-click the exe; nothing is installed. The build uses its own `./.buildvenv` (from `requirements-build.txt`), never `./.venv`.
+
+- Settings are kept in your user folder as usual. Put an empty file called `portable.txt` next to the exe to keep them in a `data` folder beside it instead (a USB stick carries its own settings).
+- The exe is not code-signed, so Windows may say *Windows protected your PC*: choose *More info*, then *Run anyway*.
+- Prefer source? `run_portable.bat` uses a full python.org install copied into a `python` folder beside it (it includes tkinter), otherwise it behaves like `run.bat`.
+
 ## Using the app
 
 One workspace window: the **file tree** on the left, a large **plot** in the

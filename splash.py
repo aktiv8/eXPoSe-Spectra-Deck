@@ -40,7 +40,7 @@ def wanted(argv=None, config_path=None):
     argv = sys.argv if argv is None else argv
     if "--no-splash" in argv:
         return False
-    path = config_path or os.path.join(os.path.expanduser("~"), CONFIG_NAME)
+    path = config_path or os.path.join(appinfo.data_dir(), CONFIG_NAME)
     try:
         with open(path, encoding="utf-8") as fh:
             return bool(json.load(fh).get("show_splash", True))
@@ -60,7 +60,7 @@ def dpi_aware_wanted(argv=None, config_path=None):
         return False
     if "--dpi-aware" in argv:
         return True
-    path = config_path or os.path.join(os.path.expanduser("~"), CONFIG_NAME)
+    path = config_path or os.path.join(appinfo.data_dir(), CONFIG_NAME)
     try:
         with open(path, encoding="utf-8") as fh:
             return bool(json.load(fh).get("dpi_aware", False))

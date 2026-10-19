@@ -1,0 +1,6 @@
+# Everything the portable Windows build bundles (python build_exe.py).
+# The optional libraries are included so the packaged copy has every feature.
+-r requirements.txt
+h5py>=3.8
+tkinterdnd2>=0.3
+pyinstaller>=6.10

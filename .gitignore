@@ -1,2 +1,6 @@
 .venv
 __pycache__/
+.buildvenv
+build/
+dist/
+packaging/app.ico

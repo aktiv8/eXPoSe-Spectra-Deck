@@ -22,6 +22,8 @@ import shutil
 import subprocess
 import sys
 
+import appinfo
+
 IS_WINDOWS = sys.platform == "win32"
 
 APPS = {
@@ -49,7 +51,7 @@ def shorten_path(path, limit=48):
     return "…" + out[-(limit - 1):]
 
 
-ICON_DIR = os.path.join(os.path.expanduser("~"), ".spectradeck_icons")
+ICON_DIR = os.path.join(appinfo.data_dir(), ".spectradeck_icons")
 _SKIP = ("unins", "uninstall", "setup", "update")
 _cache = {}
 
