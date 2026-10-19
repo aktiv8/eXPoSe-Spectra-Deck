@@ -3123,6 +3123,8 @@ class Workspace:
     def identify_from_casa(self, r):
         found = [(be, canon_region_name(name)) for be, name in
                  casafit.region_windows(r.fit, r.photon_energy)]
+        if found:               # replace earlier labels (Auto-label ...)
+            self.ann.clear_markers(*self._marker_key(r))
         for be, label in found:
             self.ann.add_marker(*self._marker_key(r), be, label)
         self._ann_changed(relabel=False)

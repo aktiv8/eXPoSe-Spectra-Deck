@@ -128,6 +128,14 @@ class TestCasaLabelsAcrossMultipleSurveys(unittest.TestCase):
         self.assertIn("C 1s", labels)
         self.assertIn("O 1s", labels)
 
+    def test_label_from_casa_replaces_earlier_markers(self):
+        ws = self.ws
+        r = self.docs["a.vms"].regions[0]
+        ws.identify_add(r, 100.0, "Eu 4p")
+        ws.identify_from_casa(r)
+        labels = [m["label"] for m in ws.identify_markers(r)]
+        self.assertEqual(labels, ["C 1s"])
+
     def test_only_labelling_one_region_leaves_the_other_unlabelled(self):
         ws = self.ws
         a_region = self.docs["a.vms"].regions[0]
