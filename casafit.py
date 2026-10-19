@@ -445,17 +445,85 @@ class CsvCurves:
     source: str = ""
 
 
+DUPLICATE_OVERLAP = 0.25     # share of the narrower window that makes two
+                             # same-name regions duplicates, not neighbours
+SEGMENT_GAP = 0.25           # eV: same-name regions this close are one
+                             # segmented background
+
+
+def _overlap(a, b):
+    """eV the two regions' windows share (0 when apart)."""
+    return max(0.0, min(a.end_ke, b.end_ke) - max(a.start_ke, b.start_ke))
+
+
 def distinct_regions(regions):
     """The regions to draw: of several overlapping regions that share a name
     (CasaXPS keeps the earlier ones when a wider one is added, and the
-    components name only the region's label) only the widest is kept."""
+    components name only the region's label) only the widest is kept. Windows
+    that merely touch or share a sliver are neighbouring segments of one
+    background (CasaXPS's several regions on one spectrum), not duplicates:
+    both are kept (``segment_groups`` joins them)."""
     keep = []
     for reg in sorted(regions, key=lambda g: g.start_ke - g.end_ke):
-        if any(k.name == reg.name and reg.start_ke < k.end_ke
-               and k.start_ke < reg.end_ke for k in keep):
-            continue
-        keep.append(reg)
+        width = reg.end_ke - reg.start_ke
+        dup = False
+        for k in keep:
+            if k.name != reg.name:
+                continue
+            narrow = min(width, k.end_ke - k.start_ke)
+            if narrow > 0 and _overlap(reg, k) > DUPLICATE_OVERLAP * narrow:
+                dup = True
+                break
+            if narrow <= 0 and reg.start_ke < k.end_ke                     and k.start_ke < reg.end_ke:
+                dup = True
+                break
+        if not dup:
+            keep.append(reg)
     return [g for g in regions if any(g is k for k in keep)]
+
+
+def segment_groups(regions):
+    """``distinct_regions`` chained into groups: same-name regions whose
+    windows touch (a gap of at most ``SEGMENT_GAP`` eV, or a sliver of
+    overlap) form one group, ordered by kinetic energy. A lone region is a
+    group of one. Regions drawn from a stored curve are never joined."""
+    kept = distinct_regions(regions)
+    groups, used = [], set()
+    for reg in kept:
+        if id(reg) in used:
+            continue
+        group = [reg]
+        used.add(id(reg))
+        if reg.known_background is None:
+            grew = True
+            while grew:
+                grew = False
+                lo = min(g.start_ke for g in group)
+                hi = max(g.end_ke for g in group)
+                for other in kept:
+                    if (id(other) in used or other.name != reg.name
+                            or other.known_background is not None):
+                        continue
+                    if other.start_ke <= hi + SEGMENT_GAP                             and other.end_ke >= lo - SEGMENT_GAP:
+                        group.append(other)
+                        used.add(id(other))
+                        grew = True
+        groups.append(sorted(group, key=lambda g: g.start_ke))
+    return groups
+
+
+def _merged_region(group):
+    """One FitRegion standing for a segmented group: the first segment's
+    settings over the union window. Its RSF is kept only when every segment
+    states the same one (else 0.0, so quantification uses the components')."""
+    import dataclasses
+    first = group[0]
+    rsfs = {round(float(g.rsf or 0.0), 9) for g in group}
+    return dataclasses.replace(
+        first, start_ke=min(g.start_ke for g in group),
+        end_ke=max(g.end_ke for g in group),
+        rsf=first.rsf if len(rsfs) == 1 else 0.0,
+        csv_curves=None, known_background=None)
 
 
 def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
@@ -480,16 +548,25 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
     scale = (dwell * (scans or 1)) if dwell else None
     cps = np.asarray(counts, dtype=float) / (scale or 1.0)
     order = np.argsort(ke)                              # ascending KE
+    rshift = fit.shift_of_regions()
     if fit.regions:
-        regions = [(g, g.start_ke + fit.shift_of_regions(),
-                    g.end_ke + fit.shift_of_regions())
-                   for g in distinct_regions(fit.regions)]
+        regions = []
+        for group in segment_groups(fit.regions):
+            if len(group) == 1:
+                g = group[0]
+                regions.append((g, g.start_ke + rshift, g.end_ke + rshift,
+                                None))
+            else:
+                m = _merged_region(group)
+                regions.append((m, m.start_ke + rshift, m.end_ke + rshift,
+                                [(g, g.start_ke + rshift, g.end_ke + rshift)
+                                 for g in group]))
     else:
         regions = [(FitRegion(name="", background="none"),
-                    float(ke.min()), float(ke.max()))]
+                    float(ke.min()), float(ke.max()), None)]
     cshift = fit.shift_of_comps()
     out = []
-    for reg, lo, hi in regions:
+    for reg, lo, hi, segments in regions:
         sel = order[(ke[order] >= lo) & (ke[order] <= hi)]
         if len(sel) < 3:
             continue
@@ -519,6 +596,8 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
             if reg.known_background is not None:
                 kb = np.asarray(reg.known_background, dtype=float)
                 bg = kb[sel] / (scale or 1.0)
+            elif segments:
+                bg = _stitched_background(segments, kx, y)
             else:
                 bg = lineshapes.background(reg.background, y, reg.avg, x=kx,
                                            params=reg.params)
@@ -579,6 +658,27 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
             background_known=bg is not None,
             fit_region=reg, notes=notes))
     return out
+
+
+def _stitched_background(segments, kx, y):
+    """The background of a segmented region: each segment's own background on
+    its own points (a point shared by two segments keeps the first's), joined
+    over ``kx``. NaN where no segment reaches or its type is not reproduced;
+    None when no segment's background can be drawn."""
+    import numpy as np
+    out = np.full(len(kx), np.nan)
+    drawn = False
+    for seg, lo, hi in segments:
+        m = (kx >= lo) & (kx <= hi) & np.isnan(out)
+        if m.sum() < 2:
+            continue
+        part = lineshapes.background(seg.background, y[m], seg.avg, x=kx[m],
+                                     params=seg.params)
+        if part is None:
+            continue
+        out[m] = part
+        drawn = True
+    return out if drawn else None
 
 
 def component_be(comp, hv, fit=None):
