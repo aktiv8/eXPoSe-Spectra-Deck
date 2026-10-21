@@ -22,6 +22,7 @@ drawing:
 from __future__ import annotations
 
 import io
+import os
 from dataclasses import dataclass, field
 from types import SimpleNamespace
 
@@ -222,8 +223,9 @@ def plan(docs, label_of=None, display=None, per_sheet=6, columns=3, skip=(),
                                                         slots),
             lambda c=chunk: _sheet_notes(c)))
     for n, (cluster, positions, first) in enumerate(sets, 1):
-        title = "Camera mosaic" + (f" ({n} of {len(sets)})"
-                                   if len(sets) > 1 else "")
+        span = sample_span([q.sample for q in cluster])
+        title = "Camera mosaic" + (f" \u2013 {span}" if span else "") + (
+            f" ({n} of {len(sets)})" if len(sets) > 1 else "")
         pages.append(Page(
             "mosaic", title, len(cluster),
             lambda fig, rect, cmap, c=cluster, ps=positions, fs=first:
@@ -282,13 +284,37 @@ class MosaicSet:
 
     @property
     def title(self):
-        return f"Mosaic of {len(self.cluster)} pictures"
+        return mosaic_title(self.cluster)
 
 
-def mosaic_sets(docs, label_of=None, skip=()):
+def sample_span(names, limit=3):
+    """The samples a set of pictures was taken for as one short phrase:
+    ``Stained Pt #003a/b/c`` when the names differ only in a short ending,
+    else the names joined, cut after ``limit`` ("+N more")."""
+    names = list(dict.fromkeys(n for n in names if n))
+    if len(names) <= 1:
+        return "".join(names)
+    pre = os.path.commonprefix(names)
+    ends = [n[len(pre):] for n in names]
+    if pre and all(0 < len(e) <= 3 for e in ends):
+        return pre + "/".join(ends)
+    text = ", ".join(names[:limit])
+    return text + (f" +{len(names) - limit} more" if len(names) > limit else "")
+
+
+def mosaic_title(cluster):
+    """"Mosaic of 3 pictures: Stained Pt #003a/b/c" (the samples part only
+    when the pictures say which sample they were taken for)."""
+    span = sample_span([p.sample for p in cluster])
+    return f"Mosaic of {len(cluster)} pictures" + (f": {span}" if span else "")
+
+
+def mosaic_sets(docs, label_of=None, skip=(), keep="latest"):
     """The sets of overlapping calibrated pictures in ``docs`` (per file:
     another holder is another frame), minus the pictures whose keys are in
-    ``skip``. Nothing is stitched until ``mosaic_picture`` is called."""
+    ``skip``. ``keep`` says which picture stands for a stage position that was
+    photographed more than once: "latest" (after the analysis) or "earliest"
+    (before it). Nothing is stitched until ``mosaic_picture`` is called."""
     label_of = label_of or (lambda p, s: s)
     skip = set(skip)
     out = []
@@ -310,20 +336,21 @@ def mosaic_sets(docs, label_of=None, skip=()):
             mine.append(Picture(blob.name, label_of(p, blob.sample)
                                 if blob.sample else "", p, blob, points,
                                 outlines, key=key))
-        for n, c in enumerate(mosaic.clusters(mine), 1):
+        for n, c in enumerate(mosaic.clusters(mine, keep), 1):
             out.append(MosaicSet(p, c, positions, first,
                                  item_key("mosaic", p, str(n))))
     return out
 
 
-def mosaic_picture(cluster, positions, sites, refine=True):
+def mosaic_picture(cluster, positions, sites, refine=True, gain=True):
     """``(Mosaic, Picture)``: the stitched pictures as one picture with its
     own calibration, so the analysis points and map outlines on it come from
     ``snapshot.view_of`` like on any camera picture. ``refine`` False places
-    the pictures by stage position only."""
-    m = mosaic.build(cluster, refine=refine)
+    the pictures by stage position only, ``gain`` False leaves their
+    brightness as it is."""
+    m = mosaic.build(cluster, refine=refine, gain=gain)
     points, outlines = snapshot.view_of(m.calib, positions, sites)
-    pic = Picture(f"Mosaic of {len(cluster)} pictures", "", None,
+    pic = Picture(mosaic_title(cluster), "", None,
                   SimpleNamespace(calib=m.calib), points, outlines,
                   _array=m.array)
     return m, pic

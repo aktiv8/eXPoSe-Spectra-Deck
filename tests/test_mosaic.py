@@ -229,6 +229,64 @@ class TestMatching(unittest.TestCase):
 
 
 @unittest.skipUnless(HAVE, "numpy, Pillow and matplotlib needed")
+class TestBrightness(unittest.TestCase):
+    def setUp(self):
+        mosaic._memo.clear()
+        self.img = scene()
+
+    def dark(self, name, left, top, factor):
+        t = Tile(name, self.img, left, top)
+        t.crop = (t.crop.astype("float32") * factor).astype("uint8")
+        return t
+
+    def test_a_darker_picture_is_brightened_to_match_its_neighbour(self):
+        a = Tile("a", self.img, 100, 100)
+        b = self.dark("b", 300, 120, 0.7)
+        m = mosaic.build([a, b], refine=False)
+        ga, gb = m.gains["a"], m.gains["b"]
+        self.assertGreater(gb[0] / ga[0], 1.3)           # ~ 1 / 0.7
+        self.assertLess(gb[0] / ga[0], 1.55)
+        self.assertTrue(any("Brightness matched" in n for n in m.notes))
+        # the two now agree where they overlap: no step at the seam
+        left = m.array[:, 200:215].astype("float32").mean()
+        right = m.array[:, 230:245].astype("float32").mean()
+        self.assertLess(abs(left - right), 12.0)
+
+    def test_it_can_be_switched_off(self):
+        a = Tile("a", self.img, 100, 100)
+        b = self.dark("b", 300, 120, 0.7)
+        m = mosaic.build([a, b], refine=False, gain=False)
+        self.assertEqual(m.gains, {})
+        self.assertFalse(any("Brightness" in n for n in m.notes))
+
+    def test_equal_exposure_changes_nothing_and_says_nothing(self):
+        a = Tile("a", self.img, 100, 100)
+        b = Tile("b", self.img, 300, 120)
+        m = mosaic.build([a, b], refine=False)
+        for g in m.gains.values():
+            for v in g:
+                self.assertAlmostEqual(v, 1.0, delta=0.01)
+        self.assertFalse(any("Brightness" in n for n in m.notes))
+
+    def test_factors_stay_within_the_range_and_average_one(self):
+        g = mosaic.solve_gains(2, [(0, 1, [200.0] * 3, [20.0] * 3)])
+        lo, hi = mosaic.GAIN_RANGE
+        for row in g:
+            for v in row:
+                self.assertTrue(lo - 1e-9 <= v <= hi + 1e-9)
+        self.assertEqual(mosaic.solve_gains(3, []), [(1.0, 1.0, 1.0)] * 3)
+
+    def test_the_earliest_picture_at_a_position_can_be_kept_instead(self):
+        early = Tile("early", self.img, 100, 100)
+        late = Tile("late", self.img, 100, 100)
+        b = Tile("b", self.img, 300, 110)
+        (g,) = mosaic.clusters([early, b, late], keep="earliest")
+        self.assertEqual([t.name for t in g], ["early", "b"])
+        (g,) = mosaic.clusters([early, b, late])
+        self.assertEqual([t.name for t in g], ["late", "b"])
+
+
+@unittest.skipUnless(HAVE, "numpy, Pillow and matplotlib needed")
 class TestInThePages(unittest.TestCase):
     def setUp(self):
         mosaic._memo.clear()
@@ -255,7 +313,7 @@ class TestInThePages(unittest.TestCase):
         pages = ip.plan([d], mosaics=True)
         self.assertEqual([(p.kind, p.title, p.n_items) for p in pages],
                          [("camera", "Camera pictures", 3),
-                          ("mosaic", "Camera mosaic", 3)])
+                          ("mosaic", "Camera mosaic – S1", 3)])
 
     def test_it_draws_with_the_analysis_points_on_it(self):
         pages = ip.plan([self.doc()], mosaics=True)

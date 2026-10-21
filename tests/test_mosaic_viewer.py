@@ -49,7 +49,7 @@ class TestMosaicSets(unittest.TestCase):
         self.assertEqual(len(sets), 1)
         self.assertIs(sets[0].parser, d)
         self.assertEqual(len(sets[0].cluster), 3)
-        self.assertEqual(sets[0].title, "Mosaic of 3 pictures")
+        self.assertEqual(sets[0].title, "Mosaic of 3 pictures: S1")
 
     def test_far_apart_and_single_pictures_make_none(self):
         self.assertEqual(ip.mosaic_sets([make_doc(xs=(10.0, 40.0))]), [])
@@ -67,6 +67,52 @@ class TestMosaicSets(unittest.TestCase):
                                    refine=False)
         self.assertEqual(m.matched, 0)
         self.assertIn("S1", pic.points)
+
+
+@unittest.skipUnless(HAVE, "numpy, Pillow and matplotlib needed")
+class TestNaming(unittest.TestCase):
+    def test_names_that_differ_in_a_short_ending_are_folded(self):
+        self.assertEqual(ip.sample_span(["Stained Pt #003a", "Stained Pt #003b",
+                                         "Stained Pt #003c"]),
+                         "Stained Pt #003a/b/c")
+        self.assertEqual(ip.sample_span(["S1", "S1", ""]), "S1")
+        self.assertEqual(ip.sample_span([]), "")
+
+    def test_unrelated_names_are_listed_and_cut(self):
+        self.assertEqual(ip.sample_span(["Alpha", "Beta"]), "Alpha, Beta")
+        self.assertEqual(ip.sample_span(["A one", "B two", "C three", "D four"]),
+                         "A one, B two, C three +1 more")
+
+
+@unittest.skipUnless(HAVE, "numpy, Pillow and matplotlib needed")
+class TestBeforeAnalysis(unittest.TestCase):
+    def setUp(self):
+        mosaic._memo.clear()
+
+    def two_shots(self):
+        d = make_doc()
+        # photograph the first position again, later (after the analysis)
+        again = TestInThePages().blob("S1 Pt #000a  12:00", 10.0)
+        d.images = d.images + [again]
+        return d
+
+    def test_the_set_uses_the_latest_picture_unless_asked_for_the_earliest(self):
+        d = self.two_shots()
+        late = ip.mosaic_sets([d])[0]
+        early = ip.mosaic_sets([d], keep="earliest")[0]
+        self.assertIn("S1 Pt #000a  12:00", [p.name for p in late.cluster])
+        self.assertIn("S1 Pt #000a  10:00", [p.name for p in early.cluster])
+        self.assertEqual(late.key, early.key)
+
+    def test_the_page_offers_a_before_analysis_mosaic_only_when_it_differs(self):
+        names = [c["name"] for c in hb.build_payload([make_doc()])["cameras"]
+                 if c.get("mosaic")]
+        self.assertEqual(len(names), 1)
+        cams = [c for c in hb.build_payload([self.two_shots()])["cameras"]
+                if c.get("mosaic")]
+        self.assertEqual([c["before"] for c in cams], [False, True])
+        self.assertTrue(cams[1]["name"].endswith("before analysis"))
+        self.assertIn("S1", cams[0]["name"])
 
 
 @unittest.skipUnless(HAVE, "numpy, Pillow and matplotlib needed")
@@ -171,6 +217,26 @@ class TestMosaicInTheApp(unittest.TestCase):
         self.assertIn("S1", [t.get_text() for t in ax.texts])
         titles = [ax.get_title(loc=loc) for loc in ("left", "center", "right")]
         self.assertTrue(any("Mosaic of 3 pictures" in t for t in titles))
+
+    def test_the_brightness_and_before_choices_are_only_for_mosaics(self):
+        self.ws._show_image(self.d, self.d.images[0])
+        self.assertEqual(str(self.ws.gain_cb.cget("state")), "disabled")
+        self.assertEqual(str(self.ws.keep_cb.cget("state")), "disabled")
+        self.ws._show_image(self.d, ip.mosaic_sets([self.d])[0])
+        self.assertEqual(str(self.ws.gain_cb.cget("state")), "normal")
+        self.assertEqual(str(self.ws.keep_cb.cget("state")), "readonly")
+
+    def test_choosing_before_analysis_redraws_with_the_earlier_pictures(self):
+        again = TestInThePages().blob("S1 Pt #000a  12:00", 10.0)
+        self.d.images = self.d.images + [again]
+        ms = ip.mosaic_sets([self.d])[0]
+        self.ws.keep_var.set(self.ws.KEEP_CHOICES[1])
+        try:
+            self.drawn_figures(lambda: self.ws._show_image(self.d, ms))
+        finally:
+            self.ws.keep_var.set(self.ws.KEEP_CHOICES[0])
+        built = [m for m in mosaic._memo.values()]
+        self.assertTrue(any("S1 Pt #000a  10:00" in m.names for m in built))
 
     def test_the_refine_switch_is_only_for_mosaics(self):
         self.ws._show_image(self.d, self.d.images[0])

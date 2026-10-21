@@ -1994,6 +1994,25 @@ class Workspace:
         Tooltip(self.refine_cb, "Mosaic only: nudge overlapping pictures to "
                 "line up what they show. Off places them by stage position.",
                 lambda: self.palette)
+        self.gain_var = tk.BooleanVar(value=True)
+        self.gain_cb = ttk.Checkbutton(
+            bar, variable=self.gain_var, command=self._redraw_viewer,
+            text="Match brightness", state="disabled")
+        self.gain_cb.pack(side="left", padx=8)
+        Tooltip(self.gain_cb, "Mosaic only: even out the exposure of "
+                "overlapping pictures so the seams do not show a step.",
+                lambda: self.palette)
+        self.keep_var = tk.StringVar(value=self.KEEP_CHOICES[0])
+        self.keep_cb = ttk.Combobox(
+            bar, textvariable=self.keep_var, values=self.KEEP_CHOICES,
+            state="disabled", width=16)
+        self.keep_cb.pack(side="left", padx=8)
+        self.keep_cb.bind("<<ComboboxSelected>>",
+                          lambda _e: self._redraw_viewer())
+        Tooltip(self.keep_cb, "Mosaic only: where a position was "
+                "photographed more than once, use the last picture (it shows "
+                "the marks of the analysis) or the first (the surface "
+                "before it).", lambda: self.palette)
         self.calib_holder = ttk.Frame(self.tab_images)
         self.viewer = ttk.Frame(self.tab_images)
         self.viewer.pack(side="top", fill="both", expand=True)
@@ -5933,7 +5952,7 @@ class Workspace:
                     cell, width=14, text=f"[{len(ms.cluster)} pictures]",
                     command=lambda p=ms.parser, m=ms: self._show_image(p, m))
                 btn.pack()
-                ttk.Label(cell, text="Mosaic" + (
+                ttk.Label(cell, text=ms.title + (
                     f" — {os.path.basename(ms.parser.path or '')}" if multi
                     else ""), font=("TkDefaultFont", 8), wraplength=170).pack()
         if self._cur_image is None:
@@ -6016,7 +6035,8 @@ class Workspace:
         for w in self.viewer.winfo_children():
             w.destroy()
         if not self._cur_image:
-            self.refine_cb.config(state="disabled")
+            for w in (self.refine_cb, self.gain_cb, self.keep_cb):
+                w.config(state="disabled")
             self.overlay_cb.config(state="disabled")
             ttk.Label(self.viewer, padding=20,
                       text="Select an image above to view it.").pack()
@@ -6024,6 +6044,8 @@ class Workspace:
         parser, blob = self._cur_image
         is_mosaic = isinstance(blob, imagepages.MosaicSet)
         self.refine_cb.config(state="normal" if is_mosaic else "disabled")
+        self.gain_cb.config(state="normal" if is_mosaic else "disabled")
+        self.keep_cb.config(state="readonly" if is_mosaic else "disabled")
         if is_mosaic:
             self.overlay_cb.config(state="disabled")
             self._render_mosaic(parser, blob)
@@ -6073,22 +6095,29 @@ class Workspace:
             return
         self._draw_calibrated(parser, img, blob.calib, blob.name, blob.sample)
 
+    KEEP_CHOICES = ("After analysis", "Before analysis")
+
     def _render_mosaic(self, parser, ms):
         """The stitched pictures of one set (mosaic.py) as one calibrated
         picture, drawn like a single camera image but with the zoom / pan
         toolbar. Built here, on first view: it takes a couple of seconds."""
         parent = self.viewer
+        keep = ("earliest" if self.keep_var.get() == self.KEEP_CHOICES[1]
+                else "latest")
+        if keep != "latest":              # the same set, with the earlier pictures
+            ms = next((x for x in imagepages.mosaic_sets(self.docs, keep=keep)
+                       if x.parser is parser and x.key == ms.key), ms)
         try:
             m, _pic = imagepages.mosaic_picture(
                 ms.cluster, ms.positions, ms.sites,
-                refine=self.refine_var.get())
+                refine=self.refine_var.get(), gain=self.gain_var.get())
         except Exception as exc:                        # noqa: BLE001
             ttk.Label(parent, padding=20,
                       text=f"Could not build the mosaic:\n{exc}").pack()
             return
         img = Image.fromarray(m.array)
         self._draw_calibrated(
-            parser, img, m.calib, f"Mosaic of {len(ms.cluster)} pictures",
+            parser, img, m.calib, ms.title,
             "", caption=m.description() + (" " + " ".join(m.notes)
                                            if m.notes else ""),
             toolbar=True)

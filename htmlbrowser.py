@@ -233,7 +233,14 @@ def _mosaic_views(docs, label_of, views, used, notes):
     is left out with a note. Returns the bytes used so far."""
     import imagepages
     skipped = 0
-    for ms in imagepages.mosaic_sets(docs, label_of):
+    latest = imagepages.mosaic_sets(docs, label_of)
+    # where a position was photographed more than once, a second mosaic with
+    # the earlier (before-analysis) pictures; only for sets that differ
+    earlier = [e for e, l in zip(imagepages.mosaic_sets(
+        docs, label_of, keep="earliest"), latest)
+        if [q.name for q in e.cluster] != [q.name for q in l.cluster]]
+    for before, ms in [(False, x) for x in latest] + [(True, x)
+                                                      for x in earlier]:
         try:
             m, pic = imagepages.mosaic_picture(ms.cluster, ms.positions,
                                                ms.sites)
@@ -258,7 +265,11 @@ def _mosaic_views(docs, label_of, views, used, notes):
         fov = snapshot.field_of_view_mm(cal)
         n = sum(1 for v in views if v.get("mosaic")) + 1
         views.append({
-            "id": f"m{n - 1}", "name": f"Mosaic {n}: {len(ms.cluster)} pictures",
+            "id": f"m{n - 1}",
+            "name": f"Mosaic {n}: "
+                    + (imagepages.sample_span([q.sample for q in ms.cluster])
+                       or f"{len(ms.cluster)} pictures")
+                    + (" \u2013 before analysis" if before else ""),
             "sample": "", "file": docs.index(ms.parser), "w": im.width,
             "h": im.height, "img": data_uri("image/jpeg", jpeg),
             "fov": [round(fov[0], 3), round(fov[1], 3)],
@@ -268,7 +279,7 @@ def _mosaic_views(docs, label_of, views, used, notes):
             "maps": [{"sample": nm, "rect": [round(v * s, 1) for v in box]}
                      for nm, box in pic.outlines.items()],
             "bar_px": round(1000.0 / cal["um_per_px_x"] * s, 2),
-            "mosaic": True, "n": len(ms.cluster),
+            "mosaic": True, "n": len(ms.cluster), "before": before,
             "desc": " ".join([m.description()] + m.notes)})
     if skipped:
         notes.append(f"{skipped} camera mosaic(s) were left out (size limit "

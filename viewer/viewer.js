@@ -181,6 +181,27 @@
     if (hi > dhi) return [dhi - w, dhi];
     return [lo, hi];
   };
+  /* zooming a camera picture of W x H pixels: a view is null (the whole picture) or
+     {x: [lo, hi], y: [lo, hi]} in picture pixels. camZoom closes in by the factor f (< 1)
+     about the picture point (cx, cy), or out (> 1), up to CAM_MAX_ZOOM times; camPan moves
+     the window by (dx, dy). Both keep it inside the picture (V.clampView) and give null for
+     the whole picture */
+  V.CAM_MAX_ZOOM = 12;
+  V.camFit = function (x, y, W, H) {
+    var a = V.clampView(x[0], x[1], 0, W), b = V.clampView(y[0], y[1], 0, H);
+    return a || b ? { x: a || [0, W], y: b || [0, H] } : null;
+  };
+  V.camZoom = function (view, W, H, f, cx, cy) {
+    var x = view ? view.x : [0, W], y = view ? view.y : [0, H];
+    var nx = [cx - (cx - x[0]) * f, cx + (x[1] - cx) * f], ny = [cy - (cy - y[0]) * f, cy + (y[1] - cy) * f];
+    if (nx[1] - nx[0] < W / V.CAM_MAX_ZOOM) return view || null;
+    return V.camFit(nx, ny, W, H);
+  };
+  V.camPan = function (view, W, H, dx, dy) {
+    if (!view) return null;
+    dx = Math.max(-view.x[0], Math.min(W - view.x[1], dx)); dy = Math.max(-view.y[0], Math.min(H - view.y[1], dy));
+    return V.camFit([view.x[0] + dx, view.x[1] + dx], [view.y[0] + dy, view.y[1] + dy], W, H);
+  };
   V.normName = function (n) { return String(n || '').replace(/\s+/g, ' ').trim().toLowerCase(); };
   /* spectra with the same element name share a panel; first appearance order */
   V.groupSpectra = function (specs) {
@@ -1226,7 +1247,7 @@
   var S = { data: null, specs: [], byId: {}, ticked: new Set(), selected: null, mode: 'stack',
             norm: 'none', offset: 0.6, scale: 'Binding', iss: 'kinetic', levelOn: false, levelIdx: 0, levels: [],
             panels: new Map(), theme: 'auto', printing: false, nodes: [], holderIdx: 0,
-            holderHot: null, tab: 'plot', filter: '', camIdx: 0, mapById: {}, camById: {},
+            holderHot: null, tab: 'plot', filter: '', camIdx: 0, camView: {}, mapById: {}, camById: {},
             fit: { components: true, envelope: true, background: true, residual: false, merge: false, stack: false, hidden: {} },
             q: { include: {}, seeded: {}, transmission: false, level: {}, rsfLibrary: '' },
             d: { sample: null, mode: 'element', axis: null, last: null },
@@ -2715,17 +2736,46 @@
     box.appendChild(h('p', null, sel));
     box.appendChild(h('div', { class: 'cam-wrap' }, h('canvas', { id: 'camCanvas', 'aria-label': 'Camera picture with analysis positions', role: 'img' })));
     box.appendChild(h('div', { class: 'holder-info', id: 'camInfo' }));
-    var cv = $('camCanvas');
+    var cv = $('camCanvas'), drag = null, moved = false;
     cv.addEventListener('click', function (e) {
       var c = currentCam(), lay = cv._lay;
+      if (moved) { moved = false; return; }          /* the end of a pan, not a click */
       if (!c || !lay) return;
       var rect = cv.getBoundingClientRect(), x = e.clientX - rect.left, y = e.clientY - rect.top, best = null, bd = 18;
       Object.keys(c.points).forEach(function (name) {
-        var p = c.points[name], d = Math.hypot(p[0] * lay.k - x, p[1] * lay.k - y);
+        var p = c.points[name], d = Math.hypot((p[0] - lay.ox) * lay.k - x, (p[1] - lay.oy) * lay.k - y);
         if (d <= bd) { bd = d; best = name; }
       });
       var sm = best ? sampleByName(best) : null;
       if (sm) select({ kind: 'sample', id: sm.id });
+    });
+    /* wheel zooms about the cursor, a drag pans, a double click shows the whole picture */
+    cv.addEventListener('wheel', function (e) {
+      var c = currentCam(), lay = cv._lay;
+      if (!c || !lay) return;
+      e.preventDefault();
+      var rect = cv.getBoundingClientRect();
+      var cx = lay.ox + (e.clientX - rect.left) / lay.k, cy = lay.oy + (e.clientY - rect.top) / lay.k;
+      S.camView[c.id] = V.camZoom(S.camView[c.id] || null, c.w, c.h, e.deltaY < 0 ? 0.8 : 1.25, cx, cy);
+      drawCamera();
+    }, { passive: false });
+    cv.addEventListener('mousedown', function (e) {
+      if (e.button !== 0 || !S.camView[(currentCam() || {}).id]) return;
+      drag = { x: e.clientX, y: e.clientY }; moved = false;
+    });
+    G.addEventListener('mousemove', function (e) {
+      var c = currentCam(), lay = cv._lay;
+      if (!drag || !c || !lay) return;
+      var dx = e.clientX - drag.x, dy = e.clientY - drag.y;
+      if (!moved && Math.hypot(dx, dy) < 4) return;
+      moved = true; drag.x = e.clientX; drag.y = e.clientY;
+      S.camView[c.id] = V.camPan(S.camView[c.id], c.w, c.h, -dx / lay.k, -dy / lay.k);
+      drawCamera();
+    });
+    G.addEventListener('mouseup', function () { drag = null; });
+    cv.addEventListener('dblclick', function () {
+      var c = currentCam(); if (!c) return;
+      S.camView[c.id] = null; drawCamera();
     });
   }
   function drawCamera() {
@@ -2733,19 +2783,24 @@
     if (!c || !cv) return;
     if ($('camSel')) $('camSel').value = String(S.camIdx);
     withPicture('cam' + c.id, c.img, function (img) {
-      var box = cv.parentNode.clientWidth || 700, k = S.camFull ? 1 : Math.min(1, box / c.w);
-      cv.parentNode.style.overflow = S.camFull ? 'auto' : '';
-      cv.style.maxWidth = S.camFull ? 'none' : '';
-      var ctx = sizeCanvas(cv, c.w * k, c.h * k);
-      ctx.drawImage(img, 0, 0, c.w * k, c.h * k);
-      cv._lay = { k: k };
+      var box = cv.parentNode.clientWidth || 700, k0 = Math.min(1, box / c.w), cw = c.w * k0, ch = c.h * k0;
+      var view = S.camView[c.id] || null;
+      view = view ? V.camFit(view.x, view.y, c.w, c.h) : null;
+      S.camView[c.id] = view;
+      var win = view || { x: [0, c.w], y: [0, c.h] }, k = cw / (win.x[1] - win.x[0]);
+      var ctx = sizeCanvas(cv, cw, ch);
+      ctx.drawImage(img, win.x[0], win.y[0], win.x[1] - win.x[0], win.y[1] - win.y[0], 0, 0, cw, ch);
+      cv._lay = { k: k, ox: win.x[0], oy: win.y[0] };
+      cv.style.cursor = view ? 'grab' : 'pointer';
+      ctx.save(); ctx.translate(-win.x[0] * k, -win.y[0] * k);
       ctx.setLineDash([6, 4]); ctx.lineWidth = 1.6; ctx.strokeStyle = '#FFD23F';
       c.maps.forEach(function (m) { ctx.strokeRect(m.rect[0] * k, m.rect[1] * k, m.rect[2] * k, m.rect[3] * k); });
       ctx.setLineDash([]);
       var hot = hotSamples();
       if (c.sample) hot[c.sample] = true;
       paintMarkers(ctx, c.points, k, hot);
-      var mm = c.fov[0] >= 4 ? 1 : 0.5, bp = c.bar_px * mm * k, by = c.h * k - 26;
+      ctx.restore();
+      var mm = c.fov[0] >= 4 ? 1 : 0.5, bp = c.bar_px * mm * k, by = ch - 26;
       ctx.lineCap = 'butt'; ctx.strokeStyle = '#0B1116'; ctx.lineWidth = 7;
       ctx.beginPath(); ctx.moveTo(20, by); ctx.lineTo(20 + bp, by); ctx.stroke();
       ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 3;
@@ -2755,10 +2810,11 @@
       ctx.strokeText(mm + ' mm', 20 + bp / 2, by - 6); ctx.fillText(mm + ' mm', 20 + bp / 2, by - 6);
       var info = clear($('camInfo'));
       info.appendChild(h('span', { text: c.name + '  ·  ' + c.fov[0] + ' × ' + c.fov[1] + ' mm   ' }));
-      var full = h('input', { type: 'checkbox', id: 'camFull' });
-      full.checked = !!S.camFull;
-      full.addEventListener('change', function () { S.camFull = full.checked; drawCamera(); });
-      info.appendChild(h('label', null, full, ' Full size (scroll)   '));
+      if (view) {
+        var rz = h('button', { type: 'button', text: 'Show the whole picture' });
+        rz.addEventListener('click', function () { S.camView[c.id] = null; drawCamera(); });
+        info.appendChild(rz);
+      } else info.appendChild(h('span', { class: 'muted', text: 'Scroll to zoom, drag to move.   ' }));
       if (c.mosaic && c.desc) info.appendChild(h('div', { class: 'muted', text: c.desc }));
       var seen = {};
       c.maps.forEach(function (m) {

@@ -756,8 +756,9 @@ class TestPage(unittest.TestCase):
         # +2_000: colour by CasaXPS INDEX and the merge of INDEX groups
         # +2_500: the fits of a stack (per-trace curves, offset, one legend)
         # +500: the Residual StDev in each fit's header (when the app shows it)
-        # +1_000: the camera mosaics (full-size switch, the mosaic follow rule)
-        self.assertLess(len(page), 193_000 + raw)     # far below plain JSON
+        # +1_000: the camera mosaics (the mosaic follow rule)
+        # +3_000: zoom and pan of a camera picture (V.camZoom, V.camPan, wheel and drag)
+        self.assertLess(len(page), 196_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR

@@ -41,6 +41,9 @@ MIN_PATCH = 40             # smallest overlap (coarse pixels) worth comparing
 MIN_NCC = 0.5              # a match must correlate at least this well ...
 MIN_GAIN = 0.02            # ... and beat the stage position by this much
 PRIOR = 0.1                # weight of "stay where the stage put it"
+GAIN_RANGE = (0.5, 2.0)    # brightness factors are kept within this
+GAIN_MIN_PX = 40           # smallest overlap (pixels each way) that sets a gain
+GAIN_NOTE = 0.01           # say so when a picture was scaled by more than this
 
 
 @dataclass
@@ -52,6 +55,7 @@ class Mosaic:
     matched: int = 0           # pairs whose match moved them
     pairs: int = 0             # pairs that overlap
     notes: list = field(default_factory=list)
+    gains: dict = field(default_factory=dict)   # name -> (r, g, b) factors
 
     def description(self):
         """One line on how it was made, for notes and captions."""
@@ -76,8 +80,10 @@ def _neighbours(a, b):
             and abs(a["y_mm"] - b["y_mm"]) < fh * (1 - MIN_OVERLAP))
 
 
-def _one_per_spot(pictures):
-    """The latest picture at each stage position (``pictures`` in time order)."""
+def _one_per_spot(pictures, keep="latest"):
+    """One picture at each stage position (``pictures`` in time order): the
+    latest, which shows the marks of the analysis, or with ``keep="earliest"``
+    the first, which shows the surface before it."""
     kept = []
     for pic in pictures:
         c = pic.calib
@@ -85,18 +91,20 @@ def _one_per_spot(pictures):
             o = old.calib
             if (abs(o["x_mm"] - c["x_mm"]) < SAME_SPOT_MM
                     and abs(o["y_mm"] - c["y_mm"]) < SAME_SPOT_MM):
-                kept[i] = pic
+                if keep != "earliest":
+                    kept[i] = pic
                 break
         else:
             kept.append(pic)
     return kept
 
 
-def clusters(pictures):
+def clusters(pictures, keep="latest"):
     """Groups of two or more pictures that overlap (directly or through
-    neighbours), one picture per stage position and one pixel size per group,
-    as lists in the order the pictures were given."""
-    pics = [p for p in _one_per_spot(pictures)
+    neighbours), one picture per stage position (the ``keep`` one, see
+    ``_one_per_spot``) and one pixel size per group, as lists in the order the
+    pictures were given."""
+    pics = [p for p in _one_per_spot(pictures, keep)
             if snapshot.has_calibration(p.calib)]
     parent = list(range(len(pics)))
 
@@ -254,13 +262,52 @@ def solve_offsets(n, pair_shifts):
     return list(zip(tx.tolist(), ty.tolist()))
 
 
+def _overlap_means(ta, tb):
+    """The per-channel mean of the part of two placed tiles ``(array, x0, y0)``
+    that coincide, as seen by each: ``(mean_a, mean_b)``, or None when the
+    overlap is too small to say anything."""
+    (a, ax, ay), (b, bx, by) = ta, tb
+    x0, x1 = max(ax, bx), min(ax + a.shape[1], bx + b.shape[1])
+    y0, y1 = max(ay, by), min(ay + a.shape[0], by + b.shape[0])
+    if x1 - x0 < GAIN_MIN_PX or y1 - y0 < GAIN_MIN_PX:
+        return None
+    pa = a[y0 - ay:y1 - ay, x0 - ax:x1 - ax].reshape(-1, 3)
+    pb = b[y0 - by:y1 - by, x0 - bx:x1 - bx].reshape(-1, 3)
+    return pa.mean(axis=0), pb.mean(axis=0)
+
+
+def solve_gains(n, pair_means):
+    """One brightness factor per picture and colour channel from the mean of
+    each overlap, ``[(i, j, mean_i, mean_j)]`` (three-channel means of the same
+    patch seen by both): ``g_i * mean_i = g_j * mean_j`` in the least-squares
+    sense, in the log domain, with the factors of the set averaging 1 and kept
+    within ``GAIN_RANGE``. Returns ``[(r, g, b)]``."""
+    import numpy as np
+    if not pair_means:
+        return [(1.0, 1.0, 1.0)] * n
+    rows = len(pair_means) + 1
+    a = np.zeros((rows, n))
+    b = np.zeros((rows, 3))
+    for r, (i, j, mi, mj) in enumerate(pair_means):
+        a[r, i], a[r, j] = 1.0, -1.0
+        b[r] = np.log(np.maximum(mj, 1.0)) - np.log(np.maximum(mi, 1.0))
+    a[-1, :] = 1.0                                   # the set averages out
+    logs = np.linalg.lstsq(a, b, rcond=None)[0]
+    lo, hi = GAIN_RANGE
+    g = np.clip(np.exp(logs), lo, hi)
+    return [tuple(float(v) for v in row) for row in g]
+
+
 # -- putting it together ----------------------------------------------------------------
 _memo = {}                                          # key -> Mosaic (a few)
 
 
-def build(pictures, refine=True):
+def build(pictures, refine=True, gain=True):
     """The mosaic of ``pictures`` (one cluster from ``clusters``): pictures
-    exposing ``calib``, ``name`` and ``array(max_px)``."""
+    exposing ``calib``, ``name`` and ``array(max_px)``. ``gain`` evens out the
+    brightness (per colour channel) of pictures that overlap, so the seams do
+    not show an exposure step; ``refine`` nudges them to agree on what they
+    show."""
     import numpy as np
     from PIL import Image
 
@@ -269,7 +316,7 @@ def build(pictures, refine=True):
     # enough: a picture retaken at the same spot on the same sample keeps
     # both, and would otherwise silently get the earlier one's mosaic) plus
     # its position, so a picture nudged in the calibration still rebuilds
-    key = (refine, tuple((id(getattr(p, "blob", p)),
+    key = (refine, gain, tuple((id(getattr(p, "blob", p)),
                           round(p.calib["x_mm"], 4),
                           round(p.calib["y_mm"], 4)) for p in pictures))
     if key in _memo:
@@ -306,8 +353,7 @@ def build(pictures, refine=True):
                      "stage put them.")
 
     w, h = round(frame["width"] * k), round(frame["height"] * k)
-    acc = np.zeros((h, w, 3), dtype="float32")
-    wsum = np.zeros((h, w), dtype="float32")
+    tiles = []                                  # (array, x0, y0) on the canvas
     pos = {}
     for p, a, (bx, by), (cx, cy) in zip(pictures, arrays, base, corr):
         left, top = bx + cx, by + cy
@@ -317,7 +363,27 @@ def build(pictures, refine=True):
         if a.shape[1] != tw or a.shape[0] != th:
             a = np.asarray(Image.fromarray(a).resize((tw, th),
                                                      Image.LANCZOS))
-        x0, y0 = round(left * k), round(top * k)
+        tiles.append((a, round(left * k), round(top * k)))
+    gains = {}
+    if gain and len(tiles) > 1:
+        means = []
+        for i in range(len(tiles)):
+            for j in range(i + 1, len(tiles)):
+                got = _overlap_means(tiles[i], tiles[j])
+                if got is not None:
+                    means.append((i, j) + got)
+        factors = solve_gains(len(tiles), means)
+        for p, f in zip(pictures, factors):
+            gains[p.name] = f
+        if any(max(abs(v - 1.0) for v in f) > GAIN_NOTE for f in factors):
+            lo = min(min(f) for f in factors)
+            hi = max(max(f) for f in factors)
+            notes.append("Brightness matched between overlapping pictures "
+                         f"(factors {lo:.2f} to {hi:.2f}).")
+    acc = np.zeros((h, w, 3), dtype="float32")
+    wsum = np.zeros((h, w), dtype="float32")
+    for p, (a, x0, y0) in zip(pictures, tiles):
+        th, tw = a.shape[:2]
         sx0, sy0 = max(0, -x0), max(0, -y0)
         sx1, sy1 = min(tw, w - x0), min(th, h - y0)
         if sx1 <= sx0 or sy1 <= sy0:
@@ -327,14 +393,18 @@ def build(pictures, refine=True):
         weight = np.minimum.outer(ramp_y, ramp_x).astype("float32")
         ys, xs = slice(y0 + sy0, y0 + sy1), slice(x0 + sx0, x0 + sx1)
         wt = weight[sy0:sy1, sx0:sx1]
-        acc[ys, xs] += a[sy0:sy1, sx0:sx1].astype("float32") * wt[..., None]
+        pix = a[sy0:sy1, sx0:sx1].astype("float32")
+        g = gains.get(p.name)
+        if g is not None:
+            pix = np.clip(pix * np.asarray(g, dtype="float32"), 0, 255)
+        acc[ys, xs] += pix * wt[..., None]
         wsum[ys, xs] += wt
     out = np.full((h, w, 3), 24, dtype="uint8")          # dark where nothing is
     ok = wsum > 0
     out[ok] = np.clip(acc[ok] / wsum[ok][:, None] + 0.5, 0, 255).astype(
         "uint8")
     m = Mosaic(frame, out, [p.name for p in pictures], pos, len(shifts),
-               pairs, notes)
+               pairs, notes, gains)
     _memo[key] = m
     while len(_memo) > 6:
         _memo.pop(next(iter(_memo)))

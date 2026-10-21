@@ -271,6 +271,22 @@ function near(a, b, msg, tol) {
     eq(g.map((x) => x.sample + '|' + x.kind), ['PtCl2 (survey)|survey', 'PtCl2|regions'], 'a survey is its own group');
   }
 
+  // ---- camera pictures: zoom and pan stay inside the picture ----
+  {
+    const W = 1600, H = 800;
+    let v = V.camZoom(null, W, H, 0.5, 800, 400);
+    eq(v, { x: [400, 1200], y: [200, 600] }, 'zooming in about the centre halves the window');
+    v = V.camZoom(null, W, H, 0.5, 0, 0);
+    eq(v, { x: [0, 800], y: [0, 400] }, 'zooming about a corner keeps that corner');
+    eq(V.camZoom(v, W, H, 2, 0, 0), null, 'zooming back out gives the whole picture');
+    eq(V.camPan(v, W, H, 5000, 5000), { x: [800, 1600], y: [400, 800] }, 'a pan stops at the edge of the picture');
+    eq(V.camPan(null, W, H, 10, 10), null, 'there is nothing to pan on the whole picture');
+    let z = null;
+    for (let i = 0; i < 40; i++) z = V.camZoom(z, W, H, 0.5, 800, 400);
+    check(z.x[1] - z.x[0] >= W / V.CAM_MAX_ZOOM - 1e-9, 'the zoom has a limit');
+    eq(V.camFit([-50, 750], [-20, 380], W, H), { x: [0, 800], y: [0, 400] }, 'a window past the corner slides back in');
+  }
+
   // ---- zoom stays inside the data ----
   {
     eq(V.clampView(525, 535, 518, 547), [525, 535], 'a zoom inside the data is kept');
