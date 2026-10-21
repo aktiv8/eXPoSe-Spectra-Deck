@@ -478,6 +478,31 @@ class TestFitStackInApp(unittest.TestCase):
         self.assertEqual(self.ws._axinfo[ax][1], "stack")
         self.assertIn("1–8 of 10", ax.get_title(loc="right"))
 
+    def test_a_report_steps_the_window_until_every_trace_is_shown(self):
+        ws = self.ws
+        windows = ws._fit_stack_windows(ws._groups(), None, 0)
+        self.assertEqual([first for _p, first in windows], [0, 8])
+        self.assertEqual(len(windows[1][0]), 1)        # only the panel that goes on
+        shown = []
+        pages = ws._render_figure_pages(
+            {"state": ws.capture_state(), "name": "Depth"},
+            lambda page: (shown.append(page), page)[1])
+        self.assertEqual(len(pages), 2)
+        titles = [t.get_text() for p in shown for t in p.texts]
+        head = ee.reportspec.figure_title(1, "Depth")
+        self.assertIn(head, titles)
+        self.assertIn(head + " (continued)", titles)
+        notes = [a.get_title(loc="right") for p in shown for a in p.axes]
+        self.assertTrue(any("1–8 of 10" in n for n in notes))
+        self.assertTrue(any("3–10 of 10" in n for n in notes))   # a full last window
+
+    def test_a_group_that_fits_one_window_gets_one_page(self):
+        ws = self.ws
+        ws.traces_var.set("All")
+        ws.checked = {id(r) for d in ws.docs for r in d.regions[:5]}
+        windows = ws._fit_stack_windows(ws._groups(), None, 0)
+        self.assertEqual(len(windows), 1)
+
     def test_the_trace_slider_walks_the_window(self):
         self.ws.trace_start = 2
         ax = self.axis()

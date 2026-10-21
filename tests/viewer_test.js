@@ -271,6 +271,21 @@ function near(a, b, msg, tol) {
     eq(g.map((x) => x.sample + '|' + x.kind), ['PtCl2 (survey)|survey', 'PtCl2|regions'], 'a survey is its own group');
   }
 
+  // ---- fit components: the visible floor, the legend's peak positions ----
+  {
+    eq(V.clipFloor([0, 5, 100, 2, 0.5, null]), [null, 5, 100, 2, null, null], 'a component stops below 1 % of its own peak');
+    eq(V.clipFloor([-100, -0.5, -3]), [-100, null, -3], 'the floor works on the size of a negative component');
+    eq(V.clipFloor([null, null]), [null, null], 'a component with no values stays empty');
+    eq(V.peakAt([10, 11, 12, 13], [1, 9, 9, null]), 11, 'the first of equal maxima');
+    eq(V.peakAt([1, 2], [null, null]), null, 'no peak without values');
+    const st = [{ key: 'a|i0', name: 'Pt 4f' }, { key: 'a|i1', name: 'Pt 4f' }, { key: 'a|i2', name: 'Cl 2p' },
+                { key: 'a|c3', name: 'A very long state name indeed' }];
+    eq(V.legendLabels(st, { 'a|i0': 71.04, 'a|i1': 74.4 }),
+       ['Pt 4f (71.0)', 'Pt 4f (74.4)', 'Cl 2p', 'A very long state nam\u2026'], 'states that share a name show where they peak');
+    eq(V.legendLabels(st.slice(0, 2), {}), ['Pt 4f', 'Pt 4f'], 'no peaks known: the plain name');
+    eq(V.stateKey({ region: 'Pt 4F', components: [{ index: 2 }, { index: -1 }] }, 1), 'pt 4f|c1', 'an ungrouped state is keyed by position');
+  }
+
   // ---- camera pictures: zoom and pan stay inside the picture ----
   {
     const W = 1600, H = 800;

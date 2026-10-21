@@ -758,7 +758,8 @@ class TestPage(unittest.TestCase):
         # +500: the Residual StDev in each fit's header (when the app shows it)
         # +1_000: the camera mosaics (the mosaic follow rule)
         # +3_000: zoom and pan of a camera picture (V.camZoom, V.camPan, wheel and drag)
-        self.assertLess(len(page), 196_000 + raw)     # far below plain JSON
+        # +2_000: the 1 % visible floor on a component and the peak position in the legend
+        self.assertLess(len(page), 198_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR

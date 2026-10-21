@@ -322,16 +322,47 @@
      sharing an INDEX >= 0 are one state (per fit region); an ungrouped one is
      its own, whatever its name -- mirroring plots.draw_fit. Colour (slot) is
      the INDEX; turning it into a colour is the page's job. */
+  V.stateKey = function (row, j) {
+    var c = row.components[j];
+    return String(row.region || '').toLowerCase() + '|' + (c.index !== null && c.index !== undefined && c.index >= 0 ? 'i' + c.index : 'c' + j);
+  };
   V.fitStates = function (reg, n) {
     var out = [], seen = {};
     V.fitRows(reg).forEach(function (row) {
       var slots = V.fitSlots(row.components.map(function (c) { return c.index; }), n);
       row.components.forEach(function (c, j) {
-        var key = String(row.region || '').toLowerCase() + '|' + (c.index !== null && c.index !== undefined && c.index >= 0 ? 'i' + c.index : 'c' + j);
+        var key = V.stateKey(row, j);
         if (!(key in seen)) { seen[key] = out.length; out.push({ key: key, name: c.state, slot: slots[j] }); }
       });
     });
     return out;
+  };
+  /* a component's own drawn fill and line stop where it has fallen below this share of its
+     own peak height (mirrors plots._COMPONENT_VISIBLE_FLOOR; the envelope is not touched) */
+  V.COMPONENT_FLOOR = 0.01;
+  V.clipFloor = function (values) {
+    var peak = 0;
+    values.forEach(function (v) { if (v !== null && v !== undefined && Math.abs(v) > peak) peak = Math.abs(v); });
+    var floor = V.COMPONENT_FLOOR * peak;
+    return values.map(function (v) { return v === null || v === undefined || Math.abs(v) < floor ? null : v; });
+  };
+  /* the x value where a component peaks (the first of equal maxima), null when it has no value */
+  V.peakAt = function (xs, values) {
+    var best = -1, bv = -1;
+    values.forEach(function (v, i) { if (v !== null && v !== undefined && Math.abs(v) > bv) { bv = Math.abs(v); best = i; } });
+    return best < 0 ? null : xs[best];
+  };
+  /* the legend text of each state (mirrors plots._fit_legend): states that share a name get
+     the energy where each peaks, so the swatches can be matched to the curves; `peaks` is
+     {state key: x} */
+  V.legendLabels = function (states, peaks) {
+    var count = {};
+    states.forEach(function (s) { count[s.name] = (count[s.name] || 0) + 1; });
+    return states.map(function (s) {
+      var p = peaks ? peaks[s.key] : null;
+      if (count[s.name] > 1 && p !== null && p !== undefined) return s.name.slice(0, 16) + ' (' + p.toFixed(1) + ')';
+      return s.name.length > 22 ? s.name.slice(0, 21) + '\u2026' : s.name;
+    });
   };
   /* what to draw for the components of one fit row: one entry per component
      or, with merge, one per CasaXPS INDEX group (INDEX >= 0), the members'
@@ -1872,10 +1903,11 @@
     });
 
     /* the fit: background, components on top of it, envelope, residual */
-    if (fit) drawFit(ctx, C, lay, X, Y, axes[0].x, fit, items[0], resBase, rr, font);
+    var fitPeaks = {};
+    if (fit) drawFit(ctx, C, lay, X, Y, axes[0].x, fit, items[0], resBase, rr, font, { peaks: fitPeaks });
     if (sfits) {
       sfits.forEach(function (f, i) {
-        if (f) drawFit(ctx, C, lay, X, Y, axes[i].x, f, items[i], null, 0, font, { yadd: i * step, stack: true });
+        if (f) drawFit(ctx, C, lay, X, Y, axes[i].x, f, items[i], null, 0, font, { yadd: i * step, stack: true, peaks: fitPeaks });
       });
     }
 
@@ -1900,8 +1932,8 @@
       endpts.push(Y(sum / (b - a)));
     });
     ctx.restore();
-    if (fit && S.fit.components) fitLegend(ctx, C, lay, [items[0]], font);
-    else if (sfits && S.fit.components) fitLegend(ctx, C, lay, items.filter(function (s, i) { return sfits[i]; }), font);
+    if (fit && S.fit.components) fitLegend(ctx, C, lay, [items[0]], font, fitPeaks);
+    else if (sfits && S.fit.components) fitLegend(ctx, C, lay, items.filter(function (s, i) { return sfits[i]; }), font, fitPeaks);
 
     /* trace labels: at the end of each trace of a stack, a legend otherwise */
     ctx.font = font(11); ctx.textBaseline = 'middle';
@@ -2039,7 +2071,7 @@
   function drawFit(ctx, C, lay, X, Y, xs, fit, s, resBase, rr, font, opt) {
     /* opt.yadd: the trace's offset in a stack (added to every curve);
        opt.stack: the per-component ticks belong to the one-spectrum table */
-    var yadd = opt && opt.yadd || 0, Yd = Y;
+    var yadd = opt && opt.yadd || 0, Yd = Y, peaks = opt && opt.peaks;
     if (yadd) Y = function (v) { return Yd(v + yadd); };
     ctx.lineJoin = 'round';
     fit.forEach(function (fr) {
@@ -2052,7 +2084,10 @@
       if (S.fit.components) {
         V.drawnCurves(fr.row.components, fr.comps, S.fit.merge, function (j) { return !(opt && opt.stack) && S.fit.hidden[fr.ri + ':' + j]; }).forEach(function (e) {
           var cv = e.values, col = rcol[e.j] || '#888888';
-          var lo = fr.bg || zero, top = cv.map(function (v, k) { return v === null || lo[k] === null ? null : lo[k] + v; });
+          var key = V.stateKey(fr.row, e.j);
+          if (peaks && !(key in peaks)) peaks[key] = V.peakAt(xs, cv);
+          var lo = fr.bg || zero, shown = V.clipFloor(cv);
+          var top = shown.map(function (v, k) { return v === null || lo[k] === null ? null : lo[k] + v; });
           ctx.fillStyle = col; ctx.globalAlpha = 0.35; fillBetween(ctx, xs, top, lo, X, Y); ctx.globalAlpha = 1;
           ctx.strokeStyle = col; ctx.lineWidth = 1; strokeCurve(ctx, xs, top, X, Y);
         });
@@ -2072,15 +2107,16 @@
     ctx.lineWidth = 1;
   }
   /* the states of the fit, top left of the plot; a long list is left to the table */
-  function fitLegend(ctx, C, lay, list, font) {
+  function fitLegend(ctx, C, lay, list, font, peaks) {
     var cols = fitColours(), st = V.fitStatesOf(list.map(function (s) { return s.reg; }), cols.length);
     if (!st.length || st.length > 6) return;
+    var labels = V.legendLabels(st, peaks);
     ctx.font = font(11); ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     st.forEach(function (x, i) {
       var y = lay.t + 12 + i * 15;
       ctx.fillStyle = cols[x.slot % cols.length]; ctx.globalAlpha = 0.5; ctx.fillRect(lay.l + 8, y - 5, 10, 10); ctx.globalAlpha = 1;
       ctx.fillStyle = C.fg;
-      ctx.fillText(x.name.length > 22 ? x.name.slice(0, 21) + '…' : x.name, lay.l + 24, y);
+      ctx.fillText(labels[i], lay.l + 24, y);
     });
     ctx.textBaseline = 'alphabetic';
   }

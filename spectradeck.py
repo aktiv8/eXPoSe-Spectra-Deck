@@ -3657,6 +3657,28 @@ class Workspace:
                        panelview.FIT_STACK_MAX)
         return limit
 
+    def _fit_stack_windows(self, chunk, limit, start):
+        """The pages one page of panels needs on paper: ``[(panels, first
+        trace)]``. The first is the page as it is; a *Fit stack* panel holds at
+        most ``panelview.FIT_STACK_MAX`` traces, so one with more gets further
+        pages (only those panels) stepping the trace window along until every
+        spectrum is shown (the last window is a full one, as the slider's is,
+        so it repeats a few traces of the one before). On screen the trace
+        slider does that."""
+        out = [(chunk, start)]
+        defaults = self._page_defaults()
+        cur, first = chunk, start
+        while True:
+            lim = self._panel_limit(limit, {"view": "Fit stack"})
+            more = [(k, rs) for k, rs in cur
+                    if self._look_for(k, defaults)["view"] == "Fit stack"
+                    and len(rs) > first + lim]
+            if not more:
+                return out
+            first += lim
+            cur = more
+            out.append((cur, first))
+
     def _trace_span(self, groups, looks, limit):
         """(window, length) of the panel whose window can slide furthest: what
         the trace slider and its label describe."""
@@ -4887,23 +4909,27 @@ class Workspace:
             caption = textwrap.fill((fig.get("caption") or "").strip(), 150,
                                     replace_whitespace=False)
             with matplotlib.rc_context(self._rc(paper)):
+                made = 0
                 for pg in range(pages):
-                    page = Figure(figsize=size, dpi=dpi)
-                    axmap = self._draw_page(
-                        page, groups[pg * per:(pg + 1) * per], limit, start,
-                        pal=PRINT, rect=rect)
-                    if self._zoom_request:
-                        self._apply_zoom(axmap, self._zoom_request)
-                    if decorate:
-                        head = reportspec.figure_title(number, fig.get("name"))
-                        if pg:
-                            head += " (continued)"
-                        page.text(0.03, 0.975, head, fontsize=12,
-                                  fontweight="bold", va="top")
-                        if caption and pg == 0:
-                            page.text(0.03, 0.145, caption, fontsize=9,
-                                      va="top", linespacing=1.4)
-                    out.append(consume(page))
+                    for panels, first in self._fit_stack_windows(
+                            groups[pg * per:(pg + 1) * per], limit, start):
+                        page = Figure(figsize=size, dpi=dpi)
+                        axmap = self._draw_page(
+                            page, panels, limit, first, pal=PRINT, rect=rect)
+                        if self._zoom_request:
+                            self._apply_zoom(axmap, self._zoom_request)
+                        if decorate:
+                            head = reportspec.figure_title(number,
+                                                           fig.get("name"))
+                            if made:
+                                head += " (continued)"
+                            page.text(0.03, 0.975, head, fontsize=12,
+                                      fontweight="bold", va="top")
+                            if caption and not made:
+                                page.text(0.03, 0.145, caption, fontsize=9,
+                                          va="top", linespacing=1.4)
+                        made += 1
+                        out.append(consume(page))
         # tick after the live view is restored: _temp_state has just swapped
         # it back, and the dialog's UI pump must not run while it is not
         self._report_tick(fig.get("name") or "Figure")
@@ -5576,10 +5602,14 @@ class Workspace:
         paper = self._plot_palette(PRINT, paper=True)[0]
         with matplotlib.rc_context(self._rc(paper)), PdfPages(path) as pdf:
             for p in range((len(groups) + per_page - 1) // per_page):
-                fig = Figure(figsize=size, dpi=150)
-                self._draw_page(fig, groups[p * per_page:(p + 1) * per_page],
-                                limit, self.trace_start, pal=PRINT)
-                pdf.savefig(fig)
+                chunk = groups[p * per_page:(p + 1) * per_page]
+                pages = ([(chunk, self.trace_start)] if windowed else
+                         self._fit_stack_windows(chunk, limit,
+                                                 self.trace_start))
+                for panels, first in pages:
+                    fig = Figure(figsize=size, dpi=150)
+                    self._draw_page(fig, panels, limit, first, pal=PRINT)
+                    pdf.savefig(fig)
         return len(groups)
 
     def save_pdf(self):
