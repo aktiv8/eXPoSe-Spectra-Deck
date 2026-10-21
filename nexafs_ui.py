@@ -68,7 +68,9 @@ class NexafsEdgeDialog(tk.Toplevel):
         self.vars = {k: tk.StringVar() for k in
                      ("pre_lo", "pre_hi", "post_lo", "post_hi", "e0")}
         self.orders = {"pre": tk.StringVar(value=ORDERS[1]),
-                       "post": tk.StringVar(value=ORDERS[1])}
+                       "post": tk.StringVar(value=ORDERS[1]),
+                       "flat": tk.StringVar(value=ORDERS[1])}
+        self.flatten = tk.BooleanVar(value=False)
         self.entries = {}
 
         def row(r, label, lo, hi, order):
@@ -98,6 +100,17 @@ class NexafsEdgeDialog(tk.Toplevel):
         e.bind("<FocusOut>", lambda ev: self._redraw())
         self.entries["e0"] = e
         ttk.Label(grid, text="eV").grid(row=2, column=2, sticky="w")
+        self.flat_cb = ttk.Checkbutton(
+            grid, text="Flatten the post-edge", variable=self.flatten,
+            command=self._redraw)
+        self.flat_cb.grid(row=3, column=0, sticky="w", pady=2)
+        ttk.Label(grid, text="fit over the post-edge window").grid(
+            row=3, column=1, columnspan=3, sticky="e", padx=(6, 2))
+        fcb = ttk.Combobox(grid, state="readonly", width=10, values=ORDERS,
+                           textvariable=self.orders["flat"])
+        fcb.grid(row=3, column=5)
+        fcb.bind("<<ComboboxSelected>>", lambda ev: self._redraw())
+        self.entries["flat"] = fcb
 
         self.drag = tk.StringVar(value="pre")
         bar = ttk.Frame(body)
@@ -175,14 +188,18 @@ class NexafsEdgeDialog(tk.Toplevel):
                                .rstrip("."))
         self.orders["pre"].set(ORDERS[nexafs._order(p.get("pre_order"))])
         self.orders["post"].set(ORDERS[nexafs._order(p.get("post_order"))])
+        self.flatten.set(p.get("flatten") is True)
+        self.orders["flat"].set(ORDERS[nexafs._order(p.get("flat_order"))])
 
     def set_mode(self, mode):
         self.mode.set(mode)
         self._mode_changed()
 
     def set_values(self, pre=None, post=None, e0=None, pre_order=None,
-                   post_order=None):
-        """Type values in (windows as ``(lo, hi)``), as the entries would."""
+                   post_order=None, flatten=None, flat_order=None):
+        """Type values in (windows as ``(lo, hi)``), as the entries would;
+        ``flatten`` ticks the post-edge flattening, ``flat_order`` (0-2) is
+        its polynomial."""
         if pre is not None:
             self.vars["pre_lo"].set(f"{pre[0]:g}")
             self.vars["pre_hi"].set(f"{pre[1]:g}")
@@ -195,6 +212,10 @@ class NexafsEdgeDialog(tk.Toplevel):
             self.orders["pre"].set(ORDERS[pre_order])
         if post_order is not None:
             self.orders["post"].set(ORDERS[post_order])
+        if flatten is not None:
+            self.flatten.set(bool(flatten))
+        if flat_order is not None:
+            self.orders["flat"].set(ORDERS[flat_order])
         self._redraw()
 
     def params(self):
@@ -209,6 +230,9 @@ class NexafsEdgeDialog(tk.Toplevel):
         if p["mode"] == "step":
             p.update(post=[f("post_lo"), f("post_hi")], e0=f("e0"),
                      post_order=ORDERS.index(self.orders["post"].get()))
+            if self.flatten.get():
+                p.update(flatten=True,
+                         flat_order=ORDERS.index(self.orders["flat"].get()))
         return nexafs.sanitise_edge(p)
 
     def suggest(self):
@@ -273,6 +297,7 @@ class NexafsEdgeDialog(tk.Toplevel):
         for key in ("post", "e0"):
             self.drag_buttons[key].state(["!disabled"] if step
                                          else ["disabled"])
+        self.flat_cb.state(["!disabled"] if step else ["disabled"])
         if not step and self.drag.get() != "pre":
             self.drag.set("pre")
         self._drag_changed()
@@ -288,6 +313,9 @@ class NexafsEdgeDialog(tk.Toplevel):
             self.entries[key].configure(state="normal" if step else "disabled")
         self.entries["post"].configure(state="readonly" if step
                                        else "disabled")
+        self.flat_cb.state(["!disabled"] if step else ["disabled"])
+        self.entries["flat"].configure(
+            state="readonly" if step and self.flatten.get() else "disabled")
         pal = self.app.palette
         fig = self.fig
         fig.clear()
@@ -321,6 +349,14 @@ class NexafsEdgeDialog(tk.Toplevel):
                     top.plot(self._energy, [nexafs.poly_at(fit, e)
                                             for e in self._energy], color=color,
                              lw=1.0, ls="--")
+            if "flat" in info:           # what the flattening changed
+                plain, _ = nexafs.edge_normalise(
+                    self._energy, self._counts,
+                    {k: v for k, v in p.items()
+                     if k not in ("flatten", "flat_order")})
+                if plain is not None:
+                    bot.plot(self._energy, plain, color=pal["muted"], lw=0.9,
+                             ls="--")
             bot.plot(self._energy, out, color=pal["accent"], lw=1.2)
             for level in (0.0, 1.0):
                 bot.axhline(level, color=pal["plot_fg"], lw=0.6, ls=":")

@@ -210,6 +210,153 @@ class TestEdgeStep(unittest.TestCase):
         self.assertFalse(math.isnan(out[101]))
 
 
+class TestFlatten(unittest.TestCase):
+    """The post-edge flattening: ``flat = norm - (poly(E) - poly(E0))`` above
+    E0 (Athena / Larch), the polynomial fitted to the normalised data over the
+    post-edge window. ``edge()`` has a post-edge line of slope 0.02 / eV, so
+    its normalised post-edge rises by 0.02 / 3.2 per eV until flattened."""
+    P = dict(TestEdgeStep.P, flatten=True, flat_order=1)
+
+    def test_the_post_edge_is_level_at_about_one(self):
+        e, y = edge()
+        plain, _ = nexafs.edge_normalise(e, y, TestEdgeStep.P)
+        flat, info = nexafs.edge_normalise(e, y, self.P)
+        self.assertEqual(info["flat_order"], 1)
+        for x, v in zip(e, flat):
+            if x >= 300.0:                       # the post-edge window
+                self.assertAlmostEqual(v, 1.0, places=9)
+        self.assertGreater(plain[-1], 1.2)       # it was sloping before
+
+    def test_nothing_below_the_edge_energy_changes(self):
+        e, y = edge()
+        plain, _ = nexafs.edge_normalise(e, y, TestEdgeStep.P)
+        flat, _ = nexafs.edge_normalise(e, y, self.P)
+        for x, a, b in zip(e, plain, flat):
+            if x < 290.0:
+                self.assertEqual(a, b)
+
+    def test_it_is_continuous_at_the_edge_energy(self):
+        # what is taken off starts at zero at E0 (the rise itself is steep
+        # here: it is the smooth edge, not a jump made by the flattening)
+        e, y = edge()
+        plain, _ = nexafs.edge_normalise(e, y, TestEdgeStep.P)
+        flat, _ = nexafs.edge_normalise(e, y, self.P)
+        for x, a, b in zip(e, plain, flat):
+            if 290.0 <= x <= 290.1 + 1e-9:
+                self.assertLess(abs(a - b), 0.002)
+            elif 289.9 <= x < 290.0:
+                self.assertEqual(a, b)
+
+    def test_the_step_is_still_the_step_of_the_normalisation(self):
+        e, y = edge()
+        _plain, a = nexafs.edge_normalise(e, y, TestEdgeStep.P)
+        _flat, b = nexafs.edge_normalise(e, y, self.P)
+        self.assertEqual(a["step"], b["step"])
+
+    def test_a_curved_post_edge_needs_the_quadratic(self):
+        e, y = edge()
+        y = [v + 0.0004 * (x - 290.0) ** 2 if x >= 290.0 else v
+             for x, v in zip(e, y)]
+        line, _ = nexafs.edge_normalise(e, y, self.P)
+        quad, info = nexafs.edge_normalise(e, y, dict(self.P, flat_order=2))
+        self.assertEqual(info["flat_order"], 2)
+
+        def spread(out):
+            w = [v for x, v in zip(e, out) if x >= 300.0]
+            return max(w) - min(w)
+        self.assertLess(spread(quad), 1e-6)
+        self.assertGreater(spread(line), 1e-3)
+
+    def test_a_constant_fit_only_shifts_the_post_edge_level(self):
+        e, y = edge()
+        flat, _ = nexafs.edge_normalise(e, y, dict(self.P, flat_order=0))
+        plain, _ = nexafs.edge_normalise(e, y, TestEdgeStep.P)
+        diffs = {round(plain[i] - flat[i], 9)
+                 for i, x in enumerate(e) if x >= 300.0}
+        # a constant fit subtracts (mean - value at E0): one number for the
+        # whole post-edge, no tilt removed
+        self.assertEqual(len(diffs), 1)
+
+    def test_it_works_for_a_negative_spectrum_and_a_high_energy_scale(self):
+        e, y = edge(sign=-1.0)
+        flat, info = nexafs.edge_normalise(e, y, self.P)
+        self.assertAlmostEqual(info["step"], -3.2, places=9)
+        for x, v in zip(e, flat):
+            if x >= 300.0:
+                self.assertAlmostEqual(v, 1.0, places=9)
+        e2 = [x + 1230.0 for x in edge()[0]]
+        p = {"mode": "step", "pre": [1500, 1510], "post": [1530, 1570],
+             "e0": 1520.0, "flatten": True}
+        flat, _ = nexafs.edge_normalise(e2, edge()[1], p)
+        self.assertAlmostEqual(flat[-1], 1.0, places=9)
+
+    def test_it_is_saved_and_checked_with_the_other_settings(self):
+        s = nexafs.sanitise_edge(self.P)
+        self.assertEqual((s["flatten"], s["flat_order"]), (True, 1))
+        self.assertNotIn("flatten", nexafs.sanitise_edge(
+            dict(self.P, flatten=False)))
+        self.assertNotIn("flatten", nexafs.sanitise_edge(
+            dict(self.P, flatten="yes")))
+        self.assertEqual(nexafs.sanitise_edge(
+            dict(self.P, flat_order=9))["flat_order"], 1)
+        # the max method has no post-edge to flatten
+        self.assertNotIn("flatten", nexafs.sanitise_edge(
+            {"mode": "max", "pre": [270, 274], "flatten": True}))
+        e, y = edge()
+        thin = dict(self.P, post=[339.9, 340.0], flat_order=2)
+        self.assertTrue(any("flattening" in m or "fewer than" in m
+                            for m in nexafs.check_edge(thin, e, y)))
+
+    def test_the_text_says_it(self):
+        t = nexafs.edge_text(dict(self.P, flat_order=2))
+        self.assertTrue(t.endswith("step set to 1; post-edge flattened "
+                                   "(quadratic fit over the post-edge "
+                                   "window)"), t)
+        self.assertNotIn("flattened", nexafs.edge_text(TestEdgeStep.P))
+
+    def test_process_applies_it_after_the_ring_scaling(self):
+        r = TestProcess().region()
+        res = nexafs.process(r, True, self.P)
+        self.assertEqual(res.edge["flat_order"], 1)
+        plain = nexafs.process(r, True, TestEdgeStep.P)
+        self.assertNotEqual(res.counts[-1], plain.counts[-1])
+
+
+@unittest.skipUnless(os.environ.get("XPS_NEXAFS_CORPUS") and HAVE_H5,
+                     "set XPS_NEXAFS_CORPUS (and install h5py)")
+class TestFlattenRealScan(unittest.TestCase):
+    """The C K-edge scan ``b07-12693``: its raw TEY (ca35b) still falls above
+    the edge (the I0 dip at the carbon edge is not divided out), so the
+    post-edge line is not flat and the step is only as good as the window.
+    Flattening removes that slope."""
+
+    def test_the_post_edge_window_is_level_after_flattening(self):
+        path = os.path.join(os.environ["XPS_NEXAFS_CORPUS"], "b07-12693.nxs")
+        if not os.path.exists(path):
+            self.skipTest("b07-12693.nxs not in the corpus folder")
+        r = next(x for x in readers.load_file(path).regions
+                 if x.name == "ca35b")
+        s = nexafs.suggest_edge(r.energy, r.counts, "step")
+        plain, _ = nexafs.edge_normalise(r.energy, r.counts, s)
+        flat, _info = nexafs.edge_normalise(
+            r.energy, r.counts, dict(s, flatten=True, flat_order=1))
+
+        def window(out):
+            lo, hi = s["post"]
+            return [(x, v) for x, v in zip(r.energy, out) if lo <= x <= hi]
+
+        def slope(out):
+            return nexafs.fit_poly(*zip(*window(out)), 1)["c"][1]
+        self.assertGreater(abs(slope(plain)), 0.01)           # sloping
+        self.assertLess(abs(slope(flat)), 1e-9)                # level
+        pts = window(flat)
+        self.assertAlmostEqual(sum(v for _x, v in pts) / len(pts), 1.0,
+                               places=9)
+        for x, a, b in zip(r.energy, plain, flat):             # below E0 same
+            if x < s["e0"]:
+                self.assertEqual(a, b)
+
+
 class TestMaxMethod(unittest.TestCase):
     P = {"mode": "max", "pre": [270, 274]}
 
@@ -339,6 +486,14 @@ class TestAnnotations(unittest.TestCase):
         a.set_edge("f1", "S", "ca35b", {})
         self.assertTrue(a.is_empty())
 
+    def test_the_flattening_is_saved_and_read_back(self):
+        a = annotations.Annotations()
+        a.set_edge("f1", "S", "ca35b", dict(self.P, flatten=True,
+                                            flat_order=2))
+        b = annotations.Annotations.from_json(a.to_json())
+        got = b.edge_for("f1", "S", "ca35b")
+        self.assertEqual((got["flatten"], got["flat_order"]), (True, 2))
+
     def test_bad_saved_settings_are_dropped_not_trusted(self):
         a = annotations.Annotations.from_json(
             {"nexafs_edge": {"f|S|x": {"mode": "step", "pre": [1, 2]},
@@ -398,6 +553,14 @@ class TestWithAFile(unittest.TestCase):
                       "E0 275 eV; step set to 1)", text)
         self.assertIn("scaled to the mean ring current", text)
         self.assertNotIn("not normalised", text)
+
+    def test_the_flattening_is_stated_in_the_metadata_and_the_methods(self):
+        self.annotated(edge=dict(self.P, flatten=True, flat_order=1))
+        md = self.f.region_metadata(self.f.regions[0])
+        self.assertIn("post-edge flattened (linear fit",
+                      md["Edge normalisation"])
+        self.assertIn("post-edge flattened",
+                      methods.generate(self.f.metadata_rows()))
 
     def test_different_windows_are_counted_not_listed(self):
         a = self.annotated(edge=self.P)
@@ -510,6 +673,25 @@ class TestInTheWindow(unittest.TestCase):
         self.assertEqual(len(fits), 3)
         for r in self.regions:
             self.assertEqual(self.ws.nexafs_edge_get(r)["e0"], 275.0)
+
+    def test_the_flattening_box_previews_saves_and_dims_for_the_max_method(self):
+        dlg = self.dialog()
+        dlg.set_values(pre=(270, 272), post=(278, 280), e0=275.0)
+        plain, _ = dlg.preview()
+        dlg.set_values(flatten=True, flat_order=1)
+        flat, info = dlg.preview()
+        self.assertEqual(info["flat_order"], 1)
+        self.assertNotEqual(plain[-1], flat[-1])
+        self.assertTrue(dlg.use_here())
+        saved = self.ws.nexafs_edge_get(self.regions[0])
+        self.assertEqual((saved["flatten"], saved["flat_order"]), (True, 1))
+        self.assertEqual(self.ws._display(self.regions[0]).counts, flat)
+        self.assertIn("flattened", dlg.status.cget("text"))
+        dlg.set_mode("max")                    # nothing to flatten there
+        self.assertNotIn("flatten", dlg.params())
+        self.assertIn("disabled", dlg.flat_cb.state())
+        dlg.select(0)                          # a saved choice comes back ticked
+        self.assertTrue(dlg.flatten.get())
 
     def test_the_max_method_needs_only_the_pre_edge(self):
         dlg = self.dialog()

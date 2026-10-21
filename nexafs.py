@@ -19,7 +19,15 @@ scaling:
   line) is fitted to a *pre-edge* window and another to a *post-edge* window;
   the pre-edge fit is subtracted and the result divided by the **edge step**,
   ``post(E0) - pre(E0)``, so the step is 1. The sign of the step is kept, so a
-  spectrum of negative currents normalises to a positive edge.
+  spectrum of negative currents normalises to a positive edge. Optionally
+  (``flatten``) the **post-edge is flattened** as Athena and Larch do: a
+  polynomial (order 0-2, ``flat_order``, a line by default) is fitted to the
+  normalised data over the post-edge window and its rise above its own value
+  at E0 is subtracted from everything at or above E0, ``flat = norm -
+  (poly(E) - poly(E0))``, so the post-edge sits level (at about 1) and the
+  spectrum stays continuous at E0; below E0 nothing changes. It removes a
+  sloping post-edge (an I0 dip, a detector drift) that would otherwise tilt
+  every feature above the edge.
 * ``"max"`` (the author's own *NEXAFS Processing Template*: a line fitted over
   a pre-edge window is subtracted, then the spectrum is scaled so that its
   minimum is 0 and its maximum 1). The template's last cell multiplies by the
@@ -101,7 +109,8 @@ def _window(w):
 def sanitise_edge(d):
     """A valid parameter dict or {}: ``mode`` ("step" / "max"), ``pre``
     ``[lo, hi]`` and ``pre_order`` (0-2, default 1); for "step" also ``post``,
-    ``post_order`` and ``e0``. Anything else is dropped."""
+    ``post_order`` and ``e0``, and ``flatten`` (True, with ``flat_order`` 0-2,
+    default 1) when the post-edge is flattened. Anything else is dropped."""
     if not isinstance(d, dict) or d.get("mode") not in MODES:
         return {}
     pre = _window(d.get("pre"))
@@ -114,6 +123,8 @@ def sanitise_edge(d):
         if post is None or e0 is None:
             return {}
         out.update(post=post, post_order=_order(d.get("post_order")), e0=e0)
+        if d.get("flatten") is True:
+            out.update(flatten=True, flat_order=_order(d.get("flat_order")))
     return out
 
 
@@ -189,6 +200,10 @@ def check_edge(p, energy, y=None):
             out.append(f"the {name} window is outside the data "
                        f"({lo:g}-{hi:g} eV)")
     if p["mode"] == "step":
+        if p.get("flatten") and len(_inside(energy, yy, p["post"])) \
+                < p["flat_order"] + 2:
+            out.append(f"the post-edge window holds fewer than "
+                       f"{p['flat_order'] + 2} points for the flattening fit")
         if not lo <= p["e0"] <= hi:
             out.append(f"E0 {p['e0']:g} eV is outside the data")
         if p["pre"][1] > p["e0"]:
@@ -225,7 +240,17 @@ def edge_normalise(energy, y, p):
             return None, ["the edge step is zero"]
         info.update(post=post, post_window=p["post"],
                     post_order=p["post_order"], e0=p["e0"], step=step)
-        return [v / step for v in z], info
+        norm = [v / step for v in z]
+        if p.get("flatten"):
+            flat = fit_poly(*zip(*_inside(energy, norm, p["post"])),
+                            p["flat_order"])
+            if flat is None:
+                return None, ["the flattening fit is singular"]
+            base = poly_at(flat, p["e0"])
+            norm = [v - (poly_at(flat, e) - base) if e >= p["e0"] else v
+                    for e, v in zip(energy, norm)]
+            info.update(flat=flat, flat_order=p["flat_order"])
+        return norm, info
     good = [v for v in z if math.isfinite(v)]
     lo, hi = min(good), max(good)
     size = max((abs(v) for v in y if math.isfinite(v)), default=0.0)
@@ -277,9 +302,11 @@ def edge_text(p):
     pre = (f"pre-edge {p['pre'][0]:g}-{p['pre'][1]:g} eV "
            f"({ORDER_NAMES[p['pre_order']]})")
     if p["mode"] == "step":
+        flat = (f"; post-edge flattened ({ORDER_NAMES[p['flat_order']]} fit "
+                "over the post-edge window)" if p.get("flatten") else "")
         return (f"edge step: {pre}, post-edge {p['post'][0]:g}-"
                 f"{p['post'][1]:g} eV ({ORDER_NAMES[p['post_order']]}), "
-                f"E0 {p['e0']:g} eV; step set to 1")
+                f"E0 {p['e0']:g} eV; step set to 1{flat}")
     return (f"{pre} subtracted, then scaled to a minimum of 0 and a "
             "maximum of 1")
 
