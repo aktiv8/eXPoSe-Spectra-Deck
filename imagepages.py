@@ -271,11 +271,57 @@ def _pack_images(sets):
     return pages
 
 
-def mosaic_picture(cluster, positions, sites):
+@dataclass
+class MosaicSet:
+    """One set of overlapping pictures of a file, ready to be stitched."""
+    parser: object
+    cluster: list                # Pictures
+    positions: dict              # shown sample -> stage position
+    sites: dict                  # shown sample -> its first SnapMap cube
+    key: str = ""
+
+    @property
+    def title(self):
+        return f"Mosaic of {len(self.cluster)} pictures"
+
+
+def mosaic_sets(docs, label_of=None, skip=()):
+    """The sets of overlapping calibrated pictures in ``docs`` (per file:
+    another holder is another frame), minus the pictures whose keys are in
+    ``skip``. Nothing is stitched until ``mosaic_picture`` is called."""
+    label_of = label_of or (lambda p, s: s)
+    skip = set(skip)
+    out = []
+    for p in docs:
+        positions = {label_of(p, k): xy
+                     for k, xy in p.sample_positions().items()}
+        first = {}
+        for r in p.regions:
+            if _is_snapmap(r):
+                first.setdefault(label_of(p, r.sample), r.extra["cube"])
+        mine = []
+        for blob in p.images:
+            if not snapshot.has_calibration(blob.calib):
+                continue
+            points, outlines = snapshot.view_of(blob.calib, positions, first)
+            key = item_key("cam", p, blob.name)
+            if key in skip:
+                continue
+            mine.append(Picture(blob.name, label_of(p, blob.sample)
+                                if blob.sample else "", p, blob, points,
+                                outlines, key=key))
+        for n, c in enumerate(mosaic.clusters(mine), 1):
+            out.append(MosaicSet(p, c, positions, first,
+                                 item_key("mosaic", p, str(n))))
+    return out
+
+
+def mosaic_picture(cluster, positions, sites, refine=True):
     """``(Mosaic, Picture)``: the stitched pictures as one picture with its
     own calibration, so the analysis points and map outlines on it come from
-    ``snapshot.view_of`` like on any camera picture."""
-    m = mosaic.build(cluster)
+    ``snapshot.view_of`` like on any camera picture. ``refine`` False places
+    the pictures by stage position only."""
+    m = mosaic.build(cluster, refine=refine)
     points, outlines = snapshot.view_of(m.calib, positions, sites)
     pic = Picture(f"Mosaic of {len(cluster)} pictures", "", None,
                   SimpleNamespace(calib=m.calib), points, outlines,

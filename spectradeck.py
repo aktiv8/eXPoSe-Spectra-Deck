@@ -1986,6 +1986,14 @@ class Workspace:
             bar, variable=self.overlay_var, command=self._toggle_overlay,
             text="Overlay positions")
         self.overlay_cb.pack(side="left", padx=8)
+        self.refine_var = tk.BooleanVar(value=True)
+        self.refine_cb = ttk.Checkbutton(
+            bar, variable=self.refine_var, command=self._redraw_viewer,
+            text="Refine mosaic by matching", state="disabled")
+        self.refine_cb.pack(side="left", padx=8)
+        Tooltip(self.refine_cb, "Mosaic only: nudge overlapping pictures to "
+                "line up what they show. Off places them by stage position.",
+                lambda: self.palette)
         self.calib_holder = ttk.Frame(self.tab_images)
         self.viewer = ttk.Frame(self.tab_images)
         self.viewer.pack(side="top", fill="both", expand=True)
@@ -5917,6 +5925,17 @@ class Workspace:
                 f"{blob.name} — {os.path.basename(p.path or '')}"
             ttk.Label(cell, text=label, font=("TkDefaultFont", 8),
                       wraplength=170).pack()
+        if HAVE_MPL and HAVE_PIL:
+            for ms in imagepages.mosaic_sets(self.docs):
+                cell = ttk.Frame(self.thumb_inner)
+                cell.pack(side="top", padx=4, pady=4)
+                btn = ttk.Button(
+                    cell, width=14, text=f"[{len(ms.cluster)} pictures]",
+                    command=lambda p=ms.parser, m=ms: self._show_image(p, m))
+                btn.pack()
+                ttk.Label(cell, text="Mosaic" + (
+                    f" — {os.path.basename(ms.parser.path or '')}" if multi
+                    else ""), font=("TkDefaultFont", 8), wraplength=170).pack()
         if self._cur_image is None:
             self._redraw_viewer()
         self._refresh_info()
@@ -5964,6 +5983,22 @@ class Workspace:
         samples = {r.sample for r in self.sel_regions}
         hits = [(p, b) for p in self.docs for b in p.images
                 if b.sample and b.sample in samples]
+        if not hits and HAVE_MPL and HAVE_PIL:
+            # no picture of its own: a mosaic that covers the sample's position
+            cur = self._cur_image
+            if cur and isinstance(cur[1], imagepages.MosaicSet) and any(
+                    s in snapshot.markers(pic.calib, cur[0].sample_positions())
+                    for pic in cur[1].cluster for s in samples):
+                return
+            for ms in imagepages.mosaic_sets(self.docs):
+                pos = ms.parser.sample_positions()
+                if any(s in snapshot.markers(pic.calib, pos)
+                       for pic in ms.cluster for s in samples):
+                    on_images = self.nb.select() == str(self.tab_images)
+                    self._cur_image = (ms.parser, ms)
+                    if on_images:
+                        self._redraw_viewer()
+                    return
         if not hits or (self._cur_image
                         and any(b is self._cur_image[1] for _p, b in hits)):
             return
@@ -5981,11 +6016,18 @@ class Workspace:
         for w in self.viewer.winfo_children():
             w.destroy()
         if not self._cur_image:
+            self.refine_cb.config(state="disabled")
             self.overlay_cb.config(state="disabled")
             ttk.Label(self.viewer, padding=20,
                       text="Select an image above to view it.").pack()
             return
         parser, blob = self._cur_image
+        is_mosaic = isinstance(blob, imagepages.MosaicSet)
+        self.refine_cb.config(state="normal" if is_mosaic else "disabled")
+        if is_mosaic:
+            self.overlay_cb.config(state="disabled")
+            self._render_mosaic(parser, blob)
+            return
         if snapshot.has_calibration(blob.calib) and HAVE_MPL and HAVE_PIL:
             self.overlay_cb.config(state="disabled")     # it has its own scale
             self._render_snapshot(parser, blob)
@@ -6025,17 +6067,41 @@ class Workspace:
         """A sample-view camera image with the analysis points that fall in it
         (its own calibration places them; see snapshot.py), the footprint of
         any SnapMap taken here, and a scale bar. Clicking a point selects it."""
-        parent = self.viewer
         img = self._photo_image(parser, blob)
         if img is None:
             self._render_plain_photo(parser, blob)
             return
-        calib = blob.calib
-        w, h = img.size
+        self._draw_calibrated(parser, img, blob.calib, blob.name, blob.sample)
+
+    def _render_mosaic(self, parser, ms):
+        """The stitched pictures of one set (mosaic.py) as one calibrated
+        picture, drawn like a single camera image but with the zoom / pan
+        toolbar. Built here, on first view: it takes a couple of seconds."""
+        parent = self.viewer
+        try:
+            m, _pic = imagepages.mosaic_picture(
+                ms.cluster, ms.positions, ms.sites,
+                refine=self.refine_var.get())
+        except Exception as exc:                        # noqa: BLE001
+            ttk.Label(parent, padding=20,
+                      text=f"Could not build the mosaic:\n{exc}").pack()
+            return
+        img = Image.fromarray(m.array)
+        self._draw_calibrated(
+            parser, img, m.calib, f"Mosaic of {len(ms.cluster)} pictures",
+            "", caption=m.description() + (" " + " ".join(m.notes)
+                                           if m.notes else ""),
+            toolbar=True)
+
+    def _draw_calibrated(self, parser, img, calib, title, sample,
+                         caption="", toolbar=False):
+        parent = self.viewer
+        # a mosaic's array is shrunk; the axes keep the calibration's pixels
+        w, h = ((calib["width"], calib["height"]) if toolbar else img.size)
         pal = self.palette
         positions = parser.sample_positions()
         points = snapshot.markers(calib, positions)
-        hot = self._highlight_samples(parser) | {blob.sample}
+        hot = self._highlight_samples(parser) | {sample}
         fig = Figure(figsize=(7.2, 5.0), dpi=100)
         ax = fig.add_subplot(111)
         ax.imshow(img, extent=[0, w, h, 0])
@@ -6069,17 +6135,28 @@ class Workspace:
         ax.set_xlim(0, w)
         ax.set_ylim(h, 0)
         ax.set_axis_off()
-        ax.set_title(f"{blob.name}   \u00b7   {fov_w:.1f} \u00d7 {fov_h:.1f} mm",
+        ax.set_title(f"{title}   \u00b7   {fov_w:.1f} \u00d7 {fov_h:.1f} mm",
                      fontsize=9, color=pal["plot_fg"])
         fig.set_facecolor(pal["plot_bg"])
         fig.tight_layout()
         canvas = FigureCanvasTkAgg(fig, master=parent)
+        tb = None
+        if caption:
+            ttk.Label(parent, text=caption, wraplength=520, justify="left",
+                      font=("TkDefaultFont", 8)).pack(side="bottom",
+                                                      fill="x", padx=6)
+        if toolbar:
+            tb = NavigationToolbar2Tk(canvas, parent, pack_toolbar=False)
+            tb.update()
+            tb.pack(side="bottom", fill="x")
         canvas.get_tk_widget().pack(fill="both", expand=True)
         place_marker_labels(ax, marks, hot)
         canvas.draw()
+        # with the zoom / pan tool on, a press may start the tool's drag
         canvas.mpl_connect(
             "button_press_event",
-            lambda ev: self._pick_marker(ev, ax, points, parser))
+            lambda ev: None if (tb is not None and str(tb.mode))
+            else self._pick_marker(ev, ax, points, parser))
 
     def _photo_image(self, parser, blob):
         """The decoded holder photo (RGB), cached so live calibration changes

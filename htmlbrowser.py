@@ -57,7 +57,8 @@ DETAIL_KEYS = ("title", "customer", "reference", "operator", "date",
                "summary")
 MAX_PHOTO_BYTES = 6 * 1024 * 1024        # a bigger photo is left out
 CAMERA_MAX_PX = 800                      # longest side of an embedded camera picture
-CAMERA_QUALITY = 78                      # JPEG quality
+MOSAIC_MAX_PX = 1600                     # longest side of an embedded mosaic
+CAMERA_QUALITY = 78                     # JPEG quality
 CAMERA_BUDGET = 40 * 1024 * 1024         # pictures beyond this are left out
 MAP_STEP = 0.125                         # counts per step of a stored map value
 MAP_BUDGET = 40 * 1024 * 1024            # compressed SnapMap bytes; see pack_maps
@@ -221,7 +222,58 @@ def _camera_views(docs, label_of, notes):
     if left_out:
         notes.append(f"{left_out} camera picture(s) were left out (size limit "
                      f"or unreadable).")
+    used = _mosaic_views(docs, label_of, views, used, notes)
     return views, ids
+
+
+def _mosaic_views(docs, label_of, views, used, notes):
+    """Append one view per set of overlapping camera pictures, stitched (see
+    ``mosaic.py``); same shape as a picture's view plus ``mosaic`` and
+    ``desc``. A set that cannot be stitched, or does not fit the size budget,
+    is left out with a note. Returns the bytes used so far."""
+    import imagepages
+    skipped = 0
+    for ms in imagepages.mosaic_sets(docs, label_of):
+        try:
+            m, pic = imagepages.mosaic_picture(ms.cluster, ms.positions,
+                                               ms.sites)
+            from PIL import Image
+            im = Image.fromarray(m.array)
+            k = min(1.0, MOSAIC_MAX_PX / max(im.size))
+            if k < 1.0:
+                im = im.resize((max(1, round(im.width * k)),
+                                max(1, round(im.height * k))), Image.LANCZOS)
+            buf = io.BytesIO()
+            im.save(buf, "JPEG", quality=CAMERA_QUALITY, optimize=True)
+            jpeg = buf.getvalue()
+        except Exception:                               # noqa: BLE001
+            skipped += 1
+            continue
+        if used + len(jpeg) > CAMERA_BUDGET:
+            skipped += 1
+            continue
+        used += len(jpeg)
+        cal = m.calib
+        s = im.width / cal["width"]
+        fov = snapshot.field_of_view_mm(cal)
+        n = sum(1 for v in views if v.get("mosaic")) + 1
+        views.append({
+            "id": f"m{n - 1}", "name": f"Mosaic {n}: {len(ms.cluster)} pictures",
+            "sample": "", "file": docs.index(ms.parser), "w": im.width,
+            "h": im.height, "img": data_uri("image/jpeg", jpeg),
+            "fov": [round(fov[0], 3), round(fov[1], 3)],
+            "stage": [round(cal["x_mm"], 4), round(cal["y_mm"], 4)],
+            "points": {nm: [round(c * s, 1), round(r * s, 1)]
+                       for nm, (c, r) in pic.points.items()},
+            "maps": [{"sample": nm, "rect": [round(v * s, 1) for v in box]}
+                     for nm, box in pic.outlines.items()],
+            "bar_px": round(1000.0 / cal["um_per_px_x"] * s, 2),
+            "mosaic": True, "n": len(ms.cluster),
+            "desc": " ".join([m.description()] + m.notes)})
+    if skipped:
+        notes.append(f"{skipped} camera mosaic(s) were left out (size limit "
+                     "or could not be stitched).")
+    return used
 
 
 # -- SnapMaps ---------------------------------------------------------------------

@@ -2733,7 +2733,9 @@
     if (!c || !cv) return;
     if ($('camSel')) $('camSel').value = String(S.camIdx);
     withPicture('cam' + c.id, c.img, function (img) {
-      var box = cv.parentNode.clientWidth || 700, k = Math.min(1, box / c.w);
+      var box = cv.parentNode.clientWidth || 700, k = S.camFull ? 1 : Math.min(1, box / c.w);
+      cv.parentNode.style.overflow = S.camFull ? 'auto' : '';
+      cv.style.maxWidth = S.camFull ? 'none' : '';
       var ctx = sizeCanvas(cv, c.w * k, c.h * k);
       ctx.drawImage(img, 0, 0, c.w * k, c.h * k);
       cv._lay = { k: k };
@@ -2753,6 +2755,11 @@
       ctx.strokeText(mm + ' mm', 20 + bp / 2, by - 6); ctx.fillText(mm + ' mm', 20 + bp / 2, by - 6);
       var info = clear($('camInfo'));
       info.appendChild(h('span', { text: c.name + '  ·  ' + c.fov[0] + ' × ' + c.fov[1] + ' mm   ' }));
+      var full = h('input', { type: 'checkbox', id: 'camFull' });
+      full.checked = !!S.camFull;
+      full.addEventListener('change', function () { S.camFull = full.checked; drawCamera(); });
+      info.appendChild(h('label', null, full, ' Full size (scroll)   '));
+      if (c.mosaic && c.desc) info.appendChild(h('div', { class: 'muted', text: c.desc }));
       var seen = {};
       c.maps.forEach(function (m) {
         var maps = S.data.maps.filter(function (x) { return x.sample === m.sample; });
@@ -3001,8 +3008,12 @@
     if (sel.kind === 'region') { spec = S.byId[sel.id]; name = spec ? spec.sample.name : ''; }
     else { var sm = S.data.samples.filter(function (s) { return s.id === sel.id; })[0]; name = sm ? sm.name : ''; }
     var cs = S.data.cameras || [], cur = currentCam();
-    if (cs.length && !(cur && cur.sample === name)) {
-      for (var i = 0; i < cs.length; i++) if (cs[i].sample === name) { S.camIdx = i; break; }
+    if (cs.length && !(cur && (cur.sample === name || (name && cur.points && cur.points[name])))) {
+      var hitCam = -1;
+      for (var i = 0; i < cs.length; i++) if (cs[i].sample === name) { hitCam = i; break; }
+      /* no picture of its own: a mosaic that shows the sample's position */
+      if (hitCam < 0 && name) for (var j = 0; j < cs.length; j++) if (cs[j].mosaic && cs[j].points[name]) { hitCam = j; break; }
+      if (hitCam >= 0) S.camIdx = hitCam;
     }
     var maps = S.data.maps || [], cm = currentMap();
     if (maps.length && S.tab === 'maps') {
