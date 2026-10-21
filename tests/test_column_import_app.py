@@ -105,10 +105,10 @@ class TestColumnImport(unittest.TestCase):
         v = [r["values"] for r in rows]
         self.assertEqual([str(x) for x in v[0]],
                          ["60", "BE_C1s", "CPS_C1s", "Binding energy",
-                          "counts/s", "C 1s"])             # from the header
+                          "counts/s", "Unknown", "C 1s"])    # from the header
         self.assertEqual(v[1][1], "Column 2")              # intensity first
         self.assertEqual(v[1][2], "Column 1")
-        self.assertEqual(v[1][5], "O 1s ?")                # suggested, flagged
+        self.assertEqual(v[1][6], "O 1s ?")                # suggested, flagged
         self.assertEqual(v[2][3], "Kinetic energy")
 
     def test_a_suggested_name_stops_being_one_when_the_user_types(self):
@@ -117,7 +117,7 @@ class TestColumnImport(unittest.TestCase):
         dlg.set_row(0, name="O 1s")                        # same text: kept
         dlg.set_row(0, name="Oxygen")
         self.assertFalse(dlg.rows[0]["suggested"])
-        self.assertEqual(dlg.tree.item("0")["values"][5], "Oxygen")
+        self.assertEqual(dlg.tree.item("0")["values"][6], "Oxygen")
 
     def test_changing_the_columns_axis_and_unit(self):
         dlg = self.dialog([self.o1s])
@@ -135,7 +135,7 @@ class TestColumnImport(unittest.TestCase):
         o = dlg.rows[0]["opts"]
         self.assertEqual((o["intensity_cols"], o["names"]),
                          ([1, 2], ["Probe A", "Probe B"]))
-        self.assertEqual(dlg.tree.item("0")["values"][5], "2 spectra")
+        self.assertEqual(dlg.tree.item("0")["values"][6], "2 spectra")
         dlg.set_row(0, intensity=2)
         self.assertEqual(dlg.rows[0]["opts"]["intensity_cols"], [2])
         dlg.set_row(0, intensity="all")

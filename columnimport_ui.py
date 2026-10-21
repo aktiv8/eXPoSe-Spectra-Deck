@@ -1,12 +1,18 @@
-"""The import dialog for plain column-text files (CSV / ASC / TXT / DAT).
+"""The import dialog for plain column-text files (CSV / ASC / TXT / DAT, SPECS
+``.xy``, Excel ``.xlsx``).
 
 Such a file says little about itself, so before it is loaded the user sees what
 was found (which column is the energy, which the intensity, binding or kinetic
 energy, the unit and the region name), can change any of it with a preview of
 the spectrum beside it, and enters what no file of this kind holds: the sample
-name, the photon energy and the pass energy. The guesses come from
-``columntext`` and are only guesses: nothing is applied that the dialog does
-not show.
+name, the photon energy and the pass energy. The photon and the pass energy
+belong to each file (a header may state them: the SPECS ``.xy`` does); the
+boxes under "All files" set them for every file at once, the ones under "This
+file" for the selected one. An Excel workbook with several sheets offers the
+sheet to read, and a wide CSV written by this program is shown as the
+spectra it holds, its names, axes and units taken from its header. The guesses
+come from ``columntext`` and are only guesses: nothing is applied that the
+dialog does not show.
 
 ``items`` are ``(path, columntext.Table, options)``; after ``wait_window`` the
 ``result`` is ``None`` (cancelled) or ``{path: options}``. Everything the
@@ -34,9 +40,19 @@ class ColumnImportDialog(tk.Toplevel):
         self.result = None
         d = defaults if isinstance(defaults, dict) else {}
         self.rows = []
+        hv0, pe0 = d.get("photon_energy"), d.get("pass_energy")
         for path, table, opts in items:
+            o = dict(opts)
+            # what the file states stays; the rest starts from what was last
+            # entered, and can be changed per file
+            if not o.get("photon_energy") and hv0:
+                o["photon_energy"] = hv0
+                o["anode"] = next((n for n, e in columntext.ANODES.items()
+                                   if abs(e - hv0) < 0.05), "")
+            if not o.get("pass_energy") and pe0:
+                o["pass_energy"] = pe0
             self.rows.append({"path": path, "table": table,
-                              "opts": dict(opts), "suggested": False})
+                              "opts": o, "suggested": False})
         self.title("Import spectra from columns of numbers")
         self.transient(master)
         try:
@@ -61,13 +77,15 @@ class ColumnImportDialog(tk.Toplevel):
         mid = ttk.Frame(body)
         mid.grid(row=1, column=0, sticky="nsew")
         mid.columnconfigure(0, weight=1)
-        cols = ("rows", "energy", "intensity", "axis", "units", "name")
+        cols = ("rows", "energy", "intensity", "axis", "units", "photon",
+                "name")
         self.tree = ttk.Treeview(mid, columns=cols, height=9,
                                  selectmode="browse")
         for c, (title, w) in zip(
                 ("#0",) + cols, (("File", 210), ("Points", 60),
                                  ("Energy column", 130), ("Intensity", 130),
-                                 ("Axis", 100), ("Unit", 70), ("Name", 110))):
+                                 ("Axis", 100), ("Unit", 70),
+                                 ("Photon energy", 110), ("Name", 110))):
             self.tree.heading(c, text=title)
             self.tree.column(c, width=w, stretch=c in ("#0", "name"))
         sb = ttk.Scrollbar(mid, orient="vertical", command=self.tree.yview)
@@ -85,6 +103,9 @@ class ColumnImportDialog(tk.Toplevel):
         self.v_axis = tk.StringVar()
         self.v_units = tk.StringVar()
         self.v_name = tk.StringVar()
+        self.v_sheet = tk.StringVar()
+        self.v_hv = tk.StringVar()
+        self.v_pe = tk.StringVar()
         for c, (label, var, width) in enumerate((
                 ("Energy column", self.v_energy, 22),
                 ("Intensity", self.v_inten, 30),
@@ -108,6 +129,29 @@ class ColumnImportDialog(tk.Toplevel):
         self.cb_unit["values"] = list(columntext.UNITS)
         ttk.Button(one, text="Use this axis and unit for every file",
                    command=self.axis_to_all).grid(row=1, column=5, padx=(8, 0))
+        ttk.Label(one, text="Photon energy").grid(row=2, column=0, sticky="w",
+                                                  pady=(6, 0))
+        self.cb_hv = ttk.Combobox(
+            one, textvariable=self.v_hv, width=22,
+            values=[UNKNOWN] + [columntext.photon_label(e)
+                                for e in columntext.ANODES.values()])
+        self.cb_hv.grid(row=3, column=0, sticky="w", padx=(0, 6))
+        for ev in ("<<ComboboxSelected>>", "<FocusOut>", "<Return>"):
+            self.cb_hv.bind(ev, lambda e: self._commit_energies())
+        ttk.Label(one, text="Pass energy (eV)").grid(row=2, column=1,
+                                                     sticky="w", pady=(6, 0))
+        self.pe_entry = ttk.Entry(one, textvariable=self.v_pe, width=10)
+        self.pe_entry.grid(row=3, column=1, sticky="w", padx=(0, 6))
+        self.pe_entry.bind("<FocusOut>", lambda e: self._commit_energies())
+        self.pe_entry.bind("<Return>", lambda e: self._commit_energies())
+        ttk.Label(one, text="Sheet").grid(row=2, column=2, sticky="w",
+                                          pady=(6, 0))
+        self.cb_sheet = ttk.Combobox(one, textvariable=self.v_sheet, width=18,
+                                     state="disabled")
+        self.cb_sheet.grid(row=3, column=2, sticky="w", padx=(0, 6))
+        self.cb_sheet.bind("<<ComboboxSelected>>",
+                           lambda e: self.set_sheet(self.current,
+                                                    self.v_sheet.get()))
 
         every = ttk.LabelFrame(body, text="All files", padding=8)
         every.grid(row=3, column=0, sticky="ew", pady=(8, 0))
@@ -120,17 +164,22 @@ class ColumnImportDialog(tk.Toplevel):
         ttk.Label(every, text="Sample name").grid(row=0, column=0, sticky="w")
         ttk.Entry(every, textvariable=self.v_sample, width=28).grid(
             row=1, column=0, sticky="w", padx=(0, 10))
-        ttk.Label(every, text="Photon energy").grid(row=0, column=1,
-                                                    sticky="w")
+        ttk.Label(every, text="Photon energy (every file)").grid(
+            row=0, column=1, sticky="w")
         self.cb_photon = ttk.Combobox(
             every, textvariable=self.v_photon, width=22,
             values=[UNKNOWN] + [columntext.photon_label(e)
                                 for e in columntext.ANODES.values()])
         self.cb_photon.grid(row=1, column=1, sticky="w", padx=(0, 10))
-        ttk.Label(every, text="Pass energy (eV, optional)").grid(
+        for ev in ("<<ComboboxSelected>>", "<Return>"):
+            self.cb_photon.bind(ev, lambda e: self._apply_all())
+        ttk.Label(every, text="Pass energy (eV, every file)").grid(
             row=0, column=2, sticky="w")
-        ttk.Entry(every, textvariable=self.v_pass, width=10).grid(
-            row=1, column=2, sticky="w")
+        pass_entry = ttk.Entry(every, textvariable=self.v_pass, width=10)
+        pass_entry.grid(row=1, column=2, sticky="w")
+        pass_entry.bind("<Return>", lambda e: self._apply_all())
+        ttk.Button(every, text="Apply to every file",
+                   command=self._apply_all).grid(row=1, column=3, padx=(10, 0))
 
         self.notes = ttk.Label(body, style="Muted.TLabel", wraplength=860,
                                justify="left")
@@ -160,7 +209,7 @@ class ColumnImportDialog(tk.Toplevel):
         hv = columntext.parse_photon(self.v_photon.get())
         for row in self.rows:
             o, t = row["opts"], row["table"]
-            if o["axis"] != "BE" or len(o["intensity_cols"]) != 1:
+            if t.pairs or o["axis"] != "BE" or len(o["intensity_cols"]) != 1:
                 continue
             if columntext.region_name(o["names"][0],
                                       t.columns[o["energy_col"]]):
@@ -173,6 +222,8 @@ class ColumnImportDialog(tk.Toplevel):
 
     def _name_text(self, row):
         o = row["opts"]
+        if row["table"].pairs:
+            return f"{len(row['table'].pairs)} spectra"
         if len(o["intensity_cols"]) > 1:
             return f"{len(o['intensity_cols'])} spectra"
         name = o["names"][0] if o["names"] else ""
@@ -186,10 +237,16 @@ class ColumnImportDialog(tk.Toplevel):
         row = self.rows[i]
         o, t = row["opts"], row["table"]
         inten = ", ".join(t.label(c) for c in o["intensity_cols"])
-        self.tree.item(str(i), text=os.path.basename(row["path"]), values=(
-            t.n_rows, t.label(o["energy_col"]), inten,
-            columntext.AXIS_LABELS[o["axis"]], o["units"],
-            self._name_text(row)))
+        axis, units = columntext.AXIS_LABELS[o["axis"]], o["units"]
+        if t.pairs:
+            inten, axis, units = "(from the file)", "(from the file)", "…"
+        text = os.path.basename(row["path"])
+        if t.sheet:
+            text += f" [{t.sheet}]"
+        self.tree.item(str(i), text=text, values=(
+            t.n_rows, t.label(o["energy_col"]), inten, axis, units,
+            columntext.photon_label(o["photon_energy"])
+            if o["photon_energy"] else UNKNOWN, self._name_text(row)))
 
     def _write_notes(self):
         lines = []
@@ -203,6 +260,15 @@ class ColumnImportDialog(tk.Toplevel):
                 lines.append(f"{os.path.basename(row['path'])}: no column "
                              f"runs steadily one way, so the energy column is "
                              f"a guess.")
+            if columntext.is_specs(t.facts):
+                lines.append(f"{os.path.basename(row['path'])}: a SPECS file; "
+                             "its header gives the excitation and pass energy "
+                             "(change them here if they are wrong).")
+            others = [n for n, r in t.sheets if n != t.sheet and r]
+            if others:
+                lines.append(f"{os.path.basename(row['path'])}: other sheets "
+                             f"with a table: {', '.join(others)} (choose one "
+                             "under Sheet).")
         self.notes.config(text="\n".join(lines[:6])
                           + ("\n…" if len(lines) > 6 else ""))
 
@@ -235,10 +301,59 @@ class ColumnImportDialog(tk.Toplevel):
             self.v_inten.set(choices[o["intensity_cols"][0]])
         self.v_axis.set(columntext.AXIS_LABELS[o["axis"]])
         self.v_units.set(o["units"])
-        multi = len(o["intensity_cols"]) > 1
+        multi = len(o["intensity_cols"]) > 1 or bool(t.pairs)
         self.v_name.set("" if multi else (o["names"][0] if o["names"] else ""))
         self.name_entry.config(state="disabled" if multi else "normal")
+        wide = "disabled" if t.pairs else "readonly"
+        for cb in (self.cb_energy, self.cb_intensity, self.cb_axis,
+                   self.cb_unit):
+            cb.config(state=wide)
+        self.v_hv.set(columntext.photon_label(o["photon_energy"])
+                      if o["photon_energy"] else UNKNOWN)
+        self.v_pe.set(f"{o['pass_energy']:g}" if o["pass_energy"] else "")
+        names = [n for n, _r in t.sheets]
+        self.cb_sheet["values"] = names
+        self.v_sheet.set(t.sheet)
+        self.cb_sheet.config(state="readonly" if len(names) > 1 else "disabled")
         self._draw_preview()
+
+    def _commit_energies(self):
+        i = self.current
+        if i is not None:
+            self.set_row(i, photon=self.v_hv.get(), pass_energy=self.v_pe.get())
+
+    def _apply_all(self):
+        """The photon and pass energy typed under "All files" go to every
+        file."""
+        for k in range(len(self.rows)):
+            self.set_row(k, photon=self.v_photon.get(),
+                         pass_energy=self.v_pass.get())
+
+    def set_sheet(self, i, name):
+        """Read sheet ``name`` of an Excel file instead (the table, its guesses
+        and so its options change; the energies and the sample stay)."""
+        if i is None:
+            return
+        row = self.rows[i]
+        if not name or name == row["table"].sheet:
+            return
+        try:
+            table = columntext.load_table(row["path"], name)
+        except (OSError, ValueError):
+            return
+        if table is None:
+            return
+        keep = {k: row["opts"][k] for k in ("photon_energy", "pass_energy",
+                                            "anode", "sample")}
+        row["table"] = table
+        row["opts"] = dict(columntext.guess_options(table, row["path"]),
+                           **{k: v for k, v in keep.items() if v})
+        row["suggested"] = False
+        self._suggest_names()
+        self._refresh_row(i)
+        if self.current == i:
+            self._on_select()
+        self._write_notes()
 
     def _commit(self):
         """Apply the boxes under the table to the selected file."""
@@ -246,6 +361,8 @@ class ColumnImportDialog(tk.Toplevel):
         if i is None:
             return
         t = self.rows[i]["table"]
+        if t.pairs:                         # its header settles all of this
+            return
         choices = self._col_choices(t)
 
         def col(text):
@@ -261,12 +378,23 @@ class ColumnImportDialog(tk.Toplevel):
                      name=self.v_name.get())
 
     def set_row(self, i, energy_col=None, intensity=None, axis=None,
-                units=None, name=None):
+                units=None, name=None, photon=None, pass_energy=None):
         """Change what file ``i`` is read with. ``intensity`` is a column
         number, a list of them or ``"all"`` (every column but the energy);
-        the energy and intensity columns never coincide."""
+        the energy and intensity columns never coincide. ``photon`` (text:
+        "Al Kα (1486.6 eV)", "1253.6", "Unknown") and ``pass_energy`` (text)
+        are the file's own."""
         row = self.rows[i]
         o, t = dict(row["opts"]), row["table"]
+        if t.pairs:                         # columns, axis, unit, name: its own
+            energy_col = intensity = axis = units = name = None
+        if photon is not None:
+            o["photon_energy"] = columntext.parse_photon(photon)
+            o["anode"] = next((n for n, e in columntext.ANODES.items()
+                               if o["photon_energy"]
+                               and abs(e - o["photon_energy"]) < 0.05), "")
+        if pass_energy is not None:
+            o["pass_energy"] = columntext.parse_photon(pass_energy)
         if energy_col is not None or intensity is not None:
             old_cols, old_names = o["intensity_cols"], o["names"]
             if energy_col is not None:
@@ -316,12 +444,16 @@ class ColumnImportDialog(tk.Toplevel):
 
     # -- the settings every file shares ----------------------------------------------
     def set_shared(self, sample=None, photon=None, pass_energy=None):
+        """Set the boxes under "All files"; the photon and the pass energy go
+        to every file at once (each can be changed again for one file)."""
         if sample is not None:
             self.v_sample.set(sample)
         if photon is not None:
             self.v_photon.set(photon)
         if pass_energy is not None:
             self.v_pass.set(str(pass_energy))
+        if photon is not None or pass_energy is not None:
+            self._apply_all()
 
     def shared(self):
         hv = columntext.parse_photon(self.v_photon.get())
@@ -355,15 +487,20 @@ class ColumnImportDialog(tk.Toplevel):
         ax = self.ax
         ax.clear()
         ax.set_facecolor(pal["plot_bg"])
-        x = t.columns[o["energy_col"]]
-        for c in o["intensity_cols"][:6]:
-            ax.plot(x, t.columns[c], lw=0.8)
+        if t.pairs:
+            for pr in t.pairs[:6]:
+                ax.plot(t.columns[pr["energy"]], t.columns[pr["intensity"]],
+                        lw=0.8)
+        else:
+            x = t.columns[o["energy_col"]]
+            for c in o["intensity_cols"][:6]:
+                ax.plot(x, t.columns[c], lw=0.8)
         ax.tick_params(colors=pal["muted"], labelsize=7)
         for sp in ax.spines.values():
             sp.set_color(pal["muted"])
         ax.set_xlabel(f"{columntext.AXIS_LABELS[o['axis']]} (eV)",
                       color=pal["plot_fg"], fontsize=8)
-        if o["axis"] == "BE":
+        if o["axis"] == "BE" and not t.pairs:
             ax.invert_xaxis()
         self.fig.subplots_adjust(left=0.2, right=0.96, top=0.95, bottom=0.2)
         self.canvas.draw_idle()
@@ -371,11 +508,13 @@ class ColumnImportDialog(tk.Toplevel):
     # -- finishing ----------------------------------------------------------------------
     def accept(self):
         self._commit()
-        extra = self.shared()
+        self._commit_energies()
+        sample = self.v_sample.get().strip()
         out = {}
         for row in self.rows:
             o = dict(row["opts"])
-            o.update(extra)
+            if sample:                      # one sample name for every file
+                o["sample"] = sample
             out[row["path"]] = columntext.sanitise_options(
                 o, row["table"].n_cols)
         self.result = out

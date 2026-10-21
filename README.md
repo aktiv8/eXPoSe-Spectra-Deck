@@ -22,7 +22,7 @@ previewed before it is saved.
 | **Kratos Vision2 dataset** | `.dset` | The binary Vision2 writes, read directly (no DumpDataset step); gives the regions of its `.kal`. A setting whose Kratos constant has not been met yet is left out with a warning, never guessed; a `.dset` that holds only the index says so. |
 | **Kratos ESCApe** | `.experiment` | Undocumented binary container; best-effort reverse engineering. |
 | **NeXus** | `.nxs` | Needs the optional `h5py`. A beamline NEXAFS scan (Diamond B07 / GDA): one spectrum per detector channel, photon energy against current, named by detector (which channel is electron or fluorescence yield is not in the file, so none is claimed). Not normalised unless you tick *Ring-current scaling* (each point is scaled to the mean ring current of its scan) or save an edge normalisation (*Tools ▸ NEXAFS edge step…*: pre- and post-edge lines with the step set to 1, or a pre-edge line subtracted and the maximum set to 1, as in a spreadsheet template); analyser (NXxps) spectra in a `.nxs` are read too (checked on files this application wrote, not on an instrument's own; fits are not read back). |
-| **Numbers in columns** | `.csv` `.asc` `.txt` `.dat` `.tsv` | Any spectrum saved as plain columns (what *Surface Science Spectra* asks for, and most programs export). Tab, comma, semicolon or space separated, with or without a header; an *Import* dialog checks the columns before loading: see [Columns of numbers](#columns-of-numbers-csv--asc--txt). |
+| **Numbers in columns** | `.csv` `.asc` `.txt` `.dat` `.tsv` `.xy` `.xlsx` | Any spectrum saved as plain columns (what *Surface Science Spectra* asks for, and most programs export), the SPECS `.xy` export (its header gives the excitation and pass energy) and Excel workbooks (needs the optional `openpyxl`). Tab, comma, semicolon or space separated, with or without a header; the CSV this program writes comes back spectrum by spectrum; an *Import* dialog checks the columns before loading: see [Columns of numbers](#columns-of-numbers-csv--asc--txt). |
 
 Files are recognised by **content**, not only by extension, so renamed files
 still open. Every loaded format can be exported to CSV or VAMAS, which makes the
@@ -753,9 +753,28 @@ loaded, one row per file, with a preview of the spectrum:
   there is none the dialog may suggest a core level from the energy window, marked
   `?` (only when exactly one common element's strongest line lies in a window of
   40 eV or less); otherwise the file name is used. Check any suggestion.
-* **For all files**: the sample name, the photon energy (Al Kα, Mg Kα or your
-  own value) and the pass energy. None of these is in such a file, so none is
-  assumed; the answers are offered again next time.
+* **Sample, photon energy and pass energy**: the sample name is one for all
+  files. The photon energy (Al Kα, Mg Kα or your own value) and the pass energy
+  belong to each file: set them for the selected file, or under *All files* for
+  every file at once. None of these is in a plain file, so none is assumed; the
+  answers are offered again next time. A file whose header states them (SPECS
+  `.xy`) starts with its own values.
+* **SPECS `.xy`**: the `% Key: value` header gives the excitation and pass energy,
+  the dwell time, the number of scans, the analyser, its lens and scan mode
+  and the work function; they are used as stated (the energy axis is the
+  file's kinetic energy, checked against the header's own start value). A bare
+  `.xy` without that header is an X-ray diffraction pattern and is not offered.
+  The counts have no unit in the file, so they are a.u.; a file with more than
+  one block of data reads the longest and says so.
+* **Excel**: each sheet is read the same way (the table must be numbers in
+  columns, blank cells inside it are not allowed); a workbook with several
+  sheets reads the one with the longest table and the dialog lets you choose
+  another under *Sheet*.
+* **The CSV this program writes** (*Export ▸ CSV*) has an energy and an
+  intensity column per spectrum side by side. It is read back as those spectra,
+  with the sample, name, axis and unit of each from its header (the photon energy
+  is still yours to enter for a kinetic axis); the fit columns beside them are
+  not spectra and are ignored.
 
 A header row, text above it and stray lines below the table are set aside (the
 dialog says how many lines are ignored); only the longest block of numbers is
@@ -780,8 +799,6 @@ written into each VAMAS block as comment lines.
 Ideas that are planned or open, so you know what to expect (the developer notes
 in `CLAUDE.md` have the detail):
 
-* a **viewer for the mosaic** in the app or the data browser (today it is in the
-  report and the slides);
 * **Kratos imaging maps** in the PDF and the slides (today the desktop viewer and
   the data browser show them);
 * **clickable entries** in the PDF's contents (the slides have them);

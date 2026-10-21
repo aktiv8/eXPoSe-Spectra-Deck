@@ -15,7 +15,16 @@ what the numbers show:
 * the header, when there is one, names the axis (``BE_`` / ``KE_`` /
   "Binding Energy"), the region (``BE_Cl2p``) and the unit (``CPS``, ``c/s``);
 * what no header says (photon energy, pass energy, sample) is left unset until
-  the user supplies it.
+  the user supplies it;
+* a header of ``% Key: value`` / ``# Key: value`` lines is read for what it
+  states (the SPECS ``.xy`` export names the excitation and pass energies, the
+  dwell time and the number of scans; those are used, nothing else is);
+* an Excel workbook (``.xlsx``) is read sheet by sheet through the same table
+  finder (``openpyxl`` is optional);
+* the wide CSV this program writes (``exporters.export_csv``: an energy and an
+  intensity column per spectrum side by side, headers such as ``S1 C 1s
+  Binding Energy (eV)`` / ``S1 C 1s Intensity (counts/s)``) is read back
+  spectrum by spectrum; its fit columns are not spectra and are left alone.
 
 ``Options`` are plain dicts (``guess_options`` / ``sanitise_options``) so they
 are stored in the workbook and the file reads the same way after reopening.
@@ -23,11 +32,16 @@ are stored in the workbook and the file reads the same way after reopening.
 
 from __future__ import annotations
 
+import csv
+import io
 import math
+import os
 import re
 from dataclasses import dataclass, field
 
-EXTS = (".csv", ".asc", ".txt", ".dat", ".tsv")
+EXTS = (".csv", ".asc", ".txt", ".dat", ".tsv", ".xy")
+XLSX_EXTS = (".xlsx", ".xlsm")
+MAX_XLSX_ROWS = 200000
 MIN_ROWS = 8                    # fewer numeric lines than this is not a spectrum
 DELIMITERS = ("\t", ";", ",", None)     # None = any white space
 
@@ -84,6 +98,10 @@ class Table:
     first_line: int = 1                   # 1-based line number of the first row
     trailing: int = 0                     # non-blank lines after the table
     trailing_at: int = 0                  # ... starting at this line number
+    facts: dict = field(default_factory=dict)       # "% Key: value" header lines
+    pairs: list = field(default_factory=list)       # wide file: one per spectrum
+    sheet: str = ""                       # the Excel sheet it came from
+    sheets: list = field(default_factory=list)      # [(sheet, rows of its table)]
 
     @property
     def n_cols(self):
@@ -124,6 +142,34 @@ def _longest_run(lines, delim):
     return best
 
 
+_FACT = re.compile(r"^\s*[%#]\s*([A-Za-z][^:=]{0,39}?)\s*[:=]\s*(.*?)\s*$")
+
+
+def parse_facts(lines):
+    """``{key (lower case): value text}`` from ``% Key: value`` / ``# Key:
+    value`` lines (the first of a repeated key wins)."""
+    out = {}
+    for ln in lines:
+        m = _FACT.match(ln)
+        if m:
+            out.setdefault(m.group(1).strip().lower(), m.group(2).strip())
+    return out
+
+
+def fact_float(facts, key):
+    """The leading number of a fact, or None."""
+    m = re.match(r"\s*([-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?)",
+                 str((facts or {}).get(key, "")))
+    return float(m.group(1)) if m else None
+
+
+def is_specs(facts):
+    """True for the header of a SPECS (SpecsLab / Prodigy) ``.xy`` export:
+    it states the excitation and the pass energy and a region or group."""
+    return bool(facts) and "excitation energy" in facts \
+        and "pass energy" in facts and ("region" in facts or "group" in facts)
+
+
 def read_table(text: str):
     """The numeric table in ``text`` (see the module notes), or ``None`` when
     there are fewer than ``MIN_ROWS`` numeric lines of one width."""
@@ -149,7 +195,161 @@ def read_table(text: str):
     rest = [(i + 1, ln) for i, ln in enumerate(lines[end + 1:], end + 1)
             if ln.strip()]
     return Table(delim, cols, header, preamble, start + 1, len(rest),
-                 rest[0][0] if rest else 0)
+                 rest[0][0] if rest else 0, facts=parse_facts(lines[:start]))
+
+
+# -- the wide CSV of this program, and Excel workbooks ---------------------------
+_WIDE_E = re.compile(r"^(?P<head>.*?)\s*(?P<axis>Binding|Kinetic) Energy\s*"
+                     r"\((?P<u>[^)]*)\)\s*$")
+_WIDE_I = re.compile(r"^(?P<head>.*?)\s*Intensity\s*\((?P<u>[^)]*)\)\s*$")
+_LINE_AT_END = re.compile(r"(?:^|\s)((?:[A-Z][a-z]?\s?\d[spdf]\d?(?:/\d)?"
+                          r"|Survey)(?:\s.*)?)$")
+
+
+def split_head(head):
+    """``(sample, region name)`` from the front of a column header as
+    ``exporters.export_csv`` writes it (``"S1 C 1s"``): the name starts at the
+    last core level in it (``C 1s``, ``Pt 4f loss``) or at ``Survey``; with
+    neither the whole text is the name."""
+    text = (head or "").strip()
+    best = None
+    for m in _LINE_AT_END.finditer(text):
+        best = m
+    for m in re.finditer(r"(?:^|\s)([A-Z][a-z]?\s?\d[spdf]\d?(?:/\d)?"
+                         r"|Survey)(?=\s|$)", text):
+        best = m
+    if best is None:
+        return "", text
+    start = best.start(1)
+    return text[:start].strip(), text[start:].strip()
+
+
+def read_wide(text: str):
+    """The spectra of a wide CSV written by this program (``Table`` with
+    ``pairs``), or ``None`` when the text is not one: the first non-comment
+    line must hold an ``... Binding|Kinetic Energy (eV)`` column followed by
+    the ``... Intensity (unit)`` column of the same spectrum, and each such
+    pair at least ``MIN_ROWS`` numbers (a column ends at its first blank)."""
+    lines = text.splitlines()
+    i = 0
+    while i < len(lines) and (not lines[i].strip()
+                              or lines[i].lstrip().startswith("#")):
+        i += 1
+    if i >= len(lines):
+        return None
+    first = lines[i]
+    delim = max(("\t", ",", ";"), key=first.count)
+    if first.count(delim) < 1:
+        return None
+    try:
+        rows = list(csv.reader(io.StringIO("\n".join(lines[i:])),
+                               delimiter=delim))
+    except csv.Error:
+        return None
+    header = [h.strip() for h in rows[0]]
+    pairs, c = [], 0
+    while c + 1 < len(header):
+        me, mi = _WIDE_E.match(header[c]), _WIDE_I.match(header[c + 1])
+        if me and mi and me.group("head").strip() == mi.group("head").strip():
+            sample, name = split_head(me.group("head"))
+            pairs.append({
+                "energy": c, "intensity": c + 1, "sample": sample,
+                "name": name, "axis": "BE" if me.group("axis") == "Binding"
+                else "KE", "units": header_info(mi.group("u"))["units"]
+                or "a.u."})
+            c += 2
+        else:
+            c += 1
+    if not pairs:
+        return None
+    cols = [[] for _ in header]
+    for pr in pairs:
+        for c in (pr["energy"], pr["intensity"]):
+            for row in rows[1:]:
+                v = _num(row[c], decimal_comma=delim != ",") \
+                    if c < len(row) else None
+                if v is None:
+                    break
+                cols[c].append(v)
+    pairs = [p for p in pairs
+             if len(cols[p["energy"]]) >= MIN_ROWS
+             and len(cols[p["energy"]]) == len(cols[p["intensity"]])]
+    if not pairs:
+        return None
+    return Table(delim, cols, header,
+                 [ln.strip() for ln in lines[:i] if ln.strip()][-20:],
+                 i + 2, pairs=pairs)
+
+
+def read_any(text: str):
+    """The table in ``text``: a wide CSV of this program, else the longest run
+    of numeric lines (``read_table``), else ``None``."""
+    return read_wide(text) or read_table(text)
+
+
+class WorkbookUnavailable(ValueError):
+    """An Excel file was given but ``openpyxl`` is not installed."""
+
+
+def _sheet_text(ws):
+    """One sheet as tab-separated text (empty trailing cells dropped)."""
+    out = []
+    for n, row in enumerate(ws.iter_rows(values_only=True)):
+        if n >= MAX_XLSX_ROWS:
+            break
+        cells = ["" if v is None else
+                 (repr(float(v)) if isinstance(v, (int, float))
+                  and not isinstance(v, bool) else str(v))
+                 for v in row]
+        while cells and not cells[-1].strip():
+            cells.pop()
+        out.append("\t".join(c.replace("\t", " ").replace("\n", " ")
+                             for c in cells))
+    return "\n".join(out)
+
+
+def read_xlsx(raw: bytes, sheet=None):
+    """The table of one sheet of an Excel workbook: ``sheet`` (a name), else
+    the sheet whose table is the longest. ``Table.sheet`` / ``Table.sheets``
+    say which and what the others hold. Needs ``openpyxl``."""
+    try:
+        import openpyxl
+    except ImportError:
+        raise WorkbookUnavailable(
+            "reading Excel files needs the openpyxl package "
+            "(pip install openpyxl)") from None
+    wb = openpyxl.load_workbook(io.BytesIO(raw), read_only=True,
+                                data_only=True)
+    try:
+        found = []
+        for name in wb.sheetnames:
+            if sheet and name != sheet:
+                found.append((name, None))
+                continue
+            found.append((name, read_any(_sheet_text(wb[name]))))
+        if sheet and not any(t for n, t in found if n == sheet):
+            sheet = None                       # that sheet is gone or empty
+            found = [(n, read_any(_sheet_text(wb[n]))) for n in wb.sheetnames]
+    finally:
+        wb.close()
+    sizes = [(n, (t.n_rows if t is not None else 0)) for n, t in found]
+    best = max((x for x in found if x[1] is not None),
+               key=lambda x: x[1].n_rows, default=None)
+    if best is None:
+        return None
+    table = best[1]
+    table.sheet = best[0]
+    table.sheets = sizes
+    return table
+
+
+def load_table(path, sheet=None):
+    """The table of a file on disk (text, or an Excel workbook), or ``None``."""
+    from readers.base import read_bytes
+    raw = read_bytes(path)
+    if os.path.splitext(path)[1].lower() in XLSX_EXTS:
+        return read_xlsx(raw, sheet)
+    return read_any(decode(raw))
 
 
 # -- which column is the energy axis --------------------------------------------
@@ -207,6 +407,10 @@ def find_energy_col(table):
     """``(column, is_axis)``: the column that runs steadily one way (preferring
     one whose header reads as an energy), and whether any column did."""
     best, best_score, ok = 0, -1.0, False
+    if table.pairs:                         # a wide file says which it is
+        c = table.pairs[0]["energy"]
+        mono, reg = axis_quality(table.columns[c])
+        return c, mono >= 0.99 and reg >= REGULAR
     for c, vals in enumerate(table.columns):
         mono, reg = axis_quality(vals)
         info = header_info(table.header[c]) if table.header else {}
@@ -274,11 +478,31 @@ def guess_options(table, filename=""):
             nm = hdr[c].strip()
         names.append(nm)
         units = units or info.get("units")
-    return sanitise_options({
-        "energy_col": ecol, "intensity_cols": icols,
-        "axis": einfo.get("axis") or "BE",
-        "units": units or einfo.get("units") or "a.u.",
-        "names": names})
+    opts = {"energy_col": ecol, "intensity_cols": icols,
+            "axis": einfo.get("axis") or "BE",
+            "units": units or einfo.get("units") or "a.u.", "names": names,
+            "sheet": table.sheet}
+    if table.pairs:
+        p0 = table.pairs[0]
+        opts.update(energy_col=p0["energy"], intensity_cols=[p0["intensity"]],
+                    axis=p0["axis"], units=p0["units"], names=[p0["name"]])
+    f = table.facts
+    if f:
+        # what a header states is used (and only that): the excitation and the
+        # pass energy; the axis is the file's kinetic energy only when the
+        # header's own start value is the first number of the energy column
+        hv, pe = fact_float(f, "excitation energy"), fact_float(f, "pass energy")
+        opts["photon_energy"] = hv
+        opts["pass_energy"] = pe
+        start = fact_float(f, "kinetic energy")
+        first = table.columns[ecol][0] if table.columns else None
+        if (is_specs(f) and start is not None and first is not None
+                and abs(start - first) < 1e-6):
+            opts["axis"] = "KE"
+        if hv:
+            opts["anode"] = next((n for n, e in ANODES.items()
+                                  if abs(e - hv) < 0.05), "")
+    return sanitise_options(opts, table.n_cols)
 
 
 def _opt_float(v, lo=0.0):
@@ -297,7 +521,7 @@ def sanitise_options(opts, n_cols=None):
     o = opts if isinstance(opts, dict) else {}
     out = {"energy_col": 0, "intensity_cols": [1], "axis": "BE",
            "units": "a.u.", "names": [], "sample": "", "photon_energy": None,
-           "anode": "", "pass_energy": None}
+           "anode": "", "pass_energy": None, "sheet": ""}
     try:
         e = int(o.get("energy_col", 0))
     except (TypeError, ValueError):
@@ -331,6 +555,8 @@ def sanitise_options(opts, n_cols=None):
         out["units"] = o["units"]
     if isinstance(o.get("sample"), str):
         out["sample"] = o["sample"].strip()[:120]
+    if isinstance(o.get("sheet"), str):
+        out["sheet"] = o["sheet"][:80]
     out["photon_energy"] = _opt_float(o.get("photon_energy"))
     out["pass_energy"] = _opt_float(o.get("pass_energy"))
     if isinstance(o.get("anode"), str) and o["anode"] in ANODES:

@@ -2152,6 +2152,14 @@ class Workspace:
                     continue
                 if kratos_dset.is_index_only(p):
                     continue            # the experiment's own index, no data
+                if name.lower().endswith(columntext.XLSX_EXTS):
+                    try:                # a workbook is a spectrum only if a
+                        if columntext.load_table(p) is None:    # sheet holds one
+                            skipped.append(name)
+                            continue
+                    except (OSError, ValueError):
+                        skipped.append(name)
+                        continue
                 paths.append(p)
         if not paths and exports and self.docs:
             self._import_casa_csv_paths(exports)    # onto what is open
@@ -2238,19 +2246,25 @@ class Workspace:
         unit, the name, and the sample and photon energy no such file holds.
         Cancelling leaves those files out; the other files are unaffected."""
         loaded = {os.path.abspath(p.path) for p in self.docs if p.path}
-        items = []
+        items, missing, notes = [], [], []
         for p in paths:
             if os.path.isdir(p) or os.path.abspath(p) in loaded:
                 continue
             try:
                 if reader_for(p) is not column_text.ColumnTextFile:
                     continue
-                table = columntext.read_table(
-                    columntext.decode(read_bytes(p)))
-            except (UnsupportedFormat, OSError):
+                table = columntext.load_table(p)
+            except columntext.WorkbookUnavailable as exc:
+                missing.append(p)
+                notes.append(f"{os.path.basename(p)}: {exc}")
+                continue
+            except (UnsupportedFormat, OSError, ValueError):
                 continue
             if table is not None:
                 items.append((p, table, columntext.guess_options(table, p)))
+        paths = [p for p in paths if p not in missing]
+        if missing:
+            messagebox.showwarning("Excel files", "\n".join(notes))
         if not items:
             return paths, {}
         chosen = self._ask_column_import(items)
