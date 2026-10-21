@@ -10,7 +10,7 @@ import platform
 import sys
 
 NAME = "eXPoSe SpectraDeck"
-VERSION = "1.0.1"
+VERSION = "1.0.2"
 DESCRIPTION = ("Browse, plot and export XPS spectra from many instruments "
                "in one window.")
 GITHUB_URL = "https://github.com/aktiv8"
