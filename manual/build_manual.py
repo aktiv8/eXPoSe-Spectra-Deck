@@ -696,8 +696,8 @@ def build_chapters(doc):
         "installed, the PDF opens in your default viewer instead."
     )
     para(doc,
-        "Save plot image… writes the current view as PNG, SVG or PDF, at "
-        "any size and resolution."
+        "Save plot image… writes the current view as PNG, JPG, SVG or PDF, at "
+        "any size and resolution. Right-click a panel to save just that panel."
     )
 
     # 10. Exporting --------------------------------------------------------

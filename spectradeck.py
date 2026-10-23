@@ -4316,6 +4316,10 @@ class Workspace:
         root.add_separator()
         root.add_command(label="Save this view as a figure…",
                          command=self.save_view_as_figure)
+        root.add_command(label="Save this panel as image…",
+                         command=lambda: self.save_panel_image(key))
+        root.add_command(label="Save plot image…",
+                         command=self.save_plot_image)
         root.add_command(label="Use the page's view",
                          state="normal" if key in self.panel_views
                          else "disabled",
@@ -4336,6 +4340,8 @@ class Workspace:
         self._fmenu.delete(0, "end")
         self._fmenu.add_command(label="Save this view as a figure…",
                                 command=self.save_view_as_figure)
+        self._fmenu.add_command(label="Save plot image…",
+                                command=self.save_plot_image)
         ev = event.guiEvent
         try:
             self._fmenu.tk_popup(ev.x_root, ev.y_root)
@@ -4507,7 +4513,15 @@ class Workspace:
         self._schedule_render()
 
     def save_plot_image(self):
-        """Save the panels currently shown as PNG / SVG / PDF."""
+        """Save the panels currently shown as PNG / JPEG / SVG / PDF."""
+        self._save_image(None)
+
+    def save_panel_image(self, key):
+        """Save one panel (by its group key) as PNG / JPEG / SVG / PDF."""
+        self._save_image(key)
+
+    def _save_image(self, panel_key):
+        """``panel_key`` None = the page shown, else just that panel."""
         if not HAVE_MPL:
             messagebox.showinfo("Save plot image",
                                 "matplotlib is required to save plots.")
@@ -4520,13 +4534,28 @@ class Workspace:
             path = filedialog.asksaveasfilename(
                 title="Save plot image", defaultextension=".png",
                 initialfile="spectra.png",
-                filetypes=[("PNG image", "*.png"), ("SVG (vector)", "*.svg"),
+                filetypes=[("PNG image", "*.png"),
+                           ("JPEG image", "*.jpg *.jpeg"),
+                           ("SVG (vector)", "*.svg"),
                            ("PDF (vector)", "*.pdf")])
             if not path:
                 return
+            jpeg = path.lower().endswith((".jpg", ".jpeg"))
+            if jpeg and not HAVE_PIL:
+                messagebox.showinfo("Save plot image",
+                                    "Saving a JPEG needs Pillow; choose "
+                                    "PNG, SVG or PDF instead.")
+                return
             groups = self._groups()
-            npp = self._panels_per_page(len(groups))
-            chunk = groups[self.panel_start:self.panel_start + npp]
+            if panel_key is None:
+                npp = self._panels_per_page(len(groups))
+                chunk = groups[self.panel_start:self.panel_start + npp]
+            else:
+                chunk = [g for g in groups if g[0] == panel_key]
+                if not chunk:
+                    messagebox.showinfo("Save plot image",
+                                        "That panel is no longer shown.")
+                    return
             paper = style.startswith("Paper")
             base = PRINT if paper else None
             pal = self._plot_palette(PRINT if paper else self.palette,
@@ -4536,8 +4565,9 @@ class Workspace:
                 with matplotlib.rc_context(self._rc(pal)):
                     self._draw_page(fig, chunk, self._traces_limit(),
                                     self.trace_start, pal=base)
+                    extra = {"pil_kwargs": {"quality": 95}} if jpeg else {}
                     fig.savefig(path, dpi=dpi,
-                                facecolor=pal["plot_bg"])
+                                facecolor=pal["plot_bg"], **extra)
             except Exception as exc:
                 messagebox.showerror("Save plot image", str(exc))
                 return
