@@ -689,6 +689,7 @@ class Workspace:
         self.cursors = {}           # group key -> "At cursor" energy
         self.ranges = {}            # group key -> "Range" end points (BE pair)
         self.panel_views = {}       # group key -> panelview override
+        self.panel_order = []       # group keys in the order the user set
         self._trace_limit_now = None    # window the trace slider describes
         self.calib =holder.sanitise(load_calibration())
         self.casa_quant = None      # casaquant.CasaQuant of the loaded folder
@@ -3632,9 +3633,21 @@ class Workspace:
             # series views read in z order (surface first / earliest first)
             return viewdata.z_sorted(rs, mode, self._date_of,
                                      self._sputter_for)[0]
+        groups = panelview.order_groups(groups, self.panel_order)
         return [(k, panelview.arrange(rs, self._look_for(k, defaults),
                                       z_order))
                 for k, rs in groups]
+
+    def move_panel(self, key, how):
+        """Move a panel ("first" / "earlier" / "later" / "last"); the whole
+        shown order is stored so later ticks join at the end."""
+        shown = [k for k, _ in self._groups()]
+        self.panel_order = panelview.moved(shown, key, how)
+        self._schedule_render()
+
+    def reset_panel_order(self):
+        self.panel_order = []
+        self._schedule_render()
 
     # -- view window: panels per page / traces per panel ----------------
     def _panels_per_page(self, n_groups):
@@ -4314,6 +4327,20 @@ class Workspace:
                          state="disabled" if series else "normal",
                          command=lambda: self.identify_panel(key))
         root.add_separator()
+        shown = [k for k, _ in self._groups()]
+        pos = shown.index(key) if key in shown else 0
+        for label, how, off in (
+                ("Move panel to first", "first", pos == 0),
+                ("Move panel earlier", "earlier", pos == 0),
+                ("Move panel later", "later", pos >= len(shown) - 1),
+                ("Move panel to last", "last", pos >= len(shown) - 1)):
+            root.add_command(label=label,
+                             state="disabled" if off else "normal",
+                             command=lambda how=how: self.move_panel(key, how))
+        root.add_command(label="Reset panel order",
+                         state="normal" if self.panel_order else "disabled",
+                         command=self.reset_panel_order)
+        root.add_separator()
         root.add_command(label="Save this view as a figure…",
                          command=self.save_view_as_figure)
         root.add_command(label="Save this panel as image…",
@@ -4625,6 +4652,7 @@ class Workspace:
             "ranges": {k: [float(a), float(b)]
                        for k, (a, b) in self.ranges.items()},
             "panel_views": copy.deepcopy(self.panel_views),
+            "panel_order": list(self.panel_order),
             "ticked": ticked,
         }
 
@@ -4736,6 +4764,7 @@ class Workspace:
         # unlike the settings above, a look without panel views means none
         # (an older figure must not inherit the live window's overrides)
         self.panel_views = panelview.sanitise_all(st.get("panel_views"))
+        self.panel_order = panelview.sanitise_order(st.get("panel_order"))
         missing = 0
         if isinstance(st.get("ticked"), list):
             by_file = {self.file_ids.get(id(p)): p.regions for p in self.docs}

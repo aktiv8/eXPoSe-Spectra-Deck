@@ -75,6 +75,38 @@ def sanitise_all(views):
     return out
 
 
+def sanitise_order(order):
+    """A panel order as a list of distinct labels (anything else: empty)."""
+    out = []
+    if isinstance(order, (list, tuple)):
+        for k in order:
+            if isinstance(k, str) and k not in out:
+                out.append(k)
+    return out
+
+
+def order_groups(groups, order):
+    """``[(label, regions)]`` with the labels in ``order`` first, in that
+    order; the others keep their own order after them (a label in ``order``
+    that is not on the page is ignored)."""
+    rank = {k: i for i, k in enumerate(order or [])}
+    return sorted(groups, key=lambda g: rank.get(g[0], len(rank)))
+
+
+def moved(keys, key, how):
+    """``keys`` (the labels as shown) with ``key`` moved: ``how`` is
+    "first", "earlier", "later" or "last"."""
+    keys = list(keys)
+    if key not in keys:
+        return keys
+    i = keys.index(key)
+    keys.pop(i)
+    j = {"first": 0, "earlier": max(0, i - 1), "later": i + 1,
+         "last": len(keys)}[how]
+    keys.insert(min(j, len(keys)), key)
+    return keys
+
+
 def resolve(defaults, override=None):
     """The full look of a panel: the page default with the override on top."""
     look = dict(defaults)
