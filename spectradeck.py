@@ -903,6 +903,13 @@ class Workspace:
         viewm.add_separator()
         viewm.add_command(label="Show/hide file tree",
                           command=lambda: self._toggle_pane("tree"))
+        self.viewbar_var = tk.BooleanVar(
+            value=not self.cfg.get("viewbar_collapsed", False))
+        viewm.add_checkbutton(
+            label="Show view options", variable=self.viewbar_var,
+            accelerator="Ctrl+Shift+H",
+            command=lambda: self._set_viewbar_collapsed(
+                not self.viewbar_var.get()))
         viewm.add_command(label="Show/hide info column",
                           command=lambda: self._toggle_pane("info"))
         viewm.add_command(label="Focus plot", command=self.toggle_focus,
@@ -999,7 +1006,8 @@ class Workspace:
         for seq, fn in (("<Control-o>", self.open_files),
                         ("<Control-O>", self.open_folder),
                         ("<Control-e>", self.open_export),
-                        ("<Control-q>", self._on_close)):
+                        ("<Control-q>", self._on_close),
+                        ("<Control-H>", self._toggle_viewbar)):
             self.root.bind(seq, self._shortcut(fn))
 
     def _build_ribbon(self):
@@ -1164,6 +1172,8 @@ class Workspace:
         self.icon_cache = self._make_icons()
         if getattr(self, "ribbon", None) is not None:
             self.ribbon.set_icons(self.icon_cache)
+        if getattr(self, "viewbar_tip", None) is not None:
+            self._refresh_viewbar()
         self.box_state.clear()
         self._populate_tree()
         if HAVE_MPL:
@@ -1272,6 +1282,7 @@ class Workspace:
         if self._pdf_dir:
             shutil.rmtree(self._pdf_dir, ignore_errors=True)
         self.ribbon.save_state(cfg)
+        cfg["viewbar_collapsed"] = bool(self.viewbar_collapsed)
         cfg["show_splash"] = bool(self.splash_var.get())
         cfg["csv_preamble"] = bool(self.preamble_var.get())
         if hasattr(self, "dpi_var"):
@@ -1364,8 +1375,24 @@ class Workspace:
         cfg = self.cfg
         tip = lambda w, t: Tooltip(w, t, lambda: self.palette)      # noqa: E731
         # one view row: how spectra are combined
-        ctl = FlowFrame(parent, hgap=14, vgap=6)
-        ctl.pack(side="top", fill="x", padx=10, pady=(8, 2))
+        # the three view rows sit in one body that the header can fold away
+        self.viewbar = ttk.Frame(parent)
+        self.viewbar.pack(side="top", fill="x")
+        head = ttk.Frame(self.viewbar)
+        head.pack(side="top", fill="x", padx=10, pady=(4, 0))
+        self.viewbar_btn = ttk.Button(head, style="Tool.TButton",
+                                      command=self._toggle_viewbar)
+        self.viewbar_btn.pack(side="left")
+        self.viewbar_lbl = ttk.Label(head, text="View options")
+        self.viewbar_lbl.pack(side="left", padx=(6, 8))
+        self.viewbar_sum = ttk.Label(head, text="", style="Muted.TLabel")
+        self.viewbar_sum.pack(side="left")
+        for w in (head, self.viewbar_lbl, self.viewbar_sum):
+            w.bind("<Double-Button-1>", lambda e: self._toggle_viewbar())
+        self.viewbar_tip = None
+        self.viewbody = ttk.Frame(self.viewbar)
+        ctl = FlowFrame(self.viewbody, hgap=14, vgap=6)
+        ctl.pack(side="top", fill="x", padx=10, pady=(4, 2))
         grp = ttk.Frame(ctl)
         ttk.Label(grp, text="Group by").pack(side="left")
         self.group_var = tk.StringVar(value=cfg.get("group_by", "Element name"))
@@ -1373,7 +1400,8 @@ class Workspace:
                           state="readonly", values=list(self.GROUP_MODES))
         gb.pack(side="left", padx=(6, 0))
         gb.bind("<<ComboboxSelected>>",
-                lambda e: self._schedule_render(reset_page=True))
+                lambda e: (self._refresh_viewbar(),
+                           self._schedule_render(reset_page=True)))
         tip(gb, "Which spectra share a panel: the same element name, "
                 "overlapping energy ranges, or the same element within one "
                 "sample / file (one depth or time series each).")
@@ -1406,7 +1434,7 @@ class Workspace:
         ctl.add(grp)
 
         # second view row: how the traces are drawn, and the axes
-        ctl2 = FlowFrame(parent, hgap=14, vgap=6)
+        ctl2 = FlowFrame(self.viewbody, hgap=14, vgap=6)
         ctl2.pack(side="top", fill="x", padx=10, pady=(0, 2))
         grp = ttk.Frame(ctl2)
         ttk.Label(grp, text="View").pack(side="left")
@@ -1491,7 +1519,7 @@ class Workspace:
         self._sync_view_controls()
 
         # third view row: colours
-        ctl3 = FlowFrame(parent, hgap=14, vgap=6)
+        ctl3 = FlowFrame(self.viewbody, hgap=14, vgap=6)
         ctl3.pack(side="top", fill="x", padx=10, pady=(0, 2))
         grp = ttk.Frame(ctl3)
         ttk.Label(grp, text="Colour").pack(side="left")
@@ -1637,6 +1665,9 @@ class Workspace:
                  "slides and saved images.")
         ctl3.add(sty)
 
+        self._set_viewbar_collapsed(
+            bool(cfg.get("viewbar_collapsed", False)), save=False)
+
         # canvas + toolbar + contextual footer (bottom widgets are packed in
         # _layout_bottom so they can be shown and hidden in order)
         self.fig = self.canvas = self.toolbar = None
@@ -1753,12 +1784,57 @@ class Workspace:
         self._apply_mpl_theme()
         self._schedule_render()
 
+    def _viewbar_summary(self):
+        """The current view in a few words, shown while the bar is folded."""
+        parts = [self.view_var.get(), self.scale_var.get(),
+                 "by " + self.group_var.get().lower()]
+        if self.colscale_var.get() != "Theme default":
+            parts.append(self.colscale_var.get())
+        return " · ".join(parts)
+
+    def _set_viewbar_collapsed(self, value, save=True):
+        self.viewbar_collapsed = bool(value)
+        if self.viewbar_collapsed:
+            self.viewbody.pack_forget()
+        else:
+            self.viewbody.pack(side="top", fill="x")
+        if hasattr(self, "viewbar_var"):
+            self.viewbar_var.set(not self.viewbar_collapsed)
+        self._refresh_viewbar()
+        if save:
+            self.cfg["viewbar_collapsed"] = self.viewbar_collapsed
+
+    def _toggle_viewbar(self):
+        self._set_viewbar_collapsed(not self.viewbar_collapsed)
+
+    def _refresh_viewbar(self):
+        """Button icon, hint and the one-line summary of the folded bar."""
+        c = self.viewbar_collapsed
+        ic = self.icon_cache
+        if ic is None:
+            self.viewbar_btn.configure(text="▸" if c else "▾")
+        else:
+            self.viewbar_btn.configure(image=ic.get("expand" if c
+                                                    else "collapse"))
+        self.viewbar_sum.configure(
+            text=self._viewbar_summary() if c else "")
+        text = ("Show the view options" if c else
+                "Hide the view options\nDouble-clicking the header does "
+                "the same")
+        if self.viewbar_tip is None:
+            self.viewbar_tip = self.tooltip(self.viewbar_btn, text)
+        else:
+            self.viewbar_tip.set_text(text)
+
     def _on_view_changed(self):
+        self._refresh_viewbar()
         self._sync_view_controls()
         self._schedule_render(reset_page=True)
 
     def _sync_view_controls(self):
         """Enable only the controls that act in the current view."""
+        if hasattr(self, "colscale_var") and self.viewbar_tip is not None:
+            self._refresh_viewbar()
         views = {self.view_var.get()} | {
             ov["view"] for ov in self.panel_views.values() if "view" in ov}
         stack = any(not panelview.is_series(v) for v in views)
@@ -1776,6 +1852,7 @@ class Workspace:
             else ["!disabled"])
 
     def _colour_scale_changed(self):
+        self._refresh_viewbar()
         self._sync_colour_controls()
         self._schedule_render()
 
