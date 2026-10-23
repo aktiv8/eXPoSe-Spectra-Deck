@@ -283,7 +283,8 @@ class QuantPanel(ttk.Frame):
                 cells = [(k, [c[i] for i in keep]) for k, c in cells]
             self._set_columns(header)
             self._fill(cells, ticks=(eff.include, changed))
-        self._set_notes(s.notes)
+        self._set_notes(list(s.notes) + quantview.transmission_notes(
+            s, self.view))
 
     def _show_row(self, on):
         """The "Show:" row (depth level / profile, profile mode) is only there

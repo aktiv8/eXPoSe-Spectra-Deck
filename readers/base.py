@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import timing
+import txfn
 from kratosterms import is_iss_lens
 
 UNSET = 1e36        # VAMAS uses 1e37 for "not specified"
@@ -581,6 +582,15 @@ class SpectrumFile:
             if tx.get("coeffs"):
                 md["Transmission coefficients"] = ", ".join(
                     f"{c:g}" for c in tx["coeffs"])
+        ts = r.extra.get("tf_source")
+        if ts and not tx:
+            # a CasaXPS VAMAS export: which function the Transmission column
+            # holds (found from its numbers, see txfn.classify)
+            md["Transmission function"] = txfn.describe(ts)
+            if ts.get("kind") in ("avantage", "casa_formula") and ts.get(
+                    "coeffs"):
+                md["Transmission coefficients"] = ", ".join(
+                    f"{c:g}" for c in ts["coeffs"])
         label = (r.energy_label or "").lower()
         axis = ("Photon energy" if label.startswith("photon")
                 else "KE" if "kinetic" in label else "BE")

@@ -135,6 +135,9 @@ def fit_rows(r, curves=False, prefer_csv=False):
             "chi2_red": cv.chi2_red, "residual_sd": cv.residual_sd,
             "approximate": bool(cv.approximate),
             **({"shape_notes": list(cv.notes)} if cv.notes else {}),
+            **({"tf_kind": r.extra["tf_source"]["kind"],
+                "tf_file": r.extra["tf_source"].get("file", "")}
+               if r.extra.get("tf_source") else {}),
             "background_known": bool(cv.background_known),
             "scale_known": bool(cv.scale_known),
             "components": comps}

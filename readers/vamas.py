@@ -16,6 +16,7 @@ import casafit
 import vamasmeta
 import sputter
 import timing
+import txfn
 from kratosterms import friendly, is_iss_lens
 from .base import (Region, SpectrumFile, clean, clean_text, canon_region_name,
                    guess_region_name, unset, kv_from_lines,
@@ -302,6 +303,7 @@ class VamasFile(SpectrumFile):
         if not self.regions:
             self.regions = []
         counts = {}
+        self._dump = avantage_dump(h["comments"])
         for i, b in enumerate(blocks):
             r = self._region_from_block(i, b, h)
             if r is not None:
@@ -459,6 +461,7 @@ class VamasFile(SpectrumFile):
             r.conditions["X-ray Power"] = f"{st:g} W"
         if tf_vals and tf_ke and len(tf_vals) == len(tf_ke):
             r.tf_ke, r.tf_values = list(tf_ke), list(tf_vals)
+            self._tf_source(r, b["comments"])
         # vendor extras from the block comments
         kv = kv_from_lines(b["comments"])
         r.extra["comments"] = kv
@@ -502,6 +505,28 @@ class VamasFile(SpectrumFile):
         r.extra["expvals"] = list(zip([v[0] for v in h["expvars"]],
                                       b["expvals"]))
         return r
+
+    _dump = {}
+
+    def _tf_source(self, r, comment_lines):
+        """Say which function the ``Transmission`` column holds (``txfn``):
+        Avantage's polynomial (the coefficients are in the dump of the first
+        file), CasaXPS's recalculated VG function or a measured transmission
+        file. Judged from the numbers; the column itself is never changed, and
+        ``extra["txfn"]`` (the native readers' "removed" flag, which makes the
+        exporter rescale counts) is deliberately left alone: CasaXPS's counts
+        already carry the function."""
+        d = self._dump
+        n = d.get("DS_ANPROPID_TXFN_COEFFS")
+        coeffs = [d.get(f"DS_ANPROPID_TXFN_COEFF[{i}]")
+                  for i in range(n if isinstance(n, int) else 0)]
+        if any(c is None for c in coeffs):
+            coeffs = []
+        src = txfn.classify(r.tf_ke, r.pass_energy, r.tf_values,
+                            [float(c) for c in coeffs],
+                            txfn.parse_casa_lines(comment_lines))
+        if src:
+            r.extra["tf_source"] = src
 
     @staticmethod
     def _count_units(label, unit):

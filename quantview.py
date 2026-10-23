@@ -124,6 +124,39 @@ def transmission_available(samples):
                for s in samples for lv in s.levels for e in lv.entries)
 
 
+TF_WORDS = {"avantage": "Avantage's polynomial",
+            "casa_formula": "CasaXPS's recalculated VG function",
+            "casa_file": "a measured transmission file"}
+
+
+def transmission_notes(sample, state):
+    """What "divide out the transmission function" divides by, when the file
+    says (``txfn.classify``): said once per function, and a warning when the
+    regions of one sample carry different ones (their corrected areas are then
+    not on one scale). Nothing unless the choice is on."""
+    if not state.transmission:
+        return []
+    seen = []
+    for lv in sample.levels:
+        for e in lv.entries:
+            row = e["row"]
+            if row.get("area_t") is None or not row.get("tf_kind"):
+                continue
+            key = (row["tf_kind"], row.get("tf_file", ""))
+            if key not in seen:
+                seen.append(key)
+    notes = []
+    for kind, name in seen:
+        what = TF_WORDS.get(kind, kind)
+        notes.append("Transmission divided out: %s%s." % (
+            what, f" ({name})" if name else ""))
+    if len(seen) > 1:
+        notes.append("The regions of this sample carry different transmission "
+                     "functions, so their corrected areas are not on one "
+                     "scale; compare them with care.")
+    return notes
+
+
 def includes(sample, li, state):
     """The tick of every entry of one level of ``sample``."""
     lv = sample.levels[li]
