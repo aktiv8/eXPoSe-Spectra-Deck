@@ -737,6 +737,7 @@ class Workspace:
         self._zoom_sig = {}         # axes -> what a panel's zoom depends on
         self._auto_lims = {}        # axes -> (xlim, ylim) as first drawn
         self._zoom_request = None   # a recalled figure's zoom, for the next draw
+        self._drag = None           # (panel key, x, y) of a title being dragged
         self._press = None          # (x, y, button) of a press the zoom tool may own
         self._gen_prog = None       # progress dialog while a report/deck builds
         self._pdf_figure_size = (11.7, 8.3)  # landscape figure/image page, in
@@ -4454,12 +4455,68 @@ class Workspace:
         when the button is released without having moved
         (``_on_plot_release``); otherwise it acts at once."""
         self._press = None
+        self._drag = None
+        if (event.button == 1 and self._click_cb is None
+                and self._pick_cb is None):
+            key = self._title_strip_at(event)
+            if key is not None:
+                self._drag = (key, event.x, event.y)
+                self.canvas.get_tk_widget().config(cursor="fleur")
+                return
         if event.button in (1, 3) and self._tool_active():
             self._press = (event.x, event.y, event.button)
             return
         self._click_logic(event)
 
+    DRAG_STRIP = 26                 # px above a panel that grab it for a move
+
+    def _title_strip_at(self, event):
+        """The panel whose title strip (just above its axes) a press is in."""
+        if event.inaxes is not None or event.x is None:
+            return None
+        for ax, key in self._axmap.items():
+            try:
+                bb = ax.get_window_extent()
+            except Exception:
+                continue
+            if (bb.x0 <= event.x <= bb.x1
+                    and bb.y1 <= event.y <= bb.y1 + self.DRAG_STRIP):
+                return key
+        return None
+
+    def _panel_at(self, x, y):
+        """The panel under a point, its title strip included."""
+        for ax, key in self._axmap.items():
+            try:
+                bb = ax.get_window_extent()
+            except Exception:
+                continue
+            if (bb.x0 <= x <= bb.x1
+                    and bb.y0 <= y <= bb.y1 + self.DRAG_STRIP):
+                return key
+        return None
+
+    def _finish_drag(self, event):
+        """Drop a dragged panel title on another panel: it takes that place."""
+        key, x0, y0 = self._drag
+        self._drag = None
+        self.canvas.get_tk_widget().config(cursor="")
+        if event.x is None:
+            return
+        if (abs(event.x - x0) <= self.CLICK_SLOP
+                and abs(event.y - y0) <= self.CLICK_SLOP):
+            return
+        target = self._panel_at(event.x, event.y)
+        if target is None or target == key:
+            return
+        shown = [k for k, _ in self._groups()]
+        self.panel_order = panelview.moved_to(shown, key, target)
+        self._schedule_render()
+
     def _on_plot_release(self, event):
+        if getattr(self, "_drag", None) is not None:
+            self._finish_drag(event)
+            return
         press, self._press = self._press, None
         if press is None or event.button != press[2]                 or event.x is None or press[0] is None:
             return

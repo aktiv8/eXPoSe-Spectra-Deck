@@ -131,6 +131,25 @@ class TestPanelOrderInApp(unittest.TestCase):
         self.ws.apply_state(st, render=False)
         self.assertEqual(self.order(), [a, b])
 
+    def test_drag_title_onto_another_panel(self):
+        a, b = self.keys
+        ws = self.ws
+        ws._render()
+        axes = {k: ax for ax, k in ws._axmap.items()}
+        bb_a = axes[a].get_window_extent()
+        bb_b = axes[b].get_window_extent()
+
+        class Ev:
+            inaxes = None
+            button = 1
+        press, drop = Ev(), Ev()
+        press.x, press.y = (bb_b.x0 + bb_b.x1) / 2, bb_b.y1 + 8
+        drop.x, drop.y = (bb_a.x0 + bb_a.x1) / 2, (bb_a.y0 + bb_a.y1) / 2
+        ws._on_plot_click(press)
+        self.assertIsNotNone(ws._drag)
+        ws._on_plot_release(drop)
+        self.assertEqual(self.order(), [b, a])
+
 
 class TestOrderPure(unittest.TestCase):
     def test_order_groups(self):
@@ -140,6 +159,8 @@ class TestOrderPure(unittest.TestCase):
                          ["c", "a", "b"])
         self.assertEqual(panelview.moved(["a", "b", "c"], "c", "earlier"),
                          ["a", "c", "b"])
+        self.assertEqual(panelview.moved_to(["a", "b", "c"], "c", "a"),
+                         ["c", "a", "b"])
         self.assertEqual(panelview.sanitise_order(["a", "a", 3]), ["a"])
 
 

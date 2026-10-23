@@ -107,6 +107,17 @@ def moved(keys, key, how):
     return keys
 
 
+def moved_to(keys, key, target):
+    """``keys`` with ``key`` taken out and put where ``target`` is."""
+    keys = list(keys)
+    if key not in keys or target not in keys or key == target:
+        return keys
+    j = keys.index(target)
+    keys.remove(key)
+    keys.insert(j, key)
+    return keys
+
+
 def resolve(defaults, override=None):
     """The full look of a panel: the page default with the override on top."""
     look = dict(defaults)
