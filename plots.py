@@ -528,7 +528,7 @@ def draw_fit(ax, x, fit, scale, muted, accent, yoff=0.0, legend=True,
                     peak_at[key] = x[top_i]
                 y = [v * scale for v in vals]
                 lo = base if base is not None else [yoff] * len(y)
-                peak = max((abs(v) for v in vals if v == v), default=0.0)
+                peak = max((abs(v) for v in y if v == v), default=0.0)
                 floor = _COMPONENT_VISIBLE_FLOOR * peak
                 top = [(b + v) if (v == v and b == b
                                     and abs(v) >= floor) else float("nan")
