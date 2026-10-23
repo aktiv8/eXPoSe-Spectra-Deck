@@ -180,6 +180,26 @@ class TestPanelViewsInApp(unittest.TestCase):
         ax2 = next(a for a, k in self.ws._axmap.items() if k == depth)
         self.assertNotEqual(ax2.get_ylim(), (200.0, 800.0))
 
+    def test_range_end_points_rescale_the_panel_and_round_trip(self):
+        depth, _bulk = self.keys
+        self.ws.norm_var.set("Range")
+        self.ws._render()
+        ax = next(a for a, k in self.ws._axmap.items() if k == depth)
+        before = ax.get_ylim()
+        self.ws.ranges[depth] = (290.0, 286.0)      # not the data's own ends
+        self.ws._render()
+        ax = next(a for a, k in self.ws._axmap.items() if k == depth)
+        self.assertNotEqual(ax.get_ylim(), before)  # the kept zoom is dropped
+        st = self.ws.capture_state()
+        self.assertEqual(st["ranges"], {depth: [290.0, 286.0]})
+        self.ws.ranges = {}
+        self.ws.apply_state(st, render=False)
+        self.assertEqual(self.ws.ranges, {depth: (290.0, 286.0)})
+        old = {k: v for k, v in st.items() if k != "ranges"}
+        self.ws.apply_state(old, render=False)
+        self.assertEqual(self.ws.ranges, {})        # none = the data's ends
+        self.ws.norm_var.set("None")
+
     def test_old_look_without_panel_views_clears_them(self):
         depth, _bulk = self.keys
         st = self.ws.capture_state()

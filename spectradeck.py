@@ -3943,7 +3943,8 @@ class Workspace:
             s = min(start, len(rs) - lim) if lim and len(rs) > lim else 0
             vis = rs[s:s + lim] if lim and len(rs) > lim else rs
             sig = (view, norm, offset, scale, self.iss_axis_var.get(),
-                   look.get("z_axis"), s, tuple(id(r) for r in vis))
+                   look.get("z_axis"), s, tuple(id(r) for r in vis),
+                   self.ranges.get(key) if norm == "Range" else None)
             colours = self.trace_colours(rs, base)[s:s + len(vis)]
             disp = [self._display(r) for r in vis]      # names, BE shift
             pscale = self._panel_scale(disp, scale)    # ISS may differ
