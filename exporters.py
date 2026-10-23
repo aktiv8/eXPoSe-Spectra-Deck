@@ -164,7 +164,10 @@ def export_vamas(regions, path, institution="Not specified",
     ``txfn``); other regions are written as usual. ``escape_depth``
     (``{"exponent": -0.6, "type": 5}``) adds CasaXPS's two quantification
     parameters, ``MFP Exponent`` and ``ESCAPE DEPTH TYPE``, to every
-    non-ISS block.
+    non-ISS block. The type is CasaXPS's own code (0 None, 1 KE exponent,
+    2 EAL, 3 IMFP, 4 CH film, 5 TPP-2M, 6 Layer; ``imfp.ESCAPE_NAMES``); the
+    "exponent" field is the exponent (written negative) for type 1, the
+    overlayer thickness for types 4 and 6, and unused otherwise.
     """
     pairs = [(r, metadata[i] if metadata and i < len(metadata) else None)
              for i, r in enumerate(regions) if r.decodable and r.counts]
@@ -319,7 +322,8 @@ def export_vamas(regions, path, institution="Not specified",
         a(SENT)                   # sample rotation angle
         if escape_depth and not iss:       # CasaXPS quantification settings
             a("2")                # additional numerical parameters
-            a("MFP Exponent"); a("d"); a(f"{escape_depth['exponent']:g}")
+            a("MFP Exponent"); a("d")
+            a(f"{escape_depth['exponent'] + 0.0:g}")   # -0.0 -> "0"
             a("ESCAPE DEPTH TYPE"); a("d"); a(str(int(escape_depth["type"])))
         else:
             a("0")                # additional numerical parameters

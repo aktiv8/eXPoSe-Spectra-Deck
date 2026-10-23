@@ -123,6 +123,23 @@ class TestCasaForm(unittest.TestCase):
                           "ESCAPE DEPTH TYPE", "d", "5"])
         self.assertNotIn("MFP Exponent", self.write(region()))
 
+    def test_zero_exponent_is_written_as_casaxps_does(self):
+        # a file saved by CasaXPS with a zero exponent holds "0", never "-0"
+        for zero in (0.0, -0.0):
+            lines = self.write(region(),
+                               escape_depth={"exponent": zero, "type": 1})
+            i = lines.index("MFP Exponent")
+            self.assertEqual(lines[i:i + 6], ["MFP Exponent", "d", "0",
+                                              "ESCAPE DEPTH TYPE", "d", "1"])
+
+    def test_every_escape_type_code_is_written(self):
+        for kind in range(7):
+            lines = self.write(region(),
+                               escape_depth={"exponent": 2.0, "type": kind})
+            i = lines.index("ESCAPE DEPTH TYPE")
+            self.assertEqual(lines[i + 2], str(kind))
+            self.assertEqual(lines[lines.index("MFP Exponent") + 2], "2")
+
 
 @unittest.skipUnless(os.environ.get("XPS_AVG_CASA"),
                      "set XPS_AVG_CASA=<folder with the Naresh files>")

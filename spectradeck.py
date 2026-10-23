@@ -6776,11 +6776,17 @@ class _ExportSection(ttk.Frame):
 # i.e. the value written in the file is -0.6 (a file where 0.6 was typed holds
 # -0.6 too). The dialog takes the magnitude and always writes its negative.
 DEFAULT_MFP_EXPONENT = 0.6
-# CasaXPS's "ESCAPE DEPTH TYPE" additional parameter: 5 is what its import of
+# CasaXPS's "ESCAPE DEPTH TYPE" additional parameter. 5 is what its import of
 # an Avantage file writes (TPP-2M); 1 is what a file saved after choosing the
-# power law (MFP exponent) holds. Read from two CasaXPS files that differ in
-# nothing else; the other values are not known.
-ESCAPE_TYPES = {5: "TPP-2M (CasaXPS default)", 1: "KE^exponent (power law)"}
+# power law (MFP exponent) holds. The full list is CasaXPS.exe's own (Ghidra:
+# label function 0x14062a740, factor function 0x1403cc280); see imfp.py.
+ESCAPE_TYPES = {5: "TPP-2M (CasaXPS default)", 1: "KE^exponent (power law)",
+                2: "EAL", 3: "IMFP", 4: "CH film", 6: "Layer", 0: "None"}
+# What the "MFP Exponent" field means for each type: the exponent x of
+# 1/KE^x (written as -x) for the power law, the overlayer thickness for a CH
+# film or a layer, and nothing for the others (CasaXPS ignores what is
+# written there; it is kept as -x so a file reads as before).
+ESCAPE_VALUE_HINT = {1: "x =", 4: "thickness (nm) =", 6: "thickness (nm) ="}
 
 
 class ExportDialog(tk.Toplevel):
@@ -6855,20 +6861,25 @@ class ExportDialog(tk.Toplevel):
                  "only: other instruments' files are unchanged",
             justify="left").pack(anchor="w", padx=24, pady=(0, 4))
         self.mfp_on = tk.BooleanVar(value=bool(cfg.get("export_mfp")))
+        ttk.Checkbutton(fmt_frame, variable=self.mfp_on,
+                        text="Write CasaXPS's escape-depth correction "
+                             "(VAMAS):").pack(anchor="w", padx=24)
         row = ttk.Frame(fmt_frame)
-        row.pack(anchor="w", padx=24, pady=(0, 6))
-        ttk.Checkbutton(row, variable=self.mfp_on,
-                        text="Write MFP exponent, 1/KE^x with x =").pack(
-                            side="left")
-        self.mfp_value = tk.StringVar(
-            value=f"{abs(cfg.get('export_mfp_value', DEFAULT_MFP_EXPONENT)):g}")
-        ttk.Entry(row, textvariable=self.mfp_value, width=6).pack(
-            side="left", padx=(6, 8))
+        row.pack(anchor="w", padx=44, pady=(0, 6))
         self.mfp_type = tk.StringVar(value=ESCAPE_TYPES.get(
             cfg.get("export_escape_type", 5), ESCAPE_TYPES[5]))
+        first = cfg.get("export_escape_type", 5)
+        self.mfp_value = tk.StringVar(
+            value=f"{self._mfp_memory(first if first in (4, 6) else 1):g}")
         ttk.Combobox(row, textvariable=self.mfp_type, state="readonly",
                      width=24, values=list(ESCAPE_TYPES.values())
-                     ).pack(side="left")
+                     ).pack(side="left", padx=(6, 8))
+        self.mfp_hint = tk.StringVar()
+        ttk.Label(row, textvariable=self.mfp_hint).pack(side="left")
+        self.mfp_entry = ttk.Entry(row, textvariable=self.mfp_value, width=6)
+        self.mfp_entry.pack(side="left", padx=(4, 0))
+        self.mfp_type.trace_add("write", lambda *_: self._sync_mfp())
+        self._sync_mfp(initial=True)
 
         btns = ttk.Frame(self)
         btns.pack(fill="x", padx=12, pady=(0, 12))
@@ -6882,6 +6893,23 @@ class ExportDialog(tk.Toplevel):
                       text="A loaded file's numeric data is corrupted, so its "
                            "regions cannot be exported. See the loader "
                            "warning.").pack(padx=12, pady=(0, 10))
+
+    def _sync_mfp(self, initial=False):
+        """The value box is the exponent, a thickness or unused, by type."""
+        kind = next((k for k, v in ESCAPE_TYPES.items()
+                     if v == self.mfp_type.get()), 5)
+        hint = ESCAPE_VALUE_HINT.get(kind, "")
+        if not initial:               # each meaning remembers its own number
+            memory = self._mfp_memory(kind if kind in (4, 6) else 1)
+            self.mfp_value.set(f"{memory:g}")
+        self.mfp_hint.set(hint)
+        self.mfp_entry.configure(state="normal" if hint else "disabled")
+
+    def _mfp_memory(self, kind):
+        cfg = self.app.cfg
+        if kind == 1:
+            return abs(cfg.get("export_mfp_value", DEFAULT_MFP_EXPONENT))
+        return abs(cfg.get("export_escape_thickness", 1.0))
 
     def _set_all(self, value):
         for s in self.sections:
@@ -6904,13 +6932,21 @@ class ExportDialog(tk.Toplevel):
                 return
             kind = next(k for k, v in ESCAPE_TYPES.items()
                         if v == self.mfp_type.get())
-            # as CasaXPS writes it: 1/KE^0.6 is stored as -0.6
-            escape = {"exponent": -abs(exponent), "type": kind}
+            if kind == 1:        # as CasaXPS writes it: 1/KE^0.6 is -0.6
+                value = -abs(exponent)
+            elif kind in (4, 6):  # an overlayer thickness (nm)
+                value = abs(exponent)
+            else:                 # unused by this type (CasaXPS ignores it)
+                value = -abs(exponent)
+            escape = {"exponent": value, "type": kind}
         cfg = self.app.cfg
         cfg["export_casa_tf"] = bool(self.casa_tf.get())
         cfg["export_mfp"] = bool(self.mfp_on.get())
         if escape:
-            cfg["export_mfp_value"] = escape["exponent"]
+            if escape["type"] not in (4, 6):  # remember what was typed
+                cfg["export_mfp_value"] = escape["exponent"]
+            elif escape["type"] in ESCAPE_VALUE_HINT:
+                cfg["export_escape_thickness"] = escape["exponent"]
             cfg["export_escape_type"] = escape["type"]
         save_config(cfg)
         if self.app._write_export(chosen, self.fmt.get(),

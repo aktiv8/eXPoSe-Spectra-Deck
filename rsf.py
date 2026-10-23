@@ -37,10 +37,13 @@ LIBRARIES = {"scofield": "Scofield (CasaXPS casaXPS-scofield.lib)",
                           "casaXPS_KratosAxis-F1s.lib)",
              "scofield_tpp2m": "Scofield + TPP-2M IMFP "
                               "(average-matrix approximation)",
+             "scofield_tpp2m_casa": "Scofield + TPP-2M IMFP "
+                                    "(CasaXPS's own matrix)",
              "scofield_ke06": "Scofield x KE^0.6 "
                              "(Thermo Avantage's own convention)"}
 LIBRARY_SHORT = {"scofield": "Scofield", "kratos_f1s": "Kratos F1s",
                  "scofield_tpp2m": "Scofield×TPP-2M",
+                 "scofield_tpp2m_casa": "Scofield×TPP-2M (CasaXPS)",
                  "scofield_ke06": "Scofield×KE^0.6"}
 
 # "scofield_tpp2m"/"scofield_ke06" (quant.py's own IMFP-corrected tiers,

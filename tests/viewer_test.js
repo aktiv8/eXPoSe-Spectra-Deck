@@ -381,6 +381,16 @@ function near(a, b, msg, tol) {
       near(tpp2m.rsfValue, 15.45 * V.imfpNm(ke), 'scofield_tpp2m rsfValue');
       eq(tpp2m.kePowerFactor, null, 'scofield_tpp2m leaves kePowerFactor null');
 
+      // CasaXPS's own TPP-2M matrix: same value as imfp.casa_imfp_nm (Python)
+      // and no energy limit
+      const casa = V.quantNormalise([mfpRow], null, false, table, 'scofield_tpp2m_casa')[0];
+      eq(casa.rsfSource, 'scofield_tpp2m_casa', 'scofield_tpp2m_casa rsfSource');
+      near(casa.imfpNm, V.imfpNmCasa(ke), 'scofield_tpp2m_casa imfpNm matches V.imfpNmCasa');
+      near(casa.imfpNm, 3.6732544441977097, 'Casa TPP-2M equals imfp.casa_imfp_nm(1411.6)', 1e-9);
+      const casaLow = V.quantNormalise([{ area: 100, rsf: 0, region: 'Pt 4f', photon_energy: 1486.6,
+                      be_lo: 1440, be_hi: 1442, components: [] }], null, false, table, 'scofield_tpp2m_casa')[0];
+      eq(casaLow.rsfSource, 'scofield_tpp2m_casa', 'Casa TPP-2M has no energy floor');
+
       const ke06 = V.quantNormalise([mfpRow], null, false, table, 'scofield_ke06')[0];
       eq(ke06.rsfSource, 'scofield_ke06', 'scofield_ke06 rsfSource');
       near(ke06.kePowerFactor, V.kePowerFactor(ke), 'scofield_ke06 kePowerFactor matches V.kePowerFactor');

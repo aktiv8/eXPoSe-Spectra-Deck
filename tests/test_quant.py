@@ -293,6 +293,22 @@ class TestRsfFallback(unittest.TestCase):
         self.assertAlmostEqual(out[0]["corrected"], 100.0 / (15.45 * lam))
         self.assertIsNone(out[0]["ke_power_factor"])
 
+    def test_scofield_tpp2m_casa_uses_casaxps_matrix_without_a_limit(self):
+        row = {"area": 100.0, "rsf": 0.0, "region": "Pt 4f",
+              "photon_energy": 1486.6, "be_lo": 70.0, "be_hi": 80.0,
+              "components": []}
+        out = quant.normalise([row], rsf_table=self.RSF_TABLE,
+                              rsf_library="scofield_tpp2m_casa")
+        lam = imfp.casa_imfp_nm(1486.6 - 75.0)
+        self.assertEqual(out[0]["rsf_source"], "scofield_tpp2m_casa")
+        self.assertAlmostEqual(out[0]["imfp_nm"], lam)
+        self.assertAlmostEqual(out[0]["rsf_value"], 15.45 * lam)
+        # KE 45.6 eV: the average-matrix tier refuses, CasaXPS's has no floor
+        low = dict(row, be_lo=1436.0, be_hi=1446.0)
+        out = quant.normalise([low], rsf_table=self.RSF_TABLE,
+                              rsf_library="scofield_tpp2m_casa")
+        self.assertIsNotNone(out[0]["imfp_nm"])
+
     def test_scofield_tpp2m_falls_back_to_plain_scofield_out_of_range(self):
         # midpoint KE = 1486.6 - 1441 = 45.6 eV, below TPP-2M's 50 eV floor
         row = {"area": 100.0, "rsf": 0.0, "region": "Pt 4f",

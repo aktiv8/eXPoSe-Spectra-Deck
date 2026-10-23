@@ -74,6 +74,24 @@ KE_POWER_EXPONENT = 0.6   # Thermo Avantage's own convention -- see the
                           # module docstring's "ke_power_factor" paragraph
 
 
+def _tpp2m(e, n_v, rho, molar_mass, e_gap, ep2_coeff=None):
+    """The TPP-2M equation (Tanuma, Powell, Penn 1993) in nm for a kinetic
+    energy ``e`` (eV); None when the denominator is not positive (very low
+    energies). ``ep2_coeff`` is the plasmon constant in Ep^2 = k U (the
+    published 28.8^2 = 829.44 unless given)."""
+    u = n_v * rho / molar_mass
+    ep2 = (829.44 if ep2_coeff is None else ep2_coeff) * u
+    beta = (-0.10 + 0.944 / math.sqrt(ep2 + e_gap ** 2)
+            + 0.069 * rho ** 0.1)
+    gamma = 0.191 * rho ** -0.5
+    c = 1.97 - 0.91 * u
+    d = 53.4 - 20.8 * u
+    den = ep2 * (beta * math.log(gamma * e) - c / e + d / e ** 2)
+    if not den > 0:
+        return None
+    return e / den / 10.0
+
+
 def imfp_nm(kinetic_energy):
     """The TPP-2M inelastic mean free path, in nm, for an electron of this
     kinetic energy (eV), in the fixed "average matrix" -- None when
@@ -81,17 +99,80 @@ def imfp_nm(kinetic_energy):
     50-2000 eV validity range (never an unreliable extrapolation)."""
     if not kinetic_energy or not (MIN_KE <= kinetic_energy <= MAX_KE):
         return None
-    e = float(kinetic_energy)
-    e_p = 28.8 * math.sqrt(N_V * RHO / MOLAR_MASS)
-    u = N_V * RHO / MOLAR_MASS
-    beta = (-0.10 + 0.944 / math.sqrt(e_p ** 2 + E_GAP ** 2)
-           + 0.069 * RHO ** 0.1)
-    gamma = 0.191 * RHO ** -0.5
-    c = 1.97 - 0.91 * u
-    d = 53.4 - 20.8 * u
-    imfp_angstrom = e / (e_p ** 2 * (beta * math.log(gamma * e)
-                                     - c / e + d / e ** 2))
-    return imfp_angstrom / 10.0
+    return _tpp2m(float(kinetic_energy), N_V, RHO, MOLAR_MASS, E_GAP)
+
+
+# CasaXPS's own "TPP2M" escape-depth type, read from CasaXPS.exe (Ghidra,
+# function 0x1403cc280, case 5): one fixed material, diamond-like carbon, and
+# no energy limits. Ep^2 = 829.4 U, U = Nv rho / M.
+CASA_N_V, CASA_RHO, CASA_MOLAR_MASS, CASA_E_GAP = 4.0, 3.513, 12.01, 5.4
+CASA_EP2_COEFF = 829.4
+
+
+def casa_imfp_nm(kinetic_energy):
+    """CasaXPS's TPP-2M mean free path in nm (its fixed diamond-like matrix,
+    no validity range, as the program has none); None when the energy is not
+    positive or the equation gives no positive value."""
+    if not kinetic_energy or kinetic_energy <= 0:
+        return None
+    return _tpp2m(float(kinetic_energy), CASA_N_V, CASA_RHO,
+                  CASA_MOLAR_MASS, CASA_E_GAP, CASA_EP2_COEFF)
+
+
+# CasaXPS "ESCAPE DEPTH TYPE" codes (the integer stored in the VAMAS block's
+# additional parameters) and the labels CasaXPS shows ("Escape D.C.: ...").
+ESCAPE_NONE, ESCAPE_KE_EXP, ESCAPE_EAL, ESCAPE_IMFP = 0, 1, 2, 3
+ESCAPE_CH_FILM, ESCAPE_TPP2M, ESCAPE_LAYER = 4, 5, 6
+ESCAPE_NAMES = {0: "None", 1: "KE exponent", 2: "EAL", 3: "IMFP",
+                4: "CH film", 5: "TPP-2M", 6: "Layer"}
+
+
+def _eal(ke):                       # CasaXPS's effective attenuation length
+    return 0.65 + 0.007 * ke ** 0.93
+
+
+def _casa_imfp_line(ke):            # the program's "IMFP" type
+    return 0.73 + 0.0095 * ke ** 0.872
+
+
+def casa_escape_factor(kind, ke, ref=1.0, p=0.0):
+    """The factor CasaXPS multiplies an intensity by for escape-depth
+    correction, lambda(ref) / lambda(KE), read from CasaXPS.exe. ``kind`` is
+    the ESCAPE DEPTH TYPE code, ``ke`` the kinetic energy of the point,
+    ``ref`` the reference kinetic energy (1 eV unless a reference binding
+    energy is set) and ``p`` the block's MFP Exponent field: the exponent for
+    type 1 (stored negative, -0.6 for KE^0.6), the overlayer thickness for CH
+    film and Layer (in the EAL's unit, nm). Quantification divides the area
+    by 1 / factor, i.e. its "MFP" is lambda(KE) / lambda(ref). 1.0 for None,
+    an unknown type or an exponent of zero, as in the program."""
+    if kind == ESCAPE_KE_EXP:
+        return (ke / ref) ** p if abs(p) > 1e-200 else 1.0
+    if kind == ESCAPE_EAL:
+        l, lr = _eal(ke), _eal(ref)
+        return lr / l if l > 1e-200 else l
+    if kind == ESCAPE_IMFP:
+        l, lr = _casa_imfp_line(ke), _casa_imfp_line(ref)
+        return lr / l if l > 1e-200 else l
+    if kind == ESCAPE_TPP2M:
+        l = _tpp2m(ke, CASA_N_V, CASA_RHO, CASA_MOLAR_MASS, CASA_E_GAP,
+                   CASA_EP2_COEFF)
+        lr = _tpp2m(ref, CASA_N_V, CASA_RHO, CASA_MOLAR_MASS, CASA_E_GAP,
+                    CASA_EP2_COEFF)
+        if l is None or lr is None:
+            return 1.0
+        return lr / l if l > 1e-200 else l
+    if kind in (ESCAPE_CH_FILM, ESCAPE_LAYER):
+        scale = 4.0 ** 0.38 if kind == ESCAPE_CH_FILM else 1.0
+        l, lr = _eal(ke), _eal(ref)
+        if not l > 1e-200:
+            return l
+        if kind == ESCAPE_CH_FILM:
+            return (lr / l) * math.exp(p * scale / l) / math.exp(
+                p * scale / lr)
+        if not p > 1e-200:
+            return l * (1 - math.exp(-p / l))
+        return lr * (1 - math.exp(-p / lr)) / (l * (1 - math.exp(-p / l)))
+    return 1.0
 
 
 def ke_power_factor(kinetic_energy):

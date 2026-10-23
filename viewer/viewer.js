@@ -479,6 +479,16 @@
     var imfpAngstrom = ke / (eP * eP * (beta * Math.log(gamma * ke) - c / ke + d / (ke * ke)));
     return imfpAngstrom / 10.0;
   };
+  /* CasaXPS's own TPP2M escape-depth type (CasaXPS.exe, Ghidra 0x1403cc280):
+     a fixed diamond-like matrix, no energy limits; mirrors imfp.casa_imfp_nm */
+  V.imfpNmCasa = function (ke) {
+    if (!ke || ke <= 0) return null;
+    var u = 4.0 * 3.513 / 12.01, ep2 = 829.4 * u;
+    var beta = -0.10 + 0.944 / Math.sqrt(ep2 + 5.4 * 5.4) + 0.069 * Math.pow(3.513, 0.1);
+    var gamma = 0.191 * Math.pow(3.513, -0.5);
+    var den = ep2 * (beta * Math.log(gamma * ke) - (1.97 - 0.91 * u) / ke + (53.4 - 20.8 * u) / (ke * ke));
+    return den > 0 ? ke / den / 10.0 : null;
+  };
   V.kePowerFactor = function (ke) {
     if (!ke || ke <= 0) return null;
     return Math.pow(ke, KE_POWER_EXPONENT);
@@ -554,7 +564,7 @@
   /* "scofield_tpp2m"/"scofield_ke06" are not real libraries in rsfTable --
      they reuse the "scofield" rows verbatim, then multiply by a kinetic-
      energy-dependent factor (see V.imfpNm/V.kePowerFactor above). */
-  var IMFP_LIBRARIES = { scofield_tpp2m: 'scofield', scofield_ke06: 'scofield' };
+  var IMFP_LIBRARIES = { scofield_tpp2m: 'scofield', scofield_tpp2m_casa: 'scofield', scofield_ke06: 'scofield' };
   V.quantNormalise = function (rows, include, transmission, rsfTable, rsfLibrary) {
     var out = rows.map(function (row, i) {
       var area = transmission && row.area_t !== null && row.area_t !== undefined ? row.area_t : row.area;
@@ -588,11 +598,12 @@
                      && row.be_lo !== null && row.be_lo !== undefined
                      && row.be_hi !== null && row.be_hi !== undefined)
               ? row.photon_energy - (row.be_lo + row.be_hi) / 2 : null;
-            var factor = library === 'scofield_tpp2m' ? V.imfpNm(ke) : V.kePowerFactor(ke);
+            var factor = library === 'scofield_tpp2m' ? V.imfpNm(ke)
+              : library === 'scofield_tpp2m_casa' ? V.imfpNmCasa(ke) : V.kePowerFactor(ke);
             if (factor) {
               value = value * factor;
               source = library;
-              if (library === 'scofield_tpp2m') res.imfpNm = factor;
+              if (library === 'scofield_tpp2m' || library === 'scofield_tpp2m_casa') res.imfpNm = factor;
               else res.kePowerFactor = factor;
             }
           }
@@ -609,7 +620,7 @@
     return out;
   };
   V.RSF_LIBRARY_SHORT = { scofield: 'Scofield', kratos_f1s: 'Kratos F1s',
-                          scofield_tpp2m: 'Scofield×TPP-2M', scofield_ke06: 'Scofield×KE^0.6' };
+                          scofield_tpp2m: 'Scofield×TPP-2M', scofield_tpp2m_casa: 'Scofield×TPP-2M (CasaXPS)', scofield_ke06: 'Scofield×KE^0.6' };
   function rsfSourceText(x) {
     if (!x.rsfSource) return '';
     if (x.rsfSource === 'component') return "components' own RSF";
@@ -2304,7 +2315,7 @@
     tcb.checked = q.transmission && hasT; tcb.disabled = !hasT;
     tcb.addEventListener('change', function () { q.transmission = tcb.checked; renderQuant(); });
     var rsel = h('select', { 'aria-label': 'RSF fallback for regions with no recorded sensitivity factor' });
-    [['', 'Off'], ['scofield', 'Scofield'], ['scofield_tpp2m', 'Scofield + TPP-2M'],
+    [['', 'Off'], ['scofield', 'Scofield'], ['scofield_tpp2m', 'Scofield + TPP-2M'], ['scofield_tpp2m_casa', 'Scofield + TPP-2M (CasaXPS)'],
      ['scofield_ke06', 'Scofield × KE^0.6'], ['kratos_f1s', 'Kratos Axis F1s']].forEach(function (opt) {
       var o = h('option', { value: opt[0], text: opt[1] });
       if (opt[0] === q.rsfLibrary) o.selected = true;

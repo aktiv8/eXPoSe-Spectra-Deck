@@ -385,6 +385,8 @@ class ReportGeneratorDialog(tk.Toplevel):
                              "scofield.lib)"),
                             ("scofield_tpp2m", "Scofield + TPP-2M IMFP "
                              "(average-matrix approximation)"),
+                            ("scofield_tpp2m_casa", "Scofield + TPP-2M "
+                             "IMFP (CasaXPS's own matrix)"),
                             ("scofield_ke06", "Scofield × KE^0.6 (a "
                              "simpler approximation, Thermo Avantage's "
                              "own convention)"),

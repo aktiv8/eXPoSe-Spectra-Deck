@@ -31,7 +31,8 @@ SOURCE_HIGH_RES = "high-res"
 # rsf.py's table -- they reuse the "scofield" rows verbatim, then multiply
 # by a kinetic-energy-dependent factor computed from a formula. This maps
 # each to the base library its table lookup actually uses.
-_IMFP_LIBRARIES = {"scofield_tpp2m": "scofield", "scofield_ke06": "scofield"}
+_IMFP_LIBRARIES = {"scofield_tpp2m": "scofield", "scofield_tpp2m_casa":
+                   "scofield", "scofield_ke06": "scofield"}
 
 
 def _trapz(y, x):
@@ -198,7 +199,8 @@ def normalise(rows, include=None, transmission=False, rsf_table=None,
        by the row's own region name and photon energy via ``rsf.rsf_of``;
        when found, ``rsf_source``/``rsf_anode``/``rsf_value`` record exactly
        which library/anode/number was substituted. ``rsf_library``
-       ``"scofield_tpp2m"``/``"scofield_ke06"`` look up the base "scofield"
+       ``"scofield_tpp2m"``/``"scofield_tpp2m_casa"``/``"scofield_ke06"`` look
+       up the base "scofield"
        value the same way, then multiply it by a kinetic-energy-dependent
        factor from ``imfp.py`` (``imfp_nm``/``ke_power_factor``, computed
        from the row's own ``be_lo``/``be_hi``/``photon_energy`` --
@@ -259,6 +261,9 @@ def normalise(rows, include=None, transmission=False, rsf_table=None,
                              and be_hi is not None else None)
                         if rsf_library == "scofield_tpp2m":
                             factor, factor_key = imfp.imfp_nm(ke), "imfp_nm"
+                        elif rsf_library == "scofield_tpp2m_casa":
+                            factor, factor_key = (imfp.casa_imfp_nm(ke),
+                                                  "imfp_nm")
                         else:
                             factor, factor_key = (imfp.ke_power_factor(ke),
                                                   "ke_power_factor")

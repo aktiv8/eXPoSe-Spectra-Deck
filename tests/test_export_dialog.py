@@ -74,6 +74,34 @@ class TestExportDialog(unittest.TestCase):
                 dlg.do_export()
             self.assertEqual(app.calls[0][2]["escape_depth"]["exponent"], -0.6)
 
+    def test_every_casaxps_type_is_offered(self):
+        self.assertEqual(sorted(spectradeck.ESCAPE_TYPES), [0, 1, 2, 3, 4, 5, 6])
+
+    def test_thickness_types_write_it_positive(self):
+        for kind in (4, 6):
+            app = FakeApp()
+            dlg = self.dialog(app)
+            dlg.mfp_on.set(True)
+            dlg.mfp_type.set(spectradeck.ESCAPE_TYPES[kind])
+            dlg.mfp_value.set("-1,5")
+            with mock.patch.object(spectradeck, "save_config"):
+                dlg.do_export()
+            self.assertEqual(app.calls[0][2]["escape_depth"],
+                             {"exponent": 1.5, "type": kind})
+            self.assertEqual(app.cfg["export_escape_thickness"], 1.5)
+            self.assertNotIn("export_mfp_value", app.cfg)
+
+    def test_type_without_a_value_keeps_the_exponent_form(self):
+        app = FakeApp()
+        dlg = self.dialog(app)
+        dlg.mfp_on.set(True)
+        dlg.mfp_type.set(spectradeck.ESCAPE_TYPES[2])
+        self.assertEqual(str(dlg.mfp_entry.cget("state")), "disabled")
+        with mock.patch.object(spectradeck, "save_config"):
+            dlg.do_export()
+        self.assertEqual(app.calls[0][2]["escape_depth"],
+                         {"exponent": -0.6, "type": 2})
+
     def test_bad_exponent_is_refused(self):
         app = FakeApp()
         dlg = self.dialog(app)

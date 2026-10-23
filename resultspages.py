@@ -623,7 +623,9 @@ def _rsf_note(sample):
             lib_label = rsf_lib.LIBRARY_SHORT.get(src, src)
             extra = ""
             if x.get("imfp_nm"):
-                extra = (f", scaled by a TPP-2M mean free path of "
+                matrix = (" (CasaXPS's own matrix)"
+                          if src == "scofield_tpp2m_casa" else "")
+                extra = (f", scaled by a TPP-2M mean free path{matrix} of "
                         f"{x['imfp_nm']:.3g} nm at that line's own "
                         "kinetic energy")
             elif x.get("ke_power_factor"):
