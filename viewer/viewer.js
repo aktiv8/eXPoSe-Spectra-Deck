@@ -246,6 +246,27 @@
     });
     return groups;
   };
+  /* panels in the user's order: keys in `order` first, the rest as they were (panelview.order_groups) */
+  V.orderGroups = function (groups, order) {
+    var rank = {}, n = 0;
+    (order || []).forEach(function (k) { if (!(k in rank)) rank[k] = n++; });
+    return groups.map(function (g, i) { return [g, i]; }).sort(function (a, b) {
+      var ra = a[0].key in rank ? rank[a[0].key] : n, rb = b[0].key in rank ? rank[b[0].key] : n;
+      return ra - rb || a[1] - b[1];
+    }).map(function (p) { return p[0]; });
+  };
+  /* the shown keys with `key` moved first / earlier / later / last, or onto `target` (panelview.moved / moved_to) */
+  V.moveKey = function (keys, key, how, target) {
+    keys = keys.slice();
+    var i = keys.indexOf(key);
+    if (i < 0) return keys;
+    keys.splice(i, 1);
+    var j = how === 'first' ? 0 : how === 'earlier' ? Math.max(0, i - 1) : how === 'later' ? i + 1 :
+      how === 'last' ? keys.length : keys.indexOf(target);
+    if (j < 0) { keys.splice(i, 0, key); return keys; }
+    keys.splice(Math.min(j, keys.length), 0, key);
+    return keys;
+  };
   V.traceLabel = function (s, multiFile) {
     var base;
     if (s.reg.level !== null && s.reg.level !== undefined) {
@@ -1319,7 +1340,7 @@
   if (typeof document === 'undefined') return;
 
   /* ============================================================ the page */
-  var S = { data: null, specs: [], byId: {}, ticked: new Set(), selected: null, mode: 'stack',
+  var S = { data: null, order: [], specs: [], byId: {}, ticked: new Set(), selected: null, mode: 'stack',
             norm: 'none', offset: 0.6, scale: 'Binding', iss: 'kinetic', levelOn: false, levelIdx: 0, levels: [],
             panels: new Map(), theme: 'auto', printing: false, nodes: [], holderIdx: 0,
             holderHot: null, tab: 'plot', filter: '', camIdx: 0, camView: {}, mapById: {}, camById: {},
@@ -1556,7 +1577,7 @@
   }
   function render() {
     if (S.tab !== 'plot' && !S.printing) return;
-    var specs = visibleSpecs(), groups = V.groupSpectra(specs);
+    var specs = visibleSpecs(), groups = V.orderGroups(V.groupSpectra(specs), S.order);
     var host = $('panels'), keep = {};
     groups.forEach(function (g) { keep[g.key] = true; });
     S.panels.forEach(function (p, k) { if (!keep[k]) { host.removeChild(p.wrap); S.panels.delete(k); } });
@@ -1725,15 +1746,31 @@
     }
     p.range = Math.abs(x - a) <= Math.abs(x - b) ? [x, b] : [a, x];
   }
+  function movePanel(key, how, target) {
+    var shown = [];
+    $('panels').childNodes.forEach(function (n) { S.panels.forEach(function (p, k) { if (p.wrap === n) shown.push(k); }); });
+    S.order = V.moveKey(shown, key, how, target);
+    requestRender();
+  }
   function makePanel(key) {
     var canvas = h('canvas', { 'aria-label': 'Spectrum plot', role: 'img' });
     var readout = h('div', { class: 'readout', 'aria-live': 'off' });
     var png = h('button', { type: 'button', class: 'pngbtn', title: 'Save this plot as a PNG image', text: 'PNG' });
-    var wrap = h('div', { class: 'panel' }, canvas, h('div', { class: 'panel-foot' }, readout, png));
+    var up = h('button', { type: 'button', class: 'pngbtn movebtn', title: 'Move this plot earlier (or drag it by this button onto another plot)', text: '◀', draggable: 'true' });
+    var down = h('button', { type: 'button', class: 'pngbtn movebtn', title: 'Move this plot later', text: '▶' });
+    var wrap = h('div', { class: 'panel' }, canvas, h('div', { class: 'panel-foot' }, readout, up, down, png));
     var p = { key: key, wrap: wrap, canvas: canvas, readout: readout, zoom: null, hover: null,
               drag: null, lay: null, group: null, job: 0 };
     S.panels.set(key, p);
     png.addEventListener('click', function () { savePanelPng(p); });
+    up.addEventListener('click', function () { movePanel(key, 'earlier'); });
+    down.addEventListener('click', function () { movePanel(key, 'later'); });
+    up.addEventListener('dragstart', function (e) { e.dataTransfer.setData('text/plain', key); e.dataTransfer.effectAllowed = 'move'; });
+    wrap.addEventListener('dragover', function (e) { e.preventDefault(); });
+    wrap.addEventListener('drop', function (e) {
+      var from = e.dataTransfer.getData('text/plain');
+      if (from && from !== key) { e.preventDefault(); movePanel(from, 'onto', key); }
+    });
     canvas.addEventListener('mousemove', function (e) { onMove(p, e); });
     canvas.addEventListener('mouseleave', function () { p.hover = null; p.readout.textContent = ''; redraw(p); });
     canvas.addEventListener('mousedown', function (e) {
@@ -3514,6 +3551,7 @@
     $('scaleField').hidden = !S.specs.some(function (s) { return s.reg.binding; });   /* nothing to switch */
     V.seedInclude(S.q.include, data.quant_include);
     V.quantSource.casa = !!data.casa_numbers;
+    S.order = (data.panel_order || []).slice();
     V.fitSource.csv = !!(data.fit_csv && data.fit_csv.default);
     $('fit-csv').checked = V.fitSource.csv;
     $('fit-csv-field').hidden = !data.fit_csv;

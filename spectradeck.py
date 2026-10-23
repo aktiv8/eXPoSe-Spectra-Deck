@@ -5485,7 +5485,17 @@ class Workspace:
             self.calib, casa_quant=self.casa_quant,
             quant_overrides=dict(self.quant_panel.view.include),
             ticked=lambda r: id(r) in self.checked,
-            fit_stats=self.fit_stats())
+            fit_stats=self.fit_stats(), panel_order=self._html_panel_order())
+
+    def _html_panel_order(self):
+        """The panel order as element names, which is how the page groups
+        (a per-sample label "C 1s · A" gives "c 1s")."""
+        out = []
+        for k in self.panel_order:
+            n = normalise_name(k.split(" · ")[0])
+            if n not in out:
+                out.append(n)
+        return out
 
     def export_html_browser(self):
         if not self._report_ready():

@@ -83,6 +83,7 @@ li.collapsed > ul { display: none; }
 .panels.one .panel canvas { height: 460px; }
 .panel-foot { display: flex; align-items: center; gap: 8px; }
 .panel-foot .readout { flex: 1; min-width: 0; }
+@media print { .movebtn { display: none; } }
 .pngbtn { font-size: 11px; padding: 1px 8px; border-radius: 4px; flex: none; }
 .readout { min-height: 18px; padding: 2px 6px; font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .fitbox { padding: 4px 6px 6px; color: var(--plot-fg); }

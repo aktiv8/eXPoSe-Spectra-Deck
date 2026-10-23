@@ -760,7 +760,8 @@ class TestPage(unittest.TestCase):
         # +3_000: zoom and pan of a camera picture (V.camZoom, V.camPan, wheel and drag)
         # +2_000: the 1 % visible floor on a component and the peak position in the legend
         # +4_000: the Range normalisation (end points, click to move them)
-        self.assertLess(len(page), 202_000 + raw)     # far below plain JSON
+        # +3_000: the plot order (V.orderGroups / V.moveKey, move buttons, drag)
+        self.assertLess(len(page), 205_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR

@@ -593,7 +593,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
                   calibration="", figures=(), calib=None, generated=None,
                   cameras=True, snapmaps=True, lines=None, casa_quant=None,
                   rsf_entries=None, prefer_csv=True, quant_overrides=None,
-                  ticked=None, fit_stats=None):
+                  ticked=None, fit_stats=None, panel_order=None):
     """The data of the browser as a JSON-able dict.
 
     ``figures`` is ``[{"name", "caption", "pages": [png bytes]}]``; ``calib``
@@ -831,6 +831,8 @@ def build_payload(docs, display=None, details=None, methods_text="",
            if fit_stats is not None and tuple(fit_stats) != ("rms", "chi2")
            else {}),
         **({"casa_numbers": True} if casa_tagged else {}),
+        # the app's panel order as element names (the page groups by name)
+        **({"panel_order": list(panel_order)} if panel_order else {}),
     }
 
 

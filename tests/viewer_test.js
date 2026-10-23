@@ -134,6 +134,12 @@ function near(a, b, msg, tol) {
   eq(g.map((x) => x.items.length), [2, 1], 'grouped by normalised name');
   eq(g.map((x) => x.name), ['C 1s', 'O 1s'], 'first appearance order');
 
+  const og = V.groupSpectra([{ name: 'O 1s' }, { name: 'C 1s' }, { name: 'N 1s' }]);
+  eq(V.orderGroups(og, ['c 1s', 'x']).map((x) => x.key), ['c 1s', 'o 1s', 'n 1s'], 'panel order: listed first, rest kept');
+  eq(V.moveKey(['a', 'b', 'c'], 'c', 'earlier'), ['a', 'c', 'b'], 'move earlier');
+  eq(V.moveKey(['a', 'b', 'c'], 'c', 'onto', 'a'), ['c', 'a', 'b'], 'move onto');
+  eq(V.moveKey(['a', 'b', 'c'], 'a', 'last'), ['b', 'c', 'a'], 'move last');
+
   // ---- interpolation, either direction ----
   near(V.interp([1, 2, 3], [10, 20, 30], 2.5), 25, 'interp ascending');
   near(V.interp([3, 2, 1], [30, 20, 10], 2.5), 25, 'interp descending');
