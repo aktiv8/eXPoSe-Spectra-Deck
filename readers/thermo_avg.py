@@ -457,6 +457,20 @@ class ThermoDataSpaceFile(SpectrumFile):
             x["acq_code"] = p["DS_ACPROPID_MODE"]
         if p.get("DS_ANPROPID_MODE") == 1:       # FAT in CasaXPS's own export
             x["analyser_mode"] = CAE
+        n_tx = p.get("DS_ANPROPID_TXFN_COEFFS")
+        coeffs = [p.get(f"DS_ANPROPID_TXFN_COEFF[{i}]")
+                  for i in range(n_tx if isinstance(n_tx, int) else 0)]
+        if "DS_ANPROPID_TXFN_REMOVED" in p or any(
+                c is not None for c in coeffs):
+            # recorded as read; the formula behind the coefficients is not
+            # decoded, so the transmission function itself is not rebuilt
+            x["txfn"] = {
+                "removed": (bool(p["DS_ANPROPID_TXFN_REMOVED"])
+                            if "DS_ANPROPID_TXFN_REMOVED" in p else None),
+                # 6 decimals: the .avg dump prints no more, the .vgd holds
+                # float32 (both readers must give the same)
+                "coeffs": [round(float(c), 6) for c in coeffs
+                           if c is not None]}
 
     @staticmethod
     def _iongun_props(p):

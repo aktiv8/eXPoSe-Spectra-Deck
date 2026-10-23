@@ -48,6 +48,9 @@ PID_NAMES = {
     0x193: "DS_ANPROPID_MODE", 0x194: "DS_ANPROPID_PASS",
     0x196: "DS_ANPROPID_WORK_FTN", 0x19B: "DS_ANPROPID_LENS_MODE_NAME",
     0x19D: "DS_ANPROPID_TXFN_COEFFS",
+    # matched to the .avg dump's TXFN_REMOVED on 212 of 212 pairs (all True;
+    # absent in both for the 41 ISS-type files): a False has not been seen
+    0x19F: "DS_ANPROPID_TXFN_REMOVED",
     # ISS ion gun (only in ISS files; values matched to the sibling .avg)
     0x1F8: "DS_SOURCE_IONGUNPROPID_ENERGY",
     0x1FC: "DS_SOURCE_IONGUNPROPID_IONTYPE",

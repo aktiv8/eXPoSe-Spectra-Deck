@@ -6528,7 +6528,8 @@ class Workspace:
                 ev, ax, {s: tuple(p) for s, p in positions.items()}, parser))
 
     # -- export ---------------------------------------------------------
-    def _write_export(self, regions, fmt, include_tf=True):
+    def _write_export(self, regions, fmt, include_tf=True,
+                      casa_transmission=False, escape_depth=None):
         """Ask for a path and write regions as CSV/VAMAS. True on success."""
         regions = [r for r in regions if r.decodable and r.counts]
         if not regions:
@@ -6575,10 +6576,13 @@ class Workspace:
                 n = export_vamas(
                     regions, path,
                     instrument=inst.get("Instrument", ""),
-                    operator=inst.get("Acquisition computer", ""),
-                    experiment_id=os.path.basename(
-                        (parser.path if parser else "") or ""),
-                    include_transmission=include_tf, metadata=metas)
+                    operator=(inst.get("Operator")
+                              or inst.get("Acquisition computer", "")),
+                    # one source file names the experiment; several do not
+                    experiment_id=sources[0] if len(sources) == 1 else "",
+                    include_transmission=include_tf, metadata=metas,
+                    casa_transmission=casa_transmission,
+                    escape_depth=escape_depth)
         except Exception as exc:
             messagebox.showerror("Export failed", str(exc))
             return False
@@ -6768,6 +6772,17 @@ class _ExportSection(ttk.Frame):
             v.set(value)
 
 
+# The mean free path goes as KE**x; CasaXPS shows and stores it as 1/KE**0.6,
+# i.e. the value written in the file is -0.6 (a file where 0.6 was typed holds
+# -0.6 too). The dialog takes the magnitude and always writes its negative.
+DEFAULT_MFP_EXPONENT = 0.6
+# CasaXPS's "ESCAPE DEPTH TYPE" additional parameter: 5 is what its import of
+# an Avantage file writes (TPP-2M); 1 is what a file saved after choosing the
+# power law (MFP exponent) holds. Read from two CasaXPS files that differ in
+# nothing else; the other values are not known.
+ESCAPE_TYPES = {5: "TPP-2M (CasaXPS default)", 1: "KE^exponent (power law)"}
+
+
 class ExportDialog(tk.Toplevel):
     """Choose regions (or depth-profile levels) from every loaded file and a
     format. Pre-selects the currently ticked spectra."""
@@ -6831,6 +6846,29 @@ class ExportDialog(tk.Toplevel):
             fmt_frame, variable=self.incl_tf,
             text="Include spectrometer transmission function (VAMAS, "
                  "CasaXPS-compatible)").pack(anchor="w", padx=24, pady=(0, 4))
+        cfg = app.cfg
+        self.casa_tf = tk.BooleanVar(value=bool(cfg.get("export_casa_tf")))
+        ttk.Checkbutton(
+            fmt_frame, variable=self.casa_tf,
+            text="Restore the transmission function as CasaXPS does for "
+                 "Avantage data (VAMAS)\nFor K-Alpha / NEXSA / HYPULSE data "
+                 "only: other instruments' files are unchanged",
+            justify="left").pack(anchor="w", padx=24, pady=(0, 4))
+        self.mfp_on = tk.BooleanVar(value=bool(cfg.get("export_mfp")))
+        row = ttk.Frame(fmt_frame)
+        row.pack(anchor="w", padx=24, pady=(0, 6))
+        ttk.Checkbutton(row, variable=self.mfp_on,
+                        text="Write MFP exponent, 1/KE^x with x =").pack(
+                            side="left")
+        self.mfp_value = tk.StringVar(
+            value=f"{abs(cfg.get('export_mfp_value', DEFAULT_MFP_EXPONENT)):g}")
+        ttk.Entry(row, textvariable=self.mfp_value, width=6).pack(
+            side="left", padx=(6, 8))
+        self.mfp_type = tk.StringVar(value=ESCAPE_TYPES.get(
+            cfg.get("export_escape_type", 5), ESCAPE_TYPES[5]))
+        ttk.Combobox(row, textvariable=self.mfp_type, state="readonly",
+                     width=24, values=list(ESCAPE_TYPES.values())
+                     ).pack(side="left")
 
         btns = ttk.Frame(self)
         btns.pack(fill="x", padx=12, pady=(0, 12))
@@ -6855,8 +6893,30 @@ class ExportDialog(tk.Toplevel):
             messagebox.showwarning("Nothing selected",
                                    "Select at least one region to export.")
             return
+        escape = None
+        if self.mfp_on.get():
+            try:
+                exponent = float(self.mfp_value.get().replace(",", "."))
+            except ValueError:
+                messagebox.showwarning(
+                    "MFP exponent", "Enter the MFP exponent as a number "
+                                    f"(default {DEFAULT_MFP_EXPONENT}).")
+                return
+            kind = next(k for k, v in ESCAPE_TYPES.items()
+                        if v == self.mfp_type.get())
+            # as CasaXPS writes it: 1/KE^0.6 is stored as -0.6
+            escape = {"exponent": -abs(exponent), "type": kind}
+        cfg = self.app.cfg
+        cfg["export_casa_tf"] = bool(self.casa_tf.get())
+        cfg["export_mfp"] = bool(self.mfp_on.get())
+        if escape:
+            cfg["export_mfp_value"] = escape["exponent"]
+            cfg["export_escape_type"] = escape["type"]
+        save_config(cfg)
         if self.app._write_export(chosen, self.fmt.get(),
-                                  include_tf=self.incl_tf.get()):
+                                  include_tf=self.incl_tf.get(),
+                                  casa_transmission=self.casa_tf.get(),
+                                  escape_depth=escape):
             self.destroy()
 
 

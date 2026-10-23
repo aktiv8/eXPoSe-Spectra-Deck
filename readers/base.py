@@ -573,6 +573,14 @@ class SpectrumFile:
             md["Analyser mode"] = r.extra["analyser_mode"]
         if r.extra.get("acq_mode"):
             md["Acquisition mode"] = r.extra["acq_mode"]
+        tx = r.extra.get("txfn")
+        if tx and tx.get("removed") is not None:
+            md["Transmission function"] = (
+                "removed (Avantage TXFN_REMOVED = True)" if tx["removed"]
+                else "not removed (Avantage TXFN_REMOVED = False)")
+            if tx.get("coeffs"):
+                md["Transmission coefficients"] = ", ".join(
+                    f"{c:g}" for c in tx["coeffs"])
         label = (r.energy_label or "").lower()
         axis = ("Photon energy" if label.startswith("photon")
                 else "KE" if "kinetic" in label else "BE")

@@ -14,6 +14,8 @@ import datetime
 
 import casafit
 import metasummary
+import timing
+import txfn
 import vamasmeta
 
 # ==========================================================================
@@ -108,10 +110,41 @@ def regular_grid(xs):
     return a, b, max(abs(a + b * i - x) for i, x in enumerate(xs))
 
 
+def _block_time(r, md, fallback):
+    """When the spectrum was acquired, for the block's date fields: the run
+    start the reader recorded, else its date, else the metadata's, else
+    ``fallback`` (the export time)."""
+    for text in (r.extra.get("t_start"), r.date,
+                 (md or {}).get("Date acquired")):
+        when = timing.parse_ts(text)
+        if when:
+            return when
+    return fallback
+
+
+def _beam_widths(md):
+    """Source beam width x and y in µm from the 'X-ray spot (µm)' metadata
+    row ('200' or '200 × 100'); None when it is not stated."""
+    nums = re.findall(r"\d+(?:\.\d+)?", str((md or {}).get("X-ray spot (µm)", "")))
+    if not nums:
+        return None
+    return float(nums[0]), float(nums[1] if len(nums) > 1 else nums[0])
+
+
+def _work_function(md):
+    """Analyser work function in eV from the metadata row, else None."""
+    try:
+        v = float(str((md or {}).get("Work function (eV)", "")).strip())
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
+
 def export_vamas(regions, path, institution="Not specified",
                  instrument="", operator="", experiment_id="",
                  sample_id="Sample", include_transmission=True,
-                 metadata=None, experiment_metadata=None):
+                 metadata=None, experiment_metadata=None,
+                 casa_transmission=False, escape_depth=None):
     """Export selected regions as a VAMAS (ISO 14976) file.
 
     Sequential block layout: experiment mode NORM, scan mode REGULAR,
@@ -124,6 +157,14 @@ def export_vamas(regions, path, institution="Not specified",
     is written into the block comments and ``experiment_metadata`` (default:
     what every region agrees on) into the file header, inside a delimited
     block (see ``vamasmeta``), so reading the file back restores it.
+
+    ``casa_transmission``: for Avantage data whose transmission function was
+    removed at acquisition (K-Alpha / NEXSA / HYPULSE) write the counts and
+    the Transmission column as CasaXPS's Avantage import does (see
+    ``txfn``); other regions are written as usual. ``escape_depth``
+    (``{"exponent": -0.6, "type": 5}``) adds CasaXPS's two quantification
+    parameters, ``MFP Exponent`` and ``ESCAPE DEPTH TYPE``, to every
+    non-ISS block.
     """
     pairs = [(r, metadata[i] if metadata and i < len(metadata) else None)
              for i, r in enumerate(regions) if r.decodable and r.counts]
@@ -177,6 +218,9 @@ def export_vamas(regions, path, institution="Not specified",
             ke0, dke, deviation = regular_grid(ke)
         counts = r.counts
         trans = r.transmission() if include_transmission else None
+        casa = (txfn.casa_form(r) if casa_transmission and not iss else None)
+        if casa:                   # Avantage counts as CasaXPS's import has them
+            counts, trans = casa
         n_cv = 2 if trans else 1
         anode = (r.anode.split()[0] if r.anode else "Al")  # element only
         power = ""
@@ -187,8 +231,9 @@ def export_vamas(regions, path, institution="Not specified",
 
         a(r.name)                 # block identifier
         a(r.sample or sample_id)  # sample identifier
-        a(str(now.year)); a(str(now.month)); a(str(now.day))
-        a(str(now.hour)); a(str(now.minute)); a(str(now.second))
+        when = _block_time(r, md, now)
+        a(str(when.year)); a(str(when.month)); a(str(when.day))
+        a(str(when.hour)); a(str(when.minute)); a(str(when.second))
         a("0")                    # hours in advance of GMT
         # block comment: include etch info for depth profiles
         comment = list(casafit.to_lines(getattr(r, "fit", None)))
@@ -206,6 +251,13 @@ def export_vamas(regions, path, institution="Not specified",
                 "kinetic-energy field",
                 "Abscissa regularised from the recorded readback, largest "
                 f"difference {deviation:.3g} eV"]
+        if casa:
+            comment.append(
+                "Counts rescaled by T(KE) / T(%g eV) and the transmission "
+                "function T(KE) written as a second variable, as CasaXPS's "
+                "import of Avantage data has them; the source file's stored "
+                "intensities are the counts divided by T(KE) / T(%g eV)"
+                % (txfn.REF_KE, txfn.REF_KE))
         if r.etch_level is not None:
             comment.append(f"Etch level : {r.etch_level}")
         if r.etch_time is not None:
@@ -227,14 +279,16 @@ def export_vamas(regions, path, institution="Not specified",
           f"{hv - (r.calibration_shift if r.shift_applied else 0.0):.10g}")
                                   # source characteristic energy
         a(SENT if iss else (power or SENT))  # source strength (W)
-        a(SENT)                   # beam width x
-        a(SENT)                   # beam width y
+        beam = None if iss else _beam_widths(md)
+        a(f"{beam[0]:g}" if beam else SENT)   # beam width x (µm)
+        a(f"{beam[1]:g}" if beam else SENT)   # beam width y (µm)
         a(SENT)                   # source polar angle of incidence
         a(SENT)                   # source azimuth
         a("FAT")                  # analyser mode
         a(f"{r.pass_energy:g}" if r.pass_energy else SENT)  # pass energy
         a(SENT)                   # magnification of transfer lens
-        a("-4.5")                 # analyser work function
+        wf = _work_function(md)
+        a(f"{wf:g}" if wf else SENT)          # analyser work function (eV)
         a(SENT)                   # target bias
         a(SENT)                   # analysis width x
         a(SENT)                   # analysis width y
@@ -263,7 +317,12 @@ def export_vamas(regions, path, institution="Not specified",
         a(SENT if tilt is None else f"{tilt:g}")   # polar angle of tilt
         a(SENT)                   # sample normal tilt azimuth
         a(SENT)                   # sample rotation angle
-        a("0")                    # additional numerical parameters
+        if escape_depth and not iss:       # CasaXPS quantification settings
+            a("2")                # additional numerical parameters
+            a("MFP Exponent"); a("d"); a(f"{escape_depth['exponent']:g}")
+            a("ESCAPE DEPTH TYPE"); a("d"); a(str(int(escape_depth["type"])))
+        else:
+            a("0")                # additional numerical parameters
 
         def fc(v):                # count: integer when whole, else 8 sig figs
             # (a current of 1e-10 A is not "whole"; a NEXAFS value keeps 10)
