@@ -3331,6 +3331,10 @@ class Workspace:
         self.docs.remove(parser)
         self.file_ids.pop(id(parser), None)
         self.file_origin.pop(id(parser), None)
+        # keyed by id(region): a freed region's id is reused by the next file's
+        # regions, which would be handed the old file's display copy
+        self._disp_cache.clear()
+        self._results_memo = None
         self._recompute_colours()
         self.sel_regions = []
         if self._cur_image and self._cur_image[0] is parser:
@@ -3340,11 +3344,16 @@ class Workspace:
         self._update_metadata()
         self._schedule_render(reset_page=True)
 
-    def close_all(self):
+    def _close_docs(self):
         self._folder_note = ""
         for p in list(self.docs):
             self._remove_doc(p)
         self.casa_csv_imports = []
+
+    def close_all(self):
+        """Close every file and start an empty workbook (as New workbook
+        does), so the old workbook's name and edits do not linger."""
+        self.new_workbook()
 
     # -- tree -----------------------------------------------------------
     def _populate_tree(self):
@@ -4788,6 +4797,7 @@ class Workspace:
         self.wb_path, self.wb_extra, self.wb_created = None, {}, ""
         self._fid_used = set()
         self.ann = annotations.Annotations()
+        self._disp_cache.clear()
         self.calib = holder.sanitise(load_calibration())
         self.casa_quant = None
         self._casa_quant_scanned = set()
@@ -4798,7 +4808,7 @@ class Workspace:
     def new_workbook(self):
         if not self._confirm_discard():
             return
-        self.close_all()
+        self._close_docs()
         self.untick_all()
         self._reset_workbook()
         self._drop_wb_dir()
@@ -4923,7 +4933,7 @@ class Workspace:
             return
         finally:
             self.root.config(cursor="")
-        self.close_all()
+        self._close_docs()
         self.untick_all()
         self._drop_wb_dir()
         self._reset_workbook()
