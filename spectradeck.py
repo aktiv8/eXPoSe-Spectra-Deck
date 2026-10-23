@@ -137,8 +137,8 @@ import imaging_ui
 from themes import (ThemeManager, THEME_NAMES, PRINT, mpl_rc, SwatchCache,
                     ramp)
 from plots import (interp_intensity, trace_label, nice_step, dodge,
-                   normalise_name, norm_factor, add_ke_axis, draw_stack,
-                   draw_heatmap, draw_waterfall3d)  # noqa: F401
+                   normalise_name, norm_factor, norm_affine, add_ke_axis,
+                   draw_stack, draw_heatmap, draw_waterfall3d)  # noqa: F401
 from plots import (draw_holder_markers as plots_draw_markers,
                    place_marker_labels)
 from pdf_preview import PdfPreview, HAVE_PDF, open_external
@@ -687,6 +687,7 @@ class Workspace:
         self.trace_start = 0        # first visible trace of long stacks
         self._scale_guard = False
         self.cursors = {}           # group key -> "At cursor" energy
+        self.ranges = {}            # group key -> "Range" end points (BE pair)
         self.panel_views = {}       # group key -> panelview override
         self._trace_limit_now = None    # window the trace slider describes
         self.calib =holder.sanitise(load_calibration())
@@ -2937,6 +2938,10 @@ class Workspace:
         key = self._axmap.get(event.inaxes)
         mode = self._look_for(key)["norm"] if key is not None \
             else self.norm_var.get()
+        if mode == "Range":
+            off, f = norm_affine(self._display(r), mode,
+                                 rng=self.ranges.get(key))
+            return float(event.ydata) * f + off
         f = 1.0 if mode in ("None", "At cursor") else norm_factor(
             self._display(r), mode)
         return float(event.ydata) * f
@@ -3858,11 +3863,15 @@ class Workspace:
         self.page_lbl.config(
             text=(f"Panels {self.panel_start + 1}–{self.panel_start + shown} "
                   f"of {n_groups}") if n_groups > npp else "")
+        live = [lk["norm"] for lk in looks.values()
+                if not panelview.is_series(lk["view"])]
         self.hint.config(
             text="Click a panel to set the energy to match at."
-            if n_spec and any(lk["norm"] == "At cursor"
-                              and not panelview.is_series(lk["view"])
-                              for lk in looks.values()) else
+            if n_spec and "At cursor" in live else
+            "Range: the lower end point of each spectrum is 0, the higher 1 "
+            "(the data's own ends). Click a panel to move the nearer end "
+            "point; right-click to reset."
+            if n_spec and "Range" in live else
             ("Right-click a panel to change its own view, normalisation "
              "or fit layers." if n_spec else ""))
         self._set_scrollbar(HAVE_MPL and n_groups > npp)
@@ -4056,7 +4065,8 @@ class Workspace:
                        accent=pal["accent"], muted=pal["muted"],
                        scale=pscale, ke_top=ke_top, top_row=top_row,
                        markers=marks, style=style, fit=fit_arg,
-                       reels=reels_arg, auger_colour=pal["cycle"][1])
+                       reels=reels_arg, auger_colour=pal["cycle"][1],
+                       rng=self.ranges.get(key))
             axmap[ax] = key
             axhv[ax] = viewdata.photon_energy(disp)
             e0 = viewdata.energy_axis(disp[0], pscale).e0
@@ -4273,6 +4283,10 @@ class Workspace:
         root.add_separator()
         root.add_cascade(label="View", menu=pm["view"])
         root.add_cascade(label="Normalise", menu=pm["norm"])
+        root.add_command(
+            label="Reset Range end points",
+            state="normal" if key in self.ranges else "disabled",
+            command=lambda: self.reset_range(key))
         root.add_cascade(label="Offset", menu=pm["offset"],
                          state="disabled" if series else "normal")
         root.add_cascade(label="Z axis", menu=pm["z"],
@@ -4443,7 +4457,8 @@ class Workspace:
         if key is None:
             return
         look = self._look_for(key)
-        if look["norm"] != "At cursor" or panelview.is_series(look["view"]):
+        if (look["norm"] not in ("At cursor", "Range")
+                or panelview.is_series(look["view"])):
             return
         x = float(event.xdata)
         hv = self._axhv.get(event.inaxes)
@@ -4452,7 +4467,33 @@ class Workspace:
             x = x * e0                  # an ISS cursor is a kinetic energy
         elif self.scale_var.get() == "Kinetic" and hv:
             x = hv - x                  # cursors are kept as binding energy
-        self.cursors[key] = x
+        if look["norm"] == "Range":
+            self.ranges[key] = self._moved_range(key, x)
+        else:
+            self.cursors[key] = x
+        self._schedule_render()
+
+    def _moved_range(self, key, x):
+        """The panel's two "Range" end points after a click at ``x``: the
+        nearer one moves there (the data's own ends until one is chosen)."""
+        pair = self.ranges.get(key)
+        if pair is None:
+            lo = hi = None
+            for k, rs in self._groups():
+                if k == key and rs:
+                    es = [e for r in rs for e in self._display(r).energy]
+                    if es:
+                        lo, hi = min(es), max(es)
+                    break
+            if lo is None:
+                return (x, x)
+            pair = (lo, hi)
+        a, b = pair
+        return (x, b) if abs(x - a) <= abs(x - b) else (a, x)
+
+    def reset_range(self, key):
+        """Back to the data's own end points for one panel."""
+        self.ranges.pop(key, None)
         self._schedule_render()
 
     def save_plot_image(self):
@@ -4541,6 +4582,8 @@ class Workspace:
             "trace_start": int(self.trace_start),
             "plot_style": dict(self.plot_style),
             "cursors": {k: float(v) for k, v in self.cursors.items()},
+            "ranges": {k: [float(a), float(b)]
+                       for k, (a, b) in self.ranges.items()},
             "panel_views": copy.deepcopy(self.panel_views),
             "ticked": ticked,
         }
@@ -4640,6 +4683,16 @@ class Workspace:
         if isinstance(cur, dict):
             self.cursors = {str(k): float(v) for k, v in cur.items()
                             if isinstance(v, (int, float))}
+        # a look without range end points means the data's own ends (an
+        # older figure must not inherit the live window's choice)
+        rngs = st.get("ranges")
+        self.ranges = {}
+        if isinstance(rngs, dict):
+            for k, v in rngs.items():
+                if (isinstance(v, (list, tuple)) and len(v) == 2 and all(
+                        isinstance(e, (int, float)) and math.isfinite(e)
+                        for e in v)):
+                    self.ranges[str(k)] = (float(v[0]), float(v[1]))
         # unlike the settings above, a look without panel views means none
         # (an older figure must not inherit the live window's overrides)
         self.panel_views = panelview.sanitise_all(st.get("panel_views"))

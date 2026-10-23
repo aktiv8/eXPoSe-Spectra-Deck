@@ -80,8 +80,45 @@ def normalise_name(name):
     return re.sub(r"\s+", " ", (name or "").strip()).lower()
 
 
-def norm_factor(r, mode, cursor=None):
+RANGE_AVG = 3       # points averaged at each end of a spectrum for "Range"
+
+
+def range_ends(r, rng=None):
+    """Intensities ``(y_low, y_high)`` at the two end points of a "Range"
+    normalisation: at the stored energies ``rng`` (a pair, interpolated) or,
+    without them, the mean of the ``RANGE_AVG`` outermost points at each end
+    of the spectrum's own axis. None when there is nothing to read."""
+    xs, ys = r.energy, r.counts
+    if not xs or not ys:
+        return None
+    if rng:
+        return interp_intensity(r, rng[0]), interp_intensity(r, rng[1])
+    order = sorted(range(len(xs)), key=xs.__getitem__)
+    k = min(RANGE_AVG, max(1, len(order) // 2))
+    lo = [ys[i] for i in order[:k]]
+    hi = [ys[i] for i in order[-k:]]
+    return sum(lo) / len(lo), sum(hi) / len(hi)
+
+
+def norm_affine(r, mode, cursor=None, rng=None):
+    """``(offset, divisor)`` that normalise spectrum r: ``(y - offset) /
+    divisor``. Every mode but "Range" only divides (offset 0). "Range" maps
+    the lower of the two end-point intensities (``range_ends``) to 0 and the
+    higher to 1; equal or unreadable end points leave the spectrum as it is."""
+    if mode == "Range":
+        ends = range_ends(r, rng)
+        if ends and None not in ends:
+            lo, hi = min(ends), max(ends)
+            if math.isfinite(lo) and math.isfinite(hi) and hi > lo:
+                return lo, hi - lo
+        return 0.0, 1.0
+    return 0.0, norm_factor(r, mode, cursor)
+
+
+def norm_factor(r, mode, cursor=None, rng=None):
     """Divisor that normalises spectrum r for the chosen mode."""
+    if mode == "Range":
+        return norm_affine(r, mode, cursor, rng)[1]
     ys = r.counts
     if mode == "Max = 1":
         m = max(ys)
@@ -114,8 +151,9 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
                first_col=True, bottom_row=True, accent="#0F6B8C",
                muted="#56636E", scale="Binding", ke_top=False,
                top_row=False, markers=(), style=None, fit=None,
-               reels=None, auger_colour=None):
+               reels=None, auger_colour=None, rng=None):
     """Draw one panel: a single spectrum plain, several stacked by y offset.
+    ``rng`` is the panel's chosen pair of "Range" end-point energies.
 
     Stacked panels drop the (meaningless) y ticks for a scale bar and label
     each trace at its right-hand end, in the trace colour, with labels nudged
@@ -125,8 +163,11 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
     small = plotstyle.note_size(st)
     end_lbl = st["labels"] == "End labels"
     boxed = st["labels"] == "Legend"
-    nf = [norm_factor(r, norm, cursor) for r in regs]   # data and fit alike
-    normed = [[y / f for y in r.counts] for r, f in zip(regs, nf)]
+    aff = [norm_affine(r, norm, cursor, rng) for r in regs]
+    no = [a[0] for a in aff]                            # data and fit alike
+    nf = [a[1] for a in aff]
+    normed = [[(y - o) / f for y in r.counts]
+              for r, o, f in zip(regs, no, nf)]
     n = len(regs)
     stacked = n > 1
     spans = [(max(v) - min(v)) for v in normed if v]
@@ -164,7 +205,7 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
                 continue
             nm, pk = draw_fit(ax, axes_x[i].x, dict(fit, curves=cvs),
                               1.0 / nf[i], muted, accent, yoff=i * step,
-                              legend=False, rms=False)
+                              legend=False, rms=False, offset=no[i])
             for k, v in nm.items():
                 # one entry per swatch + words: another trace's component of
                 # the same colour and name says nothing new
@@ -175,14 +216,18 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
         if n == 1 and fit["per_trace"][0]:
             _fit_rms_text(ax, fit["per_trace"][0], muted, fit.get("stats"))
     elif fit and n == 1:               # a CasaXPS fit under a single spectrum
-        draw_fit(ax, axes_x[0].x, fit, 1.0 / nf[0], muted, accent)
-    if norm == "At cursor" and cursor is not None:
+        draw_fit(ax, axes_x[0].x, fit, 1.0 / nf[0], muted, accent,
+                 offset=no[0])
+
+    def cursor_x(c):
         if a0.e0:                       # cursors are kept as kinetic energy
-            cx = cursor / a0.e0
-        else:
-            cx = (r0.photon_energy - cursor
-                  if a0.label == "Kinetic Energy" else cursor)
-        ax.axvline(cx, color=accent, ls="--", lw=0.9)
+            return c / a0.e0
+        return r0.photon_energy - c if a0.label == "Kinetic Energy" else c
+    if norm == "At cursor" and cursor is not None:
+        ax.axvline(cursor_x(cursor), color=accent, ls="--", lw=0.9)
+    if norm == "Range" and rng:         # the two chosen end points
+        for c in rng:
+            ax.axvline(cursor_x(c), color=accent, ls=":", lw=0.9)
     if st["y_scale"] == "Log":
         ax.set_yscale("log")
     ax.margins(x=0.02, y=0.06)
@@ -222,9 +267,8 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
                                 plotstyle.y_unit(st, r0.count_units))
             if norm == "None" else f"{r0.count_label} (normalised)"))
     if reels and n == 1:               # a REELS band-gap construction
-        draw_reels(ax, a0, r0.photon_energy, reels,
-                   1.0 / norm_factor(r0, norm, cursor), muted, accent,
-                   note_size=small)
+        draw_reels(ax, a0, r0.photon_energy, reels, 1.0 / nf[0], muted,
+                   accent, note_size=small, offset=no[0])
     if markers:      # peak labels: (energy, text[, kinetic?[, tier]])
         lo, hi = ax.get_xlim()
         xtf = ax.get_xaxis_transform()       # x in data, y as axes fraction
@@ -284,7 +328,10 @@ def draw_heatmap(fig, ax, regs, zi, norm="None", cmap=None, title="",
     small = plotstyle.note_size(st)
     axes_x = [viewdata.energy_axis(r, scale) for r in regs]
     a0, r0 = axes_x[0], regs[0]
-    ys = [[y / norm_factor(r, norm) for y in r.counts] for r in regs]
+    ys = []
+    for r in regs:
+        o, f = norm_affine(r, norm)
+        ys.append([(y - o) / f for y in r.counts])
     grid, rows = viewdata.build_matrix([a.x for a in axes_x], ys)
     if cmap is None:
         cmap = LinearSegmentedColormap.from_list("heat", ["#FFFFFF", "#000000"])
@@ -329,7 +376,10 @@ def draw_waterfall3d(ax, regs, zi, norm="None", colours=None, title="",
     st = plotstyle.resolve(style)
     axes_x = [viewdata.energy_axis(r, scale) for r in regs]
     a0, r0 = axes_x[0], regs[0]
-    ys = [[y / norm_factor(r, norm) for y in r.counts] for r in regs]
+    ys = []
+    for r in regs:
+        o, f = norm_affine(r, norm)
+        ys.append([(y - o) / f for y in r.counts])
     floor = min(min(v) for v in ys if v)
     n = len(regs)
     for i, (a, v, z) in enumerate(zip(axes_x, ys, zi.values)):
@@ -471,7 +521,7 @@ _COMPONENT_VISIBLE_FLOOR = 0.01
 
 
 def draw_fit(ax, x, fit, scale, muted, accent, yoff=0.0, legend=True,
-             rms=True):
+             rms=True, offset=0.0):
     """Overlay a reconstructed CasaXPS fit on a panel: the one spectrum of a
     single panel, or one trace of a stack (``yoff`` is that trace's offset,
     added to every curve; ``legend=False`` / ``rms=False`` leave the
@@ -480,7 +530,9 @@ def draw_fit(ax, x, fit, scale, muted, accent, yoff=0.0, legend=True,
 
     ``fit`` is ``{"curves": [casafit.Curves], "show": {"envelope", "components",
     "background"}, "colours": [...]}``; ``x`` are the panel's x values (one
-    per data point) and ``scale`` multiplies every curve (normalisation).
+    per data point) and ``scale`` multiplies every curve (normalisation);
+    ``offset`` (the "Range" normalisation's zero) is taken off the background
+    and the envelope first, and not off a component, which is peak only.
 
     A component's own drawn fill/line stops once it falls below
     ``_COMPONENT_VISIBLE_FLOOR`` of its own peak height on this panel (see the
@@ -508,7 +560,8 @@ def draw_fit(ax, x, fit, scale, muted, accent, yoff=0.0, legend=True,
     cols = fit.get("colours") or ["#888888"]
     names, peak_at = {}, {}
     for cv in fit["curves"]:
-        base = ([(b * scale + yoff) if b == b else b for b in cv.background]
+        base = ([((b - offset) * scale + yoff) if b == b else b
+                 for b in cv.background]
                 if cv.background is not None else None)
         if show.get("background") and base is not None:
             ax.plot(x, base, color=muted, lw=1.0, ls="--", zorder=2.2)
@@ -527,7 +580,8 @@ def draw_fit(ax, x, fit, scale, muted, accent, yoff=0.0, legend=True,
                         abs(vals[i]) if vals[i] == vals[i] else -1.0))
                     peak_at[key] = x[top_i]
                 y = [v * scale for v in vals]
-                lo = base if base is not None else [yoff] * len(y)
+                lo = (base if base is not None
+                      else [yoff - offset * scale] * len(y))
                 peak = max((abs(v) for v in y if v == v), default=0.0)
                 floor = _COMPONENT_VISIBLE_FLOOR * peak
                 top = [(b + v) if (v == v and b == b
@@ -538,7 +592,7 @@ def draw_fit(ax, x, fit, scale, muted, accent, yoff=0.0, legend=True,
                                 lw=0, zorder=1.6)
                 ax.plot(x, top, color=col, lw=0.9, zorder=2.3)
         if show.get("envelope") and cv.envelope is not None:
-            ax.plot(x, [v * scale + yoff for v in cv.envelope],
+            ax.plot(x, [(v - offset) * scale + yoff for v in cv.envelope],
                     color=ax.xaxis.label.get_color(), lw=1.3, zorder=2.6)
     if legend and names and show.get("components"):
         _fit_legend(ax, names, peak_at)
@@ -599,13 +653,14 @@ def _fit_rms_text(ax, curves, muted, stats=("rms",)):
                 fontsize=fs, color=muted)
 
 
-def draw_reels(ax, a0, hv, reels, scale, muted, accent, note_size=8):
+def draw_reels(ax, a0, hv, reels, scale, muted, accent, note_size=8,
+               offset=0.0):
     """Overlay a REELS band-gap construction on a single-spectrum panel: the
     elastic peak, the baseline, the tangent through the two picked points and
     the resulting gap. ``reels`` holds ``elastic`` (kinetic energy), ``p1`` /
     ``p2`` (loss, intensity), ``gap``, ``base``, ``slope``; ``a0`` is the
-    panel's energy axis (``viewdata.energy_axis``); ``scale`` multiplies
-    intensities (normalisation)."""
+    panel's energy axis (``viewdata.energy_axis``); intensities are drawn as
+    ``(y - offset) * scale`` (normalisation)."""
     import reels as rl
 
     def X(loss):                        # loss -> the panel's x value
@@ -620,25 +675,25 @@ def draw_reels(ax, a0, hv, reels, scale, muted, accent, note_size=8):
                 color=muted, fontsize=note_size, rotation=90, va="bottom",
                 ha="right")
     for key in ("p1", "p2"):
-        x, y = X(reels[key][0]), reels[key][1] * scale
+        x, y = X(reels[key][0]), (reels[key][1] - offset) * scale
         if x is not None:
             ax.plot([x], [y], "o", color=accent, ms=5, zorder=4)
     if "gap" not in reels or reels["gap"] is None:
         return
     (xa, ya), (xb, yb) = rl.tangent_points(reels, reels["p1"], reels["p2"])
-    pts = [(X(xa), ya * scale), (X(xb), yb * scale)]
+    pts = [(X(xa), (ya - offset) * scale), (X(xb), (yb - offset) * scale)]
+    base = (reels["base"] - offset) * scale
     if None in (pts[0][0], pts[1][0]):
         return
     ax.plot([pts[0][0], pts[1][0]], [pts[0][1], pts[1][1]], color=accent,
             lw=1.3, zorder=3.5)
     x0 = X(0.0)
     if x0 is not None:
-        ax.plot([x0, pts[0][0]], [reels["base"] * scale] * 2, color=accent,
+        ax.plot([x0, pts[0][0]], [base] * 2, color=accent,
                 lw=0.9, ls="--", zorder=3.4)
-    ax.plot([pts[0][0]], [reels["base"] * scale], "s", color=accent, ms=4,
-            zorder=4)
+    ax.plot([pts[0][0]], [base], "s", color=accent, ms=4, zorder=4)
     ax.annotate(f"Eg = {reels['gap']:.2f} eV",
-                (pts[0][0], reels["base"] * scale), xytext=(8, 14),
+                (pts[0][0], base), xytext=(8, 14),
                 textcoords="offset points", color=accent,
                 fontsize=note_size + 1, fontweight="bold",
                 arrowprops={"arrowstyle": "-", "color": accent, "lw": 0.7})

@@ -73,6 +73,39 @@
     }
     return 1;
   };
+  /* "Range" normalisation (mirrors plots.range_ends / plots.norm_affine): the intensities at the
+     two end points, at the energies rng = [a, b] (clamped to the data) or, with none chosen, the
+     mean of the 3 outermost points at each end; the lower of the two is 0, the higher 1 */
+  V.RANGE_AVG = 3;
+  V.rangeEnds = function (x, y, rng) {
+    var n = x.length;
+    if (!n || !y.length) return null;
+    if (rng) {
+      var at = function (v) {
+        var r = V.interp(x, y, v), lo = 0, hi = 0, i;
+        if (r !== null) return r;
+        for (i = 1; i < n; i++) { if (x[i] < x[lo]) lo = i; if (x[i] > x[hi]) hi = i; }
+        return y[v < x[lo] ? lo : hi];
+      };
+      return [at(rng[0]), at(rng[1])];
+    }
+    var order = x.map(function (_v, i) { return i; }).sort(function (a, b) { return x[a] - x[b]; });
+    var k = Math.min(V.RANGE_AVG, Math.max(1, Math.floor(n / 2)));
+    var mean = function (idx) { return idx.reduce(function (s, i) { return s + y[i]; }, 0) / idx.length; };
+    return [mean(order.slice(0, k)), mean(order.slice(n - k))];
+  };
+  /* {off, div}: a normalised value is (y - off) / div */
+  V.normAffine = function (x, y, mode, rng) {
+    if (mode === 'range') {
+      var e = V.rangeEnds(x, y, rng);
+      if (e && isFinite(e[0]) && isFinite(e[1])) {
+        var lo = Math.min(e[0], e[1]), hi = Math.max(e[0], e[1]);
+        if (hi > lo) return { off: lo, div: hi - lo };
+      }
+      return { off: 0, div: 1 };
+    }
+    return { off: 0, div: V.normFactor(y, mode) };
+  };
   /* nudge label positions apart (order kept); positions are pixels, y down */
   V.dodge = function (ys, gap) {
     var order = ys.map(function (_v, i) { return i; })
@@ -1596,15 +1629,19 @@
       .map(function (s) { return cols[s % cols.length]; });
   }
   /* the fit's curves on every point of the spectrum, scaled like the data */
+  /* f = {off, div} (V.normAffine): background and envelope are (v - off) / div, a component
+     (peak only) v / div */
   function fitCurves(s, f) {
-    var n = s.y.length, sc = function (a) { return a ? a.map(function (v) { return v === null ? null : v / f; }) : null; };
+    var n = s.y.length,
+        sc = function (a) { return a ? a.map(function (v) { return v === null ? null : (v - f.off) / f.div; }) : null; },
+        scc = function (a) { return a ? a.map(function (v) { return v === null ? null : v / f.div; }) : null; };
     return V.fitRows(s.reg).map(function (row, ri) {
       var cur = row.curve;
       if (!cur) return { row: row, ri: ri, bg: null, env: null, comps: [], res: null };
       var env = sc(V.curveFull(cur, cur.env, n));
       return { row: row, ri: ri, bg: sc(V.curveFull(cur, cur.bg, n)), env: env,
-               comps: cur.comps.map(function (c) { return sc(V.curveFull(cur, c, n)); }),
-               res: env ? V.residual(s.y.map(function (v) { return v / f; }), env) : null };
+               comps: cur.comps.map(function (c) { return scc(V.curveFull(cur, c, n)); }),
+               res: env ? V.residual(s.y.map(function (v) { return (v - f.off) / f.div; }), env) : null };
     });
   }
   function fmtN(v, d) { return v === null || v === undefined || v !== v ? '' : v.toFixed(d); }
@@ -1657,6 +1694,26 @@
     });
     if (rows.length > shown) box.appendChild(h('div', { class: 'fit-head', text: '… and ' + (rows.length - shown) + ' more fit regions' }));
   }
+  /* the "Range" end points of a panel are kept in the spectra's own energies (binding for XPS):
+     a click at axis value v moves the nearer end there (the data's own ends until one is chosen) */
+  function nativeEnergy(p, v) {
+    var ax = p.lay.ax, reg = p.items[0].reg;
+    if (ax.ratio) return v * ax.e0;
+    if (ax.label === 'Kinetic energy' && reg.binding && reg.hv) return reg.hv - v;
+    return v;
+  }
+  function axisEnergy(p, nat) {
+    return V.energyAxis(p.items[0].reg, [nat], S.scale, S.iss).x[0];
+  }
+  function moveRange(p, v) {
+    var x = nativeEnergy(p, v), a, b;
+    if (p.range) { a = p.range[0]; b = p.range[1]; }
+    else {
+      a = Infinity; b = -Infinity;
+      p.items.forEach(function (s) { s.x.forEach(function (e) { if (e < a) a = e; if (e > b) b = e; }); });
+    }
+    p.range = Math.abs(x - a) <= Math.abs(x - b) ? [x, b] : [a, x];
+  }
   function makePanel(key) {
     var canvas = h('canvas', { 'aria-label': 'Spectrum plot', role: 'img' });
     var readout = h('div', { class: 'readout', 'aria-live': 'off' });
@@ -1680,9 +1737,10 @@
         var v1 = p.lay.toX(d.a), v2 = p.lay.toX(d.b);
         p.zoom = V.clampView(Math.min(v1, v2), Math.max(v1, v2), p.lay.dlo, p.lay.dhi);
       } else if (S.ident.on && p.lay) identifyAt(p, d.a);
+      else if (S.norm === 'range' && p.lay) moveRange(p, p.lay.toX(d.a));
       redraw(p);
     });
-    canvas.addEventListener('dblclick', function () { p.zoom = null; redraw(p); });
+    canvas.addEventListener('dblclick', function () { p.zoom = null; if (S.norm === 'range') p.range = null; redraw(p); });
     canvas.addEventListener('wheel', function (e) {
       if (!p.lay) return;
       e.preventDefault();
@@ -1707,7 +1765,7 @@
     host.appendChild(cv); document.body.appendChild(host);
     S.printing = true;
     try {
-      drawPanel({ key: P.key, canvas: cv, group: P.group, zoom: P.zoom, hover: null, drag: null, lay: null, dpr: 2 },
+      drawPanel({ key: P.key, canvas: cv, group: P.group, zoom: P.zoom, range: P.range, hover: null, drag: null, lay: null, dpr: 2 },
         { bg: '#FFFFFF', fg: '#222222', muted: '#56636E', grid: '#E3E8EC', accent: '#0F6B8C' }, traceColourMap());
     } finally { S.printing = keep; }
     var it = P.group.items[0], name = V.safeName(P.group.name + (P.group.items.length === 1 && it.sample.name ? ' ' + it.sample.name : '')) + '.png';
@@ -1763,18 +1821,18 @@
     var items = g.items, n = items.length;
     var axes = items.map(function (s) { return V.energyAxis(s.reg, s.x, S.scale, S.iss); });
     var ax0 = axes[0];
-    var ys = items.map(function (s) {
-      var f = V.normFactor(s.y, S.norm);
-      return s.y.map(function (v) { return v / f; });
+    var affs = items.map(function (s) { return V.normAffine(s.x, s.y, S.norm, P.range); });
+    var ys = items.map(function (s, i) {
+      return s.y.map(function (v) { return (v - affs[i].off) / affs[i].div; });
     });
     var stacked = S.mode === 'stack' && n > 1;
     var spans = ys.map(function (v) { return Math.max.apply(null, v) - Math.min.apply(null, v); });
     var step = stacked ? S.offset * (Math.max.apply(null, spans) || 1) : 0;
     var yoff = ys.map(function (v, i) { return v.map(function (y) { return y + i * step; }); });
 
-    var fit = singleFit(g) ? fitCurves(items[0], V.normFactor(items[0].y, S.norm)) : null;
-    var sfits = !fit && stackFitItems(g) ? items.map(function (s) {
-      return hasFit(s) ? fitCurves(s, V.normFactor(s.y, S.norm)) : null;
+    var fit = singleFit(g) ? fitCurves(items[0], affs[0]) : null;
+    var sfits = !fit && stackFitItems(g) ? items.map(function (s, i) {
+      return hasFit(s) ? fitCurves(s, affs[i]) : null;
     }) : null;
     /* the states are drawn in the palette's other colours, so the data keep the first one */
     var dataCol = sfits ? cycle()[0] : null;
@@ -1956,6 +2014,17 @@
       });
     }
     ctx.textBaseline = 'alphabetic';
+
+    /* the chosen end points of a "Range" normalisation */
+    if (S.norm === 'range' && P.range) {
+      ctx.strokeStyle = C.accent; ctx.lineWidth = 1; ctx.setLineDash([2, 3]);
+      P.range.forEach(function (e) {
+        var xe = axisEnergy(P, e);
+        if (xe < Math.min(lo, hi) || xe > Math.max(lo, hi)) return;
+        ctx.beginPath(); ctx.moveTo(Math.round(X(xe)) + 0.5, lay.t); ctx.lineTo(Math.round(X(xe)) + 0.5, by); ctx.stroke();
+      });
+      ctx.setLineDash([]);
+    }
 
     /* crosshair and zoom rectangle */
     if (P.hover !== null && P.hover >= lay.l && P.hover <= lay.l + lay.w) {

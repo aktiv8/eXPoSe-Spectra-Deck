@@ -185,7 +185,10 @@ skipped.
      overlap by at least half share a panel), or *Element, per sample* /
      *Element, per file* (one panel per depth or time series).
    * **Normalise** — *None*, *Max = 1*, *Area = 1*, or *At cursor* (click a panel
-     to set an energy; every spectrum in it is scaled to match there).
+     to set an energy; every spectrum in it is scaled to match there), or
+     *Range* (the intensity at a low- and a high-binding-energy point: the
+     lower of the two becomes 0 and the higher 1; the data's own ends until
+     you click a panel to move the nearer end point, right-click to reset).
    * **Offset** — the gap between stacked traces (0 overlays them);
      **Reverse stack** flips the order.
    * **View** — *Stack* (the default), *Waterfall 3D* (energy, trace and

@@ -759,7 +759,8 @@ class TestPage(unittest.TestCase):
         # +1_000: the camera mosaics (the mosaic follow rule)
         # +3_000: zoom and pan of a camera picture (V.camZoom, V.camPan, wheel and drag)
         # +2_000: the 1 % visible floor on a component and the peak position in the legend
-        self.assertLess(len(page), 198_000 + raw)     # far below plain JSON
+        # +4_000: the Range normalisation (end points, click to move them)
+        self.assertLess(len(page), 202_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR
@@ -1275,6 +1276,22 @@ class TestJavaScript(unittest.TestCase):
             r = Region(name="x", index=0, offset=0, counts=ys)
             norm.append({"y": ys, "max": plots.norm_factor(r, "Max = 1"),
                          "area": plots.norm_factor(r, "Area = 1")})
+        range_norm = []
+        for xs, ys, rng in (
+                ([300.0, 299.0, 298.0, 297.0, 296.0, 295.0, 294.0],
+                 [10.0, 11.0, 30.0, 80.0, 40.0, 14.0, 12.0], None),
+                ([290.0, 291.0, 292.0, 293.0, 294.0],
+                 [50.0, 20.0, 9.0, 7.0, 6.0], None),
+                ([300.0, 299.0, 298.0, 297.0, 296.0, 295.0, 294.0],
+                 [10.0, 11.0, 30.0, 80.0, 40.0, 14.0, 12.0], (298.5, 294.5)),
+                ([300.0, 299.0, 298.0, 297.0], [5.0, 5.0, 5.0, 5.0], None),
+                ([300.0, 299.0, 298.0, 297.0],
+                 [5.0, 6.0, 7.0, 9.0], (320.0, 100.0))):
+            r = Region(name="x", index=0, offset=0, energy=xs, counts=ys)
+            off, div = plots.norm_affine(r, "Range", rng=rng)
+            range_norm.append({"x": xs, "y": ys,
+                               "rng": list(rng) if rng else None,
+                               "off": off, "div": div})
         ramps = [{"colour": "#0072B2", "n": n, "bg": "#FFFFFF",
                   "expect": themes.ramp("#0072B2", n, "#FFFFFF")}
                  for n in (2, 3, 8, 30)]
@@ -1292,7 +1309,7 @@ class TestJavaScript(unittest.TestCase):
                 "first_len": len(regs[0].energy), "first_x0": regs[0].energy[0],
                 "first_x_last": regs[0].energy[-1],
                 "first_y3": first["y"][3], "first_file": "a.vms",
-                "norm": norm, "ramps": ramps, "csv": csv_text,
+                "norm": norm, "range_norm": range_norm, "ramps": ramps, "csv": csv_text,
                 "csv_ids": [payload["samples"][0]["regions"][0]["id"],
                             payload["samples"][0]["regions"][1]["id"]],
             }

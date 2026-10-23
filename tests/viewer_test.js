@@ -102,6 +102,12 @@ function near(a, b, msg, tol) {
     near(V.normFactor(c.y, 'area'), c.area, 'area factor ' + JSON.stringify(c.y));
     eq(V.normFactor(c.y, 'none'), 1, 'no normalisation');
   });
+  fx.range_norm.forEach((c, i) => {
+    const a = V.normAffine(c.x, c.y, 'range', c.rng);
+    near(a.off, c.off, 'range offset ' + i);
+    near(a.div, c.div, 'range divisor ' + i);
+  });
+  eq(V.normAffine([1, 2], [3, 4], 'none').div, 1, 'range: other modes keep offset 0');
 
   // ---- colours agree with themes.ramp ----
   fx.ramps.forEach((c) => {

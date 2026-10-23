@@ -14,7 +14,7 @@ FIT_STACK_MAX = 8          # fitted traces on one "Fit stack" panel (the trace
                            # window steps through a longer group)
 FIT_VIEWS = ("Fit", "Fit stack")
 SERIES = ("Waterfall 3D", "Heatmap")           # read in z order
-NORMS = ("None", "Max = 1", "Area = 1", "At cursor")
+NORMS = ("None", "Max = 1", "Area = 1", "At cursor", "Range")
 FIT_LAYERS = ("components", "envelope", "background")
 IDENT_LAYERS = ("secondary", "auger")
 # What the user sees: the "secondary" tier is other elements' lines that could

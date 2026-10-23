@@ -512,7 +512,10 @@ def build_chapters(doc):
         ("Group by", "Element name; Energy range (spectra whose ranges overlap by at "
          "least half share a panel); or Element, per sample / per file."),
         ("Normalise", "None; Max = 1; Area = 1; or At cursor — click a panel to set "
-         "an energy, and every spectrum in it is scaled to match there."),
+         "an energy, and every spectrum in it is scaled to match there; or Range — the "
+         "intensity at a low- and a high-binding-energy point, the lower of the two "
+         "becoming 0 and the higher 1 (the data's own ends until you click a panel "
+         "to move the nearer end point; right-click to reset)."),
         ("Offset", "The gap between stacked traces (0 overlays them). Reverse stack "
          "flips the order."),
         ("View", "Stack (the default); Waterfall 3D (a rotatable 3-D plot); "
