@@ -45,6 +45,14 @@ PID_NAMES = {
     0x131: "DS_ACPROPID_ACQ_TIME", 0x137: "DS_ACPROPID_MODE",
     0x138: "DS_ACPROPID_DIRECTION", 0x13C: "DS_ACPROPID_EV_SCALE",
     0x148: "DS_ACPROPID_PERIODS",
+    # the scan count proper: equal to the .avg dump's PERIODS on all 613
+    # .vgd/.avg pairs checked (0x148 is 2 where the dump says 1 for SnapMaps)
+    0x132: "DS_ACPROPID_SCANS",
+    # old (converted) files only: the Avantage that saved the file and the
+    # path it was converted from (none of 1 626 other files carries 0x12)
+    0x10: "DS_EXT_SOURCE_FILE", 0x12: "DS_EXT_SOFTWARE_VERSION",
+    # the source's own name in an old file ("Al K-alpha")
+    0x74: "DS_EXT_SOURCE_NAME",
     0x193: "DS_ANPROPID_MODE", 0x194: "DS_ANPROPID_PASS",
     0x196: "DS_ANPROPID_WORK_FTN", 0x19B: "DS_ANPROPID_LENS_MODE_NAME",
     0x19D: "DS_ANPROPID_TXFN_COEFFS",
@@ -292,8 +300,24 @@ class ThermoVgdFile(ThermoDataSpaceFile):
                     p[f"DS_ANPROPID_TXFN_COEFF[{pid - _TXFN_BASE}]"] = v
                 elif pid == 0x11 and isinstance(v, str):
                     p.setdefault("DS_GEPROPID_AUTHOR_NOTE", v)
-        if "DS_ACPROPID_PERIODS" not in p and "DS_ACPROPID_ACQ_TIME" in p:
-            pass
+        # the first audit-trail entry of a converted file ("Created from
+        # Eclipse File : <path>"): a UTF-16 string inside a binary record
+        for name in ole.listdir():
+            if name.startswith("AuditTrail/"):
+                try:
+                    raw = ole.read(name)
+                except OleError:
+                    continue
+                at = raw.find("Created".encode("utf-16le"))
+                if at >= 0:
+                    text = raw[at:].decode("utf-16le", "ignore").split(chr(0))[0]
+                    p.setdefault("DS_EXT_AUDIT_CREATED", text.strip())
+        # 0x132 is the real scan count and is what the .avg dump calls
+        # PERIODS; without it only 0x148 is left, which is wrong for SnapMaps
+        if "DS_ACPROPID_SCANS" in p:
+            p["DS_ACPROPID_PERIODS"] = p["DS_ACPROPID_SCANS"]
+        elif "DS_ACPROPID_PERIODS" in p:
+            p["DS_ACPROPID_PERIODS_UNVERIFIED"] = True
 
     @staticmethod
     def _point_labels(ole):

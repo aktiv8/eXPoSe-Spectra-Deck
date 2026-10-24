@@ -321,8 +321,7 @@ class ThermoDataSpaceFile(SpectrumFile):
                 lens_mode=p.get("DS_ANPROPID_LENS_MODE_NAME", ""),
                 date=_dmy(p.get("DS_ACPROPID_START_TIME")
                           or p.get("DS_EXT_SUPROPID_CREATED")),
-                anode=("Al Kα (mono)" if p.get("DS_SOPROPID_MONO") and hv
-                       and 1480 < hv < 1490 else ""),
+                anode=self._anode(p, hv),
                 etch_level=level, etch_time=etch_time,
             )
             self._acquisition_facts(r, p)
@@ -386,6 +385,40 @@ class ThermoDataSpaceFile(SpectrumFile):
                                 else "data axis")}
 
     @staticmethod
+    def _anode(p, hv):
+        """"Al Kα (mono)" for the monochromated source; "Al Kα (non-mono)"
+        for the same line from an unmonochromated one (source type 10 with the
+        mono flag off, or the file's own "Al K-alpha" string); else blank."""
+        if not hv or not 1480 < hv < 1490:
+            return ""
+        if p.get("DS_SOPROPID_MONO"):
+            return "Al Kα (mono)"
+        if (p.get("DS_SOPROPID_STYPE") == 10
+                or "k-alpha" in str(p.get("DS_EXT_SOURCE_NAME", "")).lower()):
+            return "Al Kα (non-mono)"
+        return ""
+
+    @staticmethod
+    def _provenance(x, p):
+        """Where a converted file came from, when it says (the Avantage that
+        saved it, the file's name, the audit trail's first entry): file names
+        only, never a path."""
+        rows = {}
+        version = str(p.get("DS_EXT_SOFTWARE_VERSION") or "").strip()
+        if version:
+            rows["Avantage version"] = version
+        src = str(p.get("DS_EXT_SOURCE_FILE") or "").strip()
+        if src:
+            rows["Original file"] = re.split(r"[\\/]", src)[-1]
+        made = str(p.get("DS_EXT_AUDIT_CREATED") or "").strip()
+        m = re.match(r"^Created from (.+?) File\s*:\s*(.*)$", made)
+        if m:
+            rows["Provenance"] = ("Converted from %s file %s" % (
+                m.group(1), re.split(r"[\\/]", m.group(2))[-1])).strip()
+        if rows:
+            x.setdefault("acq_metadata", {}).update(rows)
+
+    @staticmethod
     def _iss_settings(p):
         """The ion beam of an ion scattering file, as the file records it
         (float32 values, so rounded to what they can hold): ``ion``, ``e0``
@@ -436,16 +469,25 @@ class ThermoDataSpaceFile(SpectrumFile):
             if iss:
                 x["iss"] = iss
         periods = p.get("DS_ACPROPID_PERIODS")
-        # A SnapMap's .vgd says 2 where Avantage's own .avg export of it says
-        # 1, so its scan count is left unknown; every other kind agrees.
-        if isinstance(periods, int) and periods > 0 and self.kind != "map":
+        # The scan count is the .avg dump's PERIODS, which equals the .vgd's
+        # id 0x132 on all 613 pairs checked (the .vgd reader hands that on as
+        # PERIODS). A .vgd with no 0x132 has only id 0x148, which says 2 for a
+        # SnapMap where the real count is 1: its scan count is left unknown.
+        unverified = p.get("DS_ACPROPID_PERIODS_UNVERIFIED")
+        if (isinstance(periods, int) and periods > 0
+                and not (self.kind == "map" and unverified)):
             x["n_scans"] = periods
         t0, t1 = (_dmy(p.get(k)) for k in ("DS_ACPROPID_START_TIME",
                                            "DS_ACPROPID_END_TIME"))
         if timing.parse_ts(t0):
-            x["t_start"], x["tz"] = t0, "UTC"
+            x["t_start"] = t0
+            # UTC is known only for the modern layout (107 reference files);
+            # a file converted from an old Avantage / Eclipse one (property
+            # 0x12) says nothing about its zone
+            x["tz"] = "" if "DS_EXT_SOFTWARE_VERSION" in p else "UTC"
             if timing.parse_ts(t1):
                 x["t_end"] = t1
+        self._provenance(x, p)
         direction = p.get("DS_ACPROPID_DIRECTION")
         if self.kind == "map":
             x["acq_mode"] = "SnapMap"
@@ -513,9 +555,11 @@ class ThermoDataSpaceFile(SpectrumFile):
         if isinstance(wf, (int, float)) and wf:
             instr["Work function (eV)"] = f"{wf:.3g}"
         if hv:
-            instr["X-ray source"] = ("Al Kα, monochromated"
-                                     if p.get("DS_SOPROPID_MONO") and 1480 < hv < 1490
-                                     else "") + f" ({hv:g} eV)"
+            anode = ThermoDataSpaceFile._anode(p, hv)
+            instr["X-ray source"] = {
+                "Al Kα (mono)": "Al Kα, monochromated",
+                "Al Kα (non-mono)": "Al Kα, non-monochromated",
+            }.get(anode, "") + f" ({hv:g} eV)"
             instr["X-ray source"] = instr["X-ray source"].strip()
         if "DS_SOURCE_FLOODGUNPROPID_DESCRIPTION" in p:
             fg = (f"{p['DS_SOURCE_FLOODGUNPROPID_DESCRIPTION']}, "
