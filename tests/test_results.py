@@ -214,17 +214,54 @@ class TestNumbers(unittest.TestCase):
         self.assertEqual(notes, [])
         self.assertEqual(lv.include, [True])
 
-    def test_an_element_with_no_preference_entry_is_untouched(self):
-        # Ti has no _PREFERRED_LINE entry: _prefer_lines does nothing, and
-        # _element_note's existing "counted from both" behaviour is intact
-        s = sample("S", [level(None, [row("Ti 2p", 5.0, 100.0),
-                                      row("Ti 1s", 98.0, 900.0)])])
+    def test_an_element_with_no_preference_entry_counts_its_most_sensitive_line(
+            self):
+        # Ti is not in _PREFERRED_LINE: it still counts from one line only,
+        # the one with the highest RSF, whichever order they are listed in
+        for rows in ([row("Ti 2p", 5.22, 100.0), row("Ti 3p", 0.8, 40.0)],
+                     [row("Ti 3p", 0.8, 40.0), row("Ti 2p", 5.22, 100.0)]):
+            lv = level(None, list(rows))
+            notes = []
+            rp._prefer_lines(lv, "S", notes)
+            by = {e["row"]["region"]: (inc, why) for e, inc, why in
+                  zip(lv.entries, lv.include, lv.why)}
+            self.assertEqual(by["Ti 2p"], (True, ""))
+            self.assertEqual(by["Ti 3p"], (False, "not the most sensitive line"))
+            self.assertEqual(len(notes), 1)
+            self.assertIn("only Ti 2p", notes[0])
+            self.assertIn("highest RSF", notes[0])
+            self.assertAlmostEqual(
+                sum(x["at_pct"] or 0 for x in lv.res), 100.0)
+
+    def test_a_line_without_an_rsf_is_not_a_competitor(self):
+        # it is out of the total already ("no RSF"): nothing to choose
+        lv = level(None, [row("Ti 2p", 5.22, 100.0), row("Ti 3p", 0.0, 40.0)])
         notes = []
-        rp._prefer_lines(s.levels[0], "S", notes)
+        rp._prefer_lines(lv, "S", notes)
         self.assertEqual(notes, [])
-        rp._element_note(s)
-        self.assertEqual(len(s.notes), 1)
-        self.assertIn("Ti is counted from more than one line", s.notes[0])
+        self.assertEqual(lv.include, [True, True])
+        self.assertEqual(lv.res[1]["why"], "no RSF")
+
+    def test_the_users_tick_beats_the_most_sensitive_default(self):
+        lv = level(None, [row("Ti 2p", 5.22, 100.0), row("Ti 3p", 0.8, 40.0)])
+        notes = []
+        hand = lambda ei: {0: False, 1: True}.get(ei)          # noqa: E731
+        rp._prefer_lines(lv, "S", notes, hand=hand)
+        self.assertEqual(notes, [])                  # no note contradicts it
+        rp._apply_overrides(lv, hand)
+        self.assertEqual(lv.include, [False, True])
+        self.assertAlmostEqual(lv.res[1]["at_pct"], 100.0)
+
+    def test_element_siblings_are_other_lines_not_other_copies(self):
+        entries = [{"spectrum": "Survey", "row": row("C 1s", 1, 1)},
+                   {"spectrum": "C 1s", "row": row("C 1s", 1, 1)},
+                   {"spectrum": "Ti 2p", "row": row("Ti 2p", 1, 1)},
+                   {"spectrum": "Ti 3p", "row": row("Ti 3p", 1, 1)},
+                   {"spectrum": "Ti 1s", "row": row("Ti 1s", 1, 1)},
+                   {"spectrum": "VB", "row": row("VB", 1, 1)}]
+        self.assertEqual(rp.element_siblings(entries, 0), [])
+        self.assertEqual(rp.element_siblings(entries, 2), [3, 4])
+        self.assertEqual(rp.element_siblings(entries, 5), [])
 
     def test_pt_4f_only_the_preferred_one_wins_when_neither_is_fitted(self):
         # neither Pt's preferred line ("4f") nor a competing line: nothing

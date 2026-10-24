@@ -523,24 +523,53 @@
      the result is the caller's job (renderFitQuant seeds q.include[key]
      only where the key is not already present, so a user's own explicit
      tick is never overridden). */
-  V.preferredDefaults = function (entries, include) {
-    var byElement = {};
-    entries.forEach(function (e) {
+  V.preferredDefaults = function (entries, include, rsfTable, rsfLibrary) {
+    var byElement = {}, idx = {};
+    entries.forEach(function (e, i) {
+      idx[e.key] = i;
       if (include[e.key] === false) return;
       var el = V.elementOf(e.row.region);
       if (el) { (byElement[el] = byElement[el] || {})[e.row.region] = e.key; }
     });
+    /* sensitivities from the same RSF tiers as quantNormalise (resultspages._prefer_lines) */
+    var trial = null;
     var seed = {};
     Object.keys(byElement).forEach(function (el) {
       var orbital = V.PREFERRED_LINE[el], regions = byElement[el];
-      if (!orbital || Object.keys(regions).length < 2) return;
-      var preferred = el + ' ' + orbital;
-      if (!(preferred in regions)) return;
+      if (Object.keys(regions).length < 2) return;
+      var winner = orbital ? el + ' ' + orbital : '';
+      if (!(winner in regions)) {
+        /* an element counts from one line only: the most sensitive one (a line without an RSF is out already) */
+        if (!trial) {
+          trial = V.quantNormalise(entries.map(function (e) { return e.row; }),
+            entries.map(function (e) { return include[e.key] !== false; }), false, rsfTable, rsfLibrary);
+        }
+        var sens = {}, names = [];
+        Object.keys(regions).forEach(function (name) {
+          var i = idx[regions[name]], c = trial[i].corrected, a = entries[i].row.area;
+          if (c && a && a > 0) { sens[name] = a / c; names.push(name); }
+        });
+        if (names.length < 2) return;
+        names.sort();
+        winner = names.reduce(function (best, n) { return sens[n] > sens[best] ? n : best; }, names[0]);
+        regions = names.reduce(function (o, n) { o[n] = regions[n]; return o; }, {});
+      }
       Object.keys(regions).forEach(function (name) {
-        if (name !== preferred) seed[regions[name]] = false;
+        if (name !== winner) seed[regions[name]] = false;
       });
     });
     return seed;
+  };
+  /* the other lines of an entry's element (a different region name): ticking one line replaces the rest */
+  V.siblings = function (entries, key) {
+    var me = null;
+    entries.forEach(function (e) { if (e.key === key) me = e; });
+    if (!me) return [];
+    var el = V.elementOf(me.row.region);
+    if (!el) return [];
+    return entries.filter(function (e) {
+      return e.key !== key && V.elementOf(e.row.region) === el && e.row.region !== me.row.region;
+    }).map(function (e) { return e.key; });
   };
   /* start a Quantification tick map from the app's own choice (payload.quant_include,
      {entry key: bool}); only booleans are taken. Seeded before the tab is first drawn,
@@ -2373,7 +2402,7 @@
       var g = gs.filter(function (x) { return String(x.level) === String(cur); })[0] || gs[0];
       /* with CasaXPS's own numbers the ticks are the user's choice (CasaXPS counted Pt 4d and Pt 4f both) */
       var gCasa = g.entries.some(function (e) { return V.rowHasCasa(e.row); });
-      var seed = gCasa ? {} : V.preferredDefaults(g.entries, q.include);
+      var seed = gCasa ? {} : V.preferredDefaults(g.entries, q.include, rsfTable, q.rsfLibrary);
       Object.keys(seed).forEach(function (key) { if (!(key in q.include)) { q.include[key] = seed[key]; q.seeded[key] = true; } });
       box.appendChild(h('h2', { text: g.sample || '(unnamed)' }));
       if (gs.length > 1) {
@@ -2394,7 +2423,12 @@
         var row = e.row, x = res[i], off = q.include[e.key] === false;
         var cb = h('input', { type: 'checkbox', 'aria-label': 'Include ' + row.region });
         cb.checked = !off;
-        cb.addEventListener('change', function () { q.include[e.key] = cb.checked; delete q.seeded[e.key]; renderQuant(); });
+        cb.addEventListener('change', function () {
+          q.include[e.key] = cb.checked; delete q.seeded[e.key];
+          /* an element counts from one line: ticking one replaces the element's other lines */
+          if (cb.checked) V.siblings(g.entries, e.key).forEach(function (k) { q.include[k] = false; delete q.seeded[k]; });
+          renderQuant();
+        });
         var area = q.transmission && hasT && row.area_t !== null && row.area_t !== undefined ? row.area_t : row.area;
         var name = row.region + (e.spectrum !== row.region ? '  (' + e.spectrum + ')' : '');
         var rsfCell = x.rsfSource && x.rsfSource !== 'component'

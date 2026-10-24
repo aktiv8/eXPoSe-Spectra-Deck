@@ -761,7 +761,8 @@ class TestPage(unittest.TestCase):
         # +2_000: the 1 % visible floor on a component and the peak position in the legend
         # +4_000: the Range normalisation (end points, click to move them)
         # +3_000: the plot order (V.orderGroups / V.moveKey, move buttons, drag)
-        self.assertLess(len(page), 205_000 + raw)     # far below plain JSON
+        # +2_000: one line per element (V.siblings, the most-sensitive default)
+        self.assertLess(len(page), 207_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR

@@ -312,9 +312,7 @@ class QuantPanel(ttk.Frame):
         ei = self._row_entry.get(iid)
         if ei is None or self.sample is None or self._level_of_row is None:
             return
-        lv = self.sample.levels[self._level_of_row]
-        self.view.toggle(quantview.entry_key(
-            self.sample, self._level_of_row, ei), lv.include[ei])
+        quantview.toggle_entry(self.sample, self._level_of_row, ei, self.view)
         self._show_sample()
 
     # -- output --------------------------------------------------------------

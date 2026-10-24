@@ -483,6 +483,21 @@ function near(a, b, msg, tol) {
       Object.keys(seed2).forEach((k) => { if (!(k in unticked)) unticked[k] = seed2[k]; });
       eq(unticked, { a: false }, 'with Pt 4f unticked nothing else is defaulted off');
     }
+    {
+      // any element counts from one line: the most sensitive (highest RSF) unless a standard line is fitted
+      const r = (region, rsf, area) => ({ region: region, rsf: rsf, area: area, components: [] });
+      const ti = [{ key: 'a', row: r('Ti 3p', 0.8, 40) }, { key: 'b', row: r('Ti 2p', 5.22, 100) }, { key: 'c', row: r('O 1s', 2.93, 50) }];
+      eq(V.preferredDefaults(ti, {}), { a: false }, 'Ti 2p (higher RSF) wins over Ti 3p');
+      eq(V.preferredDefaults(ti, { b: false }), {}, 'nothing to choose between once one line is unticked');
+      const none = [{ key: 'a', row: r('Ti 3p', 0, 40) }, { key: 'b', row: r('Ti 2p', 5.22, 100) }];
+      eq(V.preferredDefaults(none, {}), {}, 'a line without an RSF is no competitor');
+      const pt = [{ key: 'a', row: r('Pt 4d', 19.8, 300) }, { key: 'b', row: r('Pt 4f', 15.45, 200) }];
+      eq(V.preferredDefaults(pt, {}), { a: false }, 'the standard line still beats a higher RSF');
+      eq(V.siblings(ti, 'a'), ['b'], 'siblings: the same element, another line');
+      eq(V.siblings(ti, 'c'), [], 'siblings: none for a lone element');
+      const dup = [{ key: 'a', row: r('C 1s', 1, 1) }, { key: 'b', row: r('C 1s', 1, 1) }];
+      eq(V.siblings(dup, 'a'), [], 'a second copy of one region is not a sibling');
+    }
     eq(V.quantStates({ components: [{ gk: 'i1', state: 'A', area: 3 }, { gk: 'i1', state: 'A', area: 1 }, { gk: 'nB', state: 'B', area: -2 }] }, 40)
       .map((s) => s.name + ':' + s.at), ['A:40', 'B:0'], 'states share the row, negative areas count as zero');
   }

@@ -427,6 +427,20 @@ def element_of(region):
     return m.group(1) if m else ""
 
 
+def element_siblings(entries, ei):
+    """Indexes of the other entries of entry ``ei``'s element that are a
+    different line (another region name): quantifying an element from one
+    line, ticking one of them replaces the rest. Same-named regions (a
+    survey's C 1s and its own scan) are not siblings."""
+    region = entries[ei]["row"]["region"]
+    el = element_of(region)
+    if not el:
+        return []
+    return [i for i, e in enumerate(entries)
+            if i != ei and element_of(e["row"]["region"]) == el
+            and e["row"]["region"] != region]
+
+
 def _hand_lookup(overrides, skey, level):
     """``hand(ei)`` -> the user's tick for entry ``ei`` of ``level`` (True /
     False), or None when they made none; None for no overrides at all."""
@@ -539,12 +553,13 @@ _PREFERRED_LINE = {"Pt": "4f", "Au": "4f", "Ir": "4f", "Os": "4f", "Re": "4f",
 
 def _prefer_lines(level, label, notes, rsf_table=None, rsf_library="scofield",
                   hand=None):
-    """After ``_settle``: when more than one of an element's distinct region
-    names is still included and one of them is that element's known
-    preferred line (``_PREFERRED_LINE``), the others are excluded (``why =
-    "not the preferred line"``) and a note is added -- an element absent
-    from the table, or whose preferred line was not itself fitted here, is
-    left untouched (``_element_note`` still says both are counted). Re-runs
+    """After ``_settle``: an element counts from one line only. When more
+    than one of its distinct region names is still included, the known
+    preferred line (``_PREFERRED_LINE``) stays if it was fitted here, else
+    the line with the highest RSF (one that has an RSF); the others are
+    excluded (``why = "not the preferred line"`` / ``"not the most
+    sensitive line"``) and a note is added. The user can choose another
+    line in the Quantification table. Re-runs
     ``quant.normalise`` the same way ``_settle`` does, this time with
     ``rsf_table``/``rsf_library`` (``quant.normalise``'s own RSF-fallback
     args, off by default) so the final numbers reflect both changes."""
@@ -557,26 +572,46 @@ def _prefer_lines(level, label, notes, rsf_table=None, rsf_library="scofield",
         el = element_of(region)
         if el:
             by_element.setdefault(el, {})[region] = i
+    # the same RSF tiers quant.normalise uses, to compare sensitivities
+    trial = quant.normalise([e["row"] for e in entries], level.include,
+                            rsf_table=rsf_table, rsf_library=rsf_library)
     for el, regions in by_element.items():
+        if len(regions) < 2:
+            continue
         preferred_orbital = _PREFERRED_LINE.get(el)
-        if not preferred_orbital or len(regions) < 2:
-            continue
-        preferred_name = f"{el} {preferred_orbital}"
-        if preferred_name not in regions:
-            continue
-        losers = sorted(name for name in regions if name != preferred_name)
+        preferred_name = f"{el} {preferred_orbital}" if preferred_orbital \
+            else ""
+        if preferred_name in regions:
+            winner, why = preferred_name, "not the preferred line"
+            reason = "the standard line for quantification"
+        else:
+            # an element counts from one line only: the most sensitive one
+            # (a line without an RSF is out of the total already)
+            sens = {}
+            for name, i in regions.items():
+                corrected = trial[i]["corrected"]
+                area = entries[i]["row"].get("area")
+                if corrected and area and area > 0:
+                    sens[name] = area / corrected
+            if len(sens) < 2:
+                continue
+            winner = max(sorted(sens), key=lambda n: sens[n])
+            why = "not the most sensitive line"
+            reason = "the most sensitive line (highest RSF)"
+            regions = {n: regions[n] for n in sens}
+        losers = sorted(name for name in regions if name != winner)
         if not losers:
             continue
         for name in losers:
             level.include[regions[name]] = False
-            level.why[regions[name]] = "not the preferred line"
+            level.why[regions[name]] = why
         if _touched(hand, entries, lambda o: element_of(
                 o["row"]["region"]) == el):
             continue
         notes.append(
-            f"{el} is fitted from more than one line ({preferred_name}, "
-            + ", ".join(losers) + f") in {label}; only {preferred_name}, "
-            "the standard line for quantification, is counted.")
+            f"{el} is fitted from more than one line ({winner}, "
+            + ", ".join(losers) + f") in {label}; only {winner}, "
+            f"{reason}, is counted.")
     level.res = quant.normalise([e["row"] for e in entries], level.include,
                                 rsf_table=rsf_table, rsf_library=rsf_library)
     for res, why in zip(level.res, level.why):

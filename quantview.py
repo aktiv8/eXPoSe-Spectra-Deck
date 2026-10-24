@@ -157,6 +157,21 @@ def transmission_notes(sample, state):
     return notes
 
 
+def toggle_entry(sample, li, ei, state):
+    """Flip the tick of one region. An element counts from one line only, so
+    ticking a region unticks the element's other lines (another region name
+    of the same element); unticking changes nothing else. Returns the new
+    tick."""
+    lv = sample.levels[li]
+    now = state.toggle(entry_key(sample, li, ei), lv.include[ei])
+    if now:
+        for si in resultspages.element_siblings(lv.entries, ei):
+            key = entry_key(sample, li, si)
+            if state.ticked(key, lv.include[si]):
+                state.toggle(key, lv.include[si])
+    return now
+
+
 def includes(sample, li, state):
     """The tick of every entry of one level of ``sample``."""
     lv = sample.levels[li]

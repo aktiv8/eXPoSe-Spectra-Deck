@@ -81,6 +81,32 @@ class TestTicks(unittest.TestCase):
         self.assertEqual(eff.res[0]["why"], "not included")
         self.assertEqual(eff.res[1]["why"], "counted once")
 
+    def test_ticking_one_line_of_an_element_replaces_its_other_lines(self):
+        lv = level(None, [row("Pt 4f", 15.45, 200.0), row("Pt 4d", 19.8, 300.0),
+                          row("O 1s", 2.93, 100.0)])
+        rp._prefer_lines(lv, "S", [])
+        self.assertEqual(lv.include, [True, False, True])
+        s = sample("T", [lv])
+        self.assertTrue(qv.toggle_entry(s, 0, 1, self.st))     # tick Pt 4d
+        eff = qv.effective(s, 0, self.st)
+        self.assertEqual(eff.include, [False, True, True])
+        self.assertIsNone(eff.res[0]["at_pct"])
+        self.assertAlmostEqual(sum(x["at_pct"] for x in eff.res
+                                   if x["at_pct"] is not None), 100.0)
+        # and back: ticking Pt 4f swaps again; the choices forget themselves
+        self.assertTrue(qv.toggle_entry(s, 0, 0, self.st))
+        self.assertEqual(qv.effective(s, 0, self.st).include,
+                         [True, False, True])
+        self.assertEqual(self.st.include, {})
+        # unticking touches only that row, another element is never involved
+        self.assertFalse(qv.toggle_entry(s, 0, 0, self.st))
+        self.assertEqual(qv.effective(s, 0, self.st).include,
+                         [False, False, True])
+        # the choice survives the workbook state
+        other = qv.ViewState()
+        other.load_json(self.st.to_json())
+        self.assertEqual(qv.includes(s, 0, other), [False, False, True])
+
     def test_reset_forgets_one_sample_or_all(self):
         other = sample("U", [three_element_level(None)])
         self.st.toggle(qv.entry_key(self.s, 0, 0), True)
