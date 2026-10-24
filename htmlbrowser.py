@@ -502,7 +502,7 @@ def _page_rows(rows, budget):
                 row[k] = round_sig(row[k], 7)
         for c in row["components"]:
             c["be"] = round(c["be"], 4)
-            for k in ("area_p", "ke"):
+            for k in ("area_p", "ke", "tx"):
                 if c.get(k) is not None:
                     c[k] = round_sig(c[k], 7)
         out.append(row)

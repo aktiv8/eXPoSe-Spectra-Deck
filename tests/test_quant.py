@@ -236,6 +236,27 @@ class TestRsfFallback(unittest.TestCase):
         self.assertAlmostEqual(quant.comp_term({"area": 6.0, "rsf": 2.0,
                                                 "ecsf": 0.6}), 3.0)
 
+    def test_the_transmission_at_the_peak_is_divided_out(self):
+        c = {"area": 900.0, "rsf": 2.0, "tx": 100.0}
+        self.assertAlmostEqual(quant.comp_term(c), 900.0 / (2.0 * 100.0))
+        self.assertAlmostEqual(
+            quant.comp_term(dict(c, ke=1200.0, mfp="tpp2m")),
+            quant.comp_term(dict(c, tx=None, ke=1200.0, mfp="tpp2m")) / 100.0)
+
+    def test_the_tpp2m_term_divides_by_the_mean_free_path(self):
+        import imfp
+        c = {"area": 900.0, "rsf": 2.0, "ke": 1200.0, "mfp": "tpp2m"}
+        self.assertAlmostEqual(
+            quant.comp_term(c),
+            900.0 / (2.0 * 1118.0 ** 0.6 * imfp.imfp_nm(1200.0)
+                     / imfp.imfp_nm(1118.0)))
+        # at the reference energy the term is KE^0.6 itself
+        self.assertAlmostEqual(imfp.avantage_energy_term(1118.0),
+                               1118.0 ** 0.6)
+        # a peak outside TPP-2M's range gets the plain ratio, never a guess
+        c2 = {"area": 900.0, "rsf": 2.0, "ke": 3000.0, "mfp": "tpp2m"}
+        self.assertAlmostEqual(quant.comp_term(c2), 450.0)
+
     def test_components_with_no_rsf_are_skipped_not_zero_filled(self):
         row = {"area": 10.0, "rsf": 0.0, "components": [
             {"area": 5.0, "rsf": 2.0}, {"area": 3.0, "rsf": 0.0}]}

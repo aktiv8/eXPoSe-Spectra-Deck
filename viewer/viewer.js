@@ -615,14 +615,20 @@
      they reuse the "scofield" rows verbatim, then multiply by a kinetic-
      energy-dependent factor (see V.imfpNm/V.kePowerFactor above). */
   var IMFP_LIBRARIES = { scofield_tpp2m: 'scofield', scofield_tpp2m_casa: 'scofield', scofield_ke06: 'scofield' };
-  /* mirrors quant.comp_term: area / (RSF x KE^ECSF) of one component (Avantage's Area (N); area_p,
+  /* mirrors quant.comp_term: area / (RSF x KE^ECSF), or / (RSF x TPP-2M path) for mfp 'tpp2m', of one component (Avantage's Area (N); area_p,
      the source's own area, wins over the drawn shape's area; no exponent = the plain ratio) */
+  V.AVANTAGE_REF_KE = 1118.0;      /* imfp.AVANTAGE_REF_KE */
   V.compTerm = function (c) {
     if (!(c.rsf && c.rsf > 0)) return null;
     var area = c.area_p !== undefined && c.area_p !== null ? c.area_p : c.area;
     if (area === null || area === undefined) return null;
+    if (c.tx > 0) area = area / c.tx;        /* Avantage's TXFN, divided out as well */
     var e = c.ecsf || 0;
-    return e && c.ke > 0 ? area / (c.rsf * Math.pow(c.ke, e)) : area / c.rsf;
+    if (c.mfp === 'tpp2m') {                 /* ALTHERMO1: the TPP-2M mean free path (null outside its range: plain ratio) */
+      var lam = V.imfpNm(c.ke), ref = V.imfpNm(V.AVANTAGE_REF_KE);
+      if (lam && ref) return area / (c.rsf * Math.pow(V.AVANTAGE_REF_KE, 0.6) * lam / ref);
+    } else if (e && c.ke > 0) return area / (c.rsf * Math.pow(c.ke, e));
+    return area / c.rsf;
   };
   V.quantNormalise = function (rows, include, transmission, rsfTable, rsfLibrary) {
     var out = rows.map(function (row, i) {

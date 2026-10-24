@@ -104,7 +104,10 @@ def fit_rows(r, curves=False, prefer_csv=False):
             comp = {"name": c.name, "group": c.group, "index": c.index,
                     "be": hv - (c.pos_ke + cshift), "fwhm": c.fwhm,
                     "area": c.area, "shape": c.shape, "rsf": c.rsf,
-                    "ke": c.pos_ke, "ecsf": getattr(c, "ecsf", 0.0)}
+                    "ke": c.pos_ke, "ecsf": getattr(c, "ecsf", 0.0),
+                    "mfp": getattr(c, "mfp", "")}
+            if getattr(c, "tx", None):
+                comp["tx"] = c.tx
             if getattr(c, "area_p", None) is not None:
                 comp["area_p"] = c.area_p
             comp["gk"], comp["state"] = state_of(comp, cv.region)
@@ -175,9 +178,16 @@ def _curves_of(cv):
 def comp_term(c):
     """``area / (RSF x KE^ECSF)`` of one component (Avantage's "Area (N)":
     its Area (P) over the library sensitivity factor and the kinetic energy
-    to the library's exponent, 0.6 for ALTHERMO1 -- checked against a Peak
-    Table made by Avantage, which this reproduces to its printed digits),
-    ``None`` when the component has no RSF or area (``area_p``, the source's
+    to the library's exponent, 0.6 for the Scofield libraries -- checked
+    against a Peak Table made by Avantage, which this reproduces to its
+    printed digits), or ``area / (RSF x REF^0.6 x lambda(KE) / lambda(REF))``
+    with the TPP-2M path for ``mfp == "tpp2m"`` (ALTHERMO1: ``imfp.
+    avantage_energy_term``, fitted to and reproducing a Peak Table made by
+    Avantage; a peak outside TPP-2M's 50-2000 eV range gets the plain
+    ratio),
+    ``None`` when the component has no RSF or area, after dividing by ``tx``
+    (the transmission function at the peak, Avantage's TXFN) when there is
+    one (``area_p``, the source's
     own area, wins over the drawn shape's ``area`` when there is one).
     ``ecsf`` 0 (the default,
     and every KherveFitting / CasaXPS component) leaves the energy term out."""
@@ -185,8 +195,14 @@ def comp_term(c):
     area = c.get("area_p") if c.get("area_p") is not None else c.get("area")
     if not (rsf and rsf > 0) or area is None:
         return None
+    if c.get("tx") and c["tx"] > 0:      # Avantage's TXFN: divided out as well
+        area = area / c["tx"]
     ecsf, ke = c.get("ecsf") or 0.0, c.get("ke")
-    if ecsf and ke and ke > 0:
+    if c.get("mfp") == "tpp2m":
+        term = imfp.avantage_energy_term(ke)  # None outside TPP-2M's range
+        if term:
+            return area / (rsf * term)
+    elif ecsf and ke and ke > 0:
         return area / (rsf * ke ** ecsf)
     return area / rsf
 

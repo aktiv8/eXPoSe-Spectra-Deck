@@ -102,6 +102,28 @@ def imfp_nm(kinetic_energy):
     return _tpp2m(float(kinetic_energy), N_V, RHO, MOLAR_MASS, E_GAP)
 
 
+# Avantage's ALTHERMO1 quantification divides each peak by a TPP-2M energy
+# term in place of the Scofield libraries' KE^0.6. Fitted to a Peak Table
+# Avantage made (an S 2p fit, Na sulfite and sulfate: Area (N) = Area (P) /
+# (SF x term)), the term is ``REF^0.6 x lambda(KE) / lambda(REF)`` -- the
+# TPP-2M path relative to its value at a reference energy, scaled so that it
+# equals KE^0.6 there -- with ``REF`` = 1118 eV (the reference energy of
+# Avantage's transmission function, ``txfn.REF_KE``): the four peaks agree to
+# 0.04 % (the table's own rounding), the best reference energy lies in
+# 1115-1119 eV, and the average-matrix and CasaXPS-matrix paths give the same
+# result (the ratio lambda(KE) / lambda(REF) hardly depends on the matrix).
+AVANTAGE_REF_KE = 1118.0
+
+
+def avantage_energy_term(kinetic_energy):
+    """The energy term of Avantage's ALTHERMO1 quantification (see above),
+    or None outside TPP-2M's 50-2000 eV range."""
+    lam, ref = imfp_nm(kinetic_energy), imfp_nm(AVANTAGE_REF_KE)
+    if not lam or not ref:
+        return None
+    return AVANTAGE_REF_KE ** 0.6 * lam / ref
+
+
 # CasaXPS's own "TPP2M" escape-depth type, read from CasaXPS.exe (Ghidra,
 # function 0x1403cc280, case 5): one fixed material, diamond-like carbon, and
 # no energy limits. Ep^2 = 829.4 U, U = Nv rho / M.

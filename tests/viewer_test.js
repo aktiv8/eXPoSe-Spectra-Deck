@@ -507,6 +507,10 @@ function near(a, b, msg, tol) {
       const row = { rsf: 0, components: [c('A', 10954.67, 1201.745), c('B', 4379.85, 1200.199), c('C', 3578.5, 1197.795), c('D', 943.5, 1195.459)] };
       eq(V.quantStates(row, 100).map((s) => +s.at.toFixed(2)), [55.13, 22.06, 18.05, 4.76], 'states follow Area (N)');
       eq(V.quantNormalise([row], null, false, null, '')[0].rsfSource, 'component', 'component RSF tier');
+      const tp = { area: 1000, area_p: 900, rsf: 2.0, ke: 1200, mfp: 'tpp2m', ecsf: 0 };
+      near(V.compTerm(tp), 900 / (2.0 * Math.pow(1118, 0.6) * V.imfpNm(1200) / V.imfpNm(1118)), 'compTerm: TPP-2M term (ALTHERMO1)', 1e-9);
+      near(V.compTerm(Object.assign({}, tp, { ke: 3000 })), 450, 'compTerm: outside TPP-2M range, the plain ratio');
+      near(V.compTerm(Object.assign({}, tp, { tx: 116.5 })), V.compTerm(tp) / 116.5, 'compTerm: TXFN divided out as well', 1e-9);
       const own = { rsf: 0.3, components: [{ gk: 'a', state: 'A', area: 30, rsf: 0.3, ke: 1000, ecsf: 0.6 }, { gk: 'b', state: 'B', area: 10, rsf: 0.3, ke: 800, ecsf: 0.6 }] };
       near(V.quantStates(own, 100)[0].at, 75, 'a region with its own RSF shares out by area');
     }

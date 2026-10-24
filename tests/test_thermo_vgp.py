@@ -795,32 +795,152 @@ class TestPeakDefinitions(unittest.TestCase):
         region.extra["n_scans"] = 1
         fit = vgp.fit_for(self.prj.peaks_of(0)[:1], None, region, 0.1, 1)
         self.assertEqual([c.rsf for c in fit.components], [1.0])
-        self.assertEqual([c.ecsf for c in fit.components], [0.6])
+        # ALTHERMO1 takes the TPP-2M mean free path, not an exponent
+        self.assertEqual([(c.ecsf, c.mfp) for c in fit.components],
+                         [(0.0, "tpp2m")])
         fit2 = vgp.fit_for([self.prj.peaks[1]], None, region, 0.1, 1, "ALTHERMO1")
-        self.assertEqual([(c.rsf, c.ecsf) for c in fit2.components],
-                         [(1.0, 0.6)])      # a hand-made peak: the project's library
+        self.assertEqual([(c.rsf, c.mfp) for c in fit2.components],
+                         [(1.0, "tpp2m")])  # a hand-made peak: the project's library
         fit3 = vgp.fit_for([self.prj.peaks[1]], None, region, 0.1, 1)
-        self.assertEqual([c.ecsf for c in fit3.components], [0.0])
+        self.assertEqual([(c.ecsf, c.mfp) for c in fit3.components],
+                         [(0.0, "")])
+        # a Scofield library applies the exponent 0.6
+        from dataclasses import replace
+        scof = [replace(self.prj.peaks[0], library="ALSCOF")]
+        fit4 = vgp.fit_for(scof, None, region, 0.1, 1)
+        self.assertEqual([(c.ecsf, c.mfp) for c in fit4.components],
+                         [(0.6, "")])
         self.assertIsNotNone(quant)
         self.assertIsNotNone(casafit)
+
+
+def vgp_ecsf(library):
+    return V.LIBRARY_ECSF[library]
+
+
+@unittest.skipUnless(os.path.isfile(os.path.join(CORPUS, "Na sulfite and sulfate.vgp")),
+                     "Na sulfite and sulfate.vgp not found (XPS_VGP_CORPUS)")
+class TestAlthermo1AgainstAvantage(unittest.TestCase):
+    """The Peak Table Avantage made for ``Na sulfite and sulfate.vgp`` (ALTHERMO1,
+    TXFN 1.00): Area (N) = Area (P) / (SF x TPP-2M term), Atomic % its share."""
+    TABLE = [("S2p3 sulfite", 1.245, 48.07, 41.72),
+             ("S2p1 sulfite", 0.636, 48.10, 41.75),
+             ("S2p3 sulfate", 1.245, 9.51, 8.26),
+             ("S2p1 sulfate", 0.636, 9.52, 8.26)]
+
+    def test_the_project_reproduces_the_table(self):
+        import quant
+        doc = readers.load_file(os.path.join(CORPUS, "Na sulfite and sulfate.vgp"))
+        reg = [r for r in doc.regions if r.fit][0]
+        row = quant.fit_rows(reg, curves=True)[0]
+        by = {c["name"]: c for c in row["components"]}
+        for name, sf, n, _pct in self.TABLE:
+            c = by[name]
+            self.assertEqual((c["mfp"], c["ecsf"]), ("tpp2m", 0.0))
+            self.assertAlmostEqual(c["rsf"], sf, places=3)
+            self.assertAlmostEqual(quant.comp_term(c) / n, 1.0, delta=0.0007)
+        st = {s["name"]: s["at_pct"] for s in quant.states(row, 100.0)}
+        for name, _sf, _n, pct in self.TABLE:
+            self.assertAlmostEqual(st[name], pct, delta=0.015)
+
+
+@unittest.skipUnless(os.path.isfile(os.path.join(CORPUS, "Te as rec.vgp")),
+                     "Te as rec.vgp not found (XPS_VGP_CORPUS)")
+class TestTransmissionAgainstAvantage(unittest.TestCase):
+    """The Peak Table Avantage made for ``Te as rec.vgp`` (ALTHERMO1, SF 25,
+    pass energy 20 eV, the transmission function not stated as removed, so
+    TXFN is not 1): TXFN = T(KE), Area (N) = Area (P) / (SF x TXFN x TPP-2M
+    term). A lower kinetic energy (913 eV) than the S 2p table (1320 eV)."""
+    TABLE = [("Te3d5 metal", 116.52, 0.12, 21.91),
+             ("Te3d5", 116.60, 0.03, 4.77),
+             ("Te3d5 oxide", 116.82, 0.40, 73.32)]
+
+    def test_the_project_reproduces_the_table(self):
+        import quant
+        doc = readers.load_file(os.path.join(CORPUS, "Te as rec.vgp"))
+        reg = [r for r in doc.regions if r.fit][0]
+        row = quant.fit_rows(reg, curves=True)[0]
+        by = {c["name"]: c for c in row["components"]}
+        for name, tx, n, _pct in self.TABLE:
+            c = by[name]
+            self.assertAlmostEqual(c["tx"], tx, delta=0.005)
+            self.assertAlmostEqual(c["rsf"], 25.0)
+            self.assertAlmostEqual(quant.comp_term(c), n, delta=0.005)
+        st = {s["name"]: s["at_pct"] for s in quant.states(row, 100.0)}
+        for name, _tx, _n, pct in self.TABLE:
+            self.assertAlmostEqual(st[name], pct, delta=0.015)
+
+    def test_a_unit_transmission_table_is_reproduced_without_txfn(self):
+        # Mn 2p3 (KE 848 eV), TXFN_REMOVED True, TXFN 1.00 in Avantage's table
+        path = os.path.join(CORPUS, "Mn metal multiplet splitting.vgp")
+        if not os.path.isfile(path):
+            self.skipTest("Mn metal multiplet splitting.vgp not found")
+        import quant
+        reg = [r for r in readers.load_file(path).regions if r.fit][0]
+        row = quant.fit_rows(reg, curves=True)[0]
+        by = {c["name"]: c for c in row["components"]}
+        self.assertNotIn("tx", by["Mn2p3 metal"])
+        self.assertAlmostEqual(quant.comp_term(by["Mn2p3 metal"]), 340.47,
+                               delta=0.01)
+        self.assertAlmostEqual(quant.comp_term(by["Mn2p3 metal multiplet"]),
+                               39.15, delta=0.01)
+        st = {s["name"]: s["at_pct"] for s in quant.states(row, 100.0)}
+        self.assertAlmostEqual(st["Mn2p3 metal"], 89.69, delta=0.01)
+        self.assertAlmostEqual(st["Mn2p3 metal multiplet"], 10.31, delta=0.01)
+
+    def test_a_file_that_says_the_function_is_removed_gets_no_txfn(self):
+        reg = Region(name="S 2p", index=0, offset=0, energy=[], counts=[],
+                     pass_energy=20.0)
+        reg.extra["txfn"] = {"removed": True,
+                             "coeffs": [2.70874, 1.18211, -0.922761, 0.139228]}
+        self.assertIsNone(V.peak_transmission(reg, 1320.0))
+        reg.extra["txfn"]["removed"] = None
+        self.assertAlmostEqual(V.peak_transmission(reg, 913.595), 116.516,
+                               places=2)
+        reg.extra["txfn"] = {"removed": None, "coeffs": []}
+        self.assertIsNone(V.peak_transmission(reg, 913.595))
 
 
 @unittest.skipUnless(os.path.isfile(os.path.join(CORPUS, "C1s PET.vgp")),
                      "C1s PET.vgp not found (XPS_VGP_CORPUS)")
 class TestQuantificationAgainstAvantage(unittest.TestCase):
     """The Peak Table Avantage made for the second fit of ``C1s PET.vgp``
-    (SF 1.000 and TXFN 1.00 for every peak, the p-p* plasmon included):
-    Area (N) = Area (P) / (SF x KE^0.6), Atomic % = its share of the total."""
+    with a Scofield library (SF 1.000 and TXFN 1.00 for every peak, the p-p*
+    plasmon included): Area (N) = Area (P) / (SF x KE^0.6), Atomic % = its
+    share of the total. The project itself names ALTHERMO1, which uses the
+    TPP-2M mean free path instead, so the Scofield case is made by naming
+    ``ALSCOF`` for its peaks."""
     TABLE = {"C1s phenyl": (10954.67, 155.49, 55.13),
              "C1s C-O": (4379.85, 62.21, 22.06),
              "C1s C=O": (3578.5, 50.89, 18.05),
              "p-p* plasmon": (943.5, 13.43, 4.76)}
 
-    def test_the_project_reproduces_the_table(self):
+    def region(self, library=None):
         import quant
         doc = readers.load_file(os.path.join(CORPUS, "C1s PET.vgp"))
         reg = [r for r in doc.regions if r.fit and any(
             c.name == "p-p* plasmon" for c in r.fit.components)][0]
+        if library:                          # the same peaks, another library
+            for c in reg.fit.components:
+                c.ecsf = vgp_ecsf(library)
+                c.mfp = ""
+        return reg, quant
+
+    def test_altherm01_uses_the_tpp2m_term(self):
+        import imfp
+        reg, quant = self.region()
+        row = quant.fit_rows(reg, curves=True)[0]
+        by = {c["name"]: c for c in row["components"]}
+        c = by["C1s phenyl"]
+        self.assertEqual((c["mfp"], c["ecsf"]), ("tpp2m", 0.0))
+        self.assertAlmostEqual(
+            quant.comp_term(c), 10954.67 / imfp.avantage_energy_term(c["ke"]),
+            delta=0.01)
+        self.assertAlmostEqual(
+            sum(s["at_pct"] for s in quant.states(row, 100.0)), 100.0)
+
+    def test_a_scofield_library_reproduces_the_table(self):
+        reg, quant = self.region("ALSCOF")
         row = quant.fit_rows(reg, curves=True)[0]
         by = {c["name"]: c for c in row["components"]}
         for name, (p, n, _pct) in self.TABLE.items():

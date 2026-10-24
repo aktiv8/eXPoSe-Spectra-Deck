@@ -91,6 +91,7 @@ from dataclasses import dataclass, field
 
 import casafit
 import lineshapes
+import txfn
 
 from .ole2 import OleFile, OleError, is_ole
 from .thermo_experiment import ThermoExperiment, LoadCancelled
@@ -495,15 +496,18 @@ SOURCE = "Avantage"
 PRODUCT_TOL = 0.02        # stored area within this of the product's: product
 MATCH_TOL = 0.05          # within this of either shape: the unit is understood
 POOR_FIT = 0.10           # residual (share of the data range) said on the plot
-# The exponent of the kinetic-energy term each library applies (table
-# ``Library``, column ECSF, of Avantage's ``QuantLib01 ... .mdb``). Avantage's
-# Area (N) = Area (P) / (SF x TXFN x KE^ECSF), the atomic percent that Area (N)
-# as a share of the total: reproduced to its printed digits for ALTHERMO1
-# (0.6) on the PET C 1s project. The other libraries' values are the database's
-# own and have not been compared with a table made by Avantage.
-LIBRARY_ECSF = {"ALTHERMO1": 0.6, "ALSCOF": 0.6, "MGSCOF": 0.6,
-                "ALWAGNER": 1.0, "MGWAGNER": 1.0, "AUGQNT": 0.0,
-                "10kvcrr4": 0.0, "ISS": 0.0}
+# The energy term each library's quantification applies. Avantage's Area (N)
+# = Area (P) / (SF x TXFN x KE^ECSF), the atomic percent that Area (N) as a
+# share of the total: reproduced to its printed digits, with ECSF 0.6, on the
+# PET C 1s project (a Scofield quantification). **ALTHERMO1 (Thermo's adjusted
+# Scofield set for a monochromated Al source) uses the TPP-2M mean free path
+# instead, on Thermo's advice** (its database lists ECSF 0.6 for it too, which
+# is not used); the Scofield libraries use 0.6. The Wagner sets' 1 and the
+# Auger / ISS 0 are the database's own values, not compared with a table made
+# by Avantage.
+LIBRARY_ECSF = {"ALSCOF": 0.6, "MGSCOF": 0.6, "ALWAGNER": 1.0,
+                "MGWAGNER": 1.0, "AUGQNT": 0.0, "10kvcrr4": 0.0, "ISS": 0.0}
+LIBRARY_MFP = {"ALTHERMO1": "tpp2m"}
 
 
 def sniff(head: bytes, ext: str) -> bool:
@@ -582,11 +586,25 @@ def detect_mode(peaks, k: float, step: float, lo: float, hi: float):
     return "AV", ""
 
 
+def peak_transmission(region, ke: float):
+    """The transmission function at ``ke`` that Avantage's quantification
+    divides by (the TXFN column of its Peak Table), or None. It is the
+    polynomial of the file's coefficients (``txfn.transmission``: reproduced to
+    its printed digits for a Te 3d fit, 116.516 / 116.597 / 116.821) and is
+    taken only when the file does not say the function was already divided out
+    (``TXFN_REMOVED`` True gives 1.00 in every table seen, 212 files)."""
+    t = region.extra.get("txfn") or {}
+    if t.get("removed") is True or not t.get("coeffs"):
+        return None
+    v = txfn.transmission(ke, region.pass_energy, t["coeffs"])
+    return v if v and v > 0 else None
+
+
 def fit_for(peaks, bg, region, dwell: float, scans: int, library: str = ""):
     """The :class:`casafit.Fit` of one spectrum from its fitted ``peaks`` and
     ``bg`` (a :class:`BackgroundDef` or None). The RSF of a component is the
-    one stored in the project (0 when it has none) and its ``ecsf`` the
-    exponent of the kinetic-energy term of its library (``LIBRARY_ECSF``; a
+    one stored in the project (0 when it has none) and its ``ecsf`` / ``mfp``
+    the energy term of its library (``LIBRARY_ECSF`` / ``LIBRARY_MFP``; a
     hand-made peak takes the project's ``library``)."""
     k = dwell * (scans or 1)
     step = channel_step(region)
@@ -617,8 +635,11 @@ def fit_for(peaks, bg, region, dwell: float, scans: int, library: str = ""):
             area=lineshapes.area_for_height(shape, p.fwhm, p.height / k),
             fwhm=p.fwhm, pos_ke=p.ke, rsf=p.rsf or 0.0, region=region.name,
             area_p=p.area,
+            tx=peak_transmission(region, p.ke) if p.rsf else None,
             ecsf=(LIBRARY_ECSF.get(p.library or library, 0.0)
                   if p.rsf else 0.0),
+            mfp=(LIBRARY_MFP.get(p.library or library, "")
+                 if p.rsf else ""),
             line=f"Avantage fitted peak, area {p.area:.6g} counts/s eV, "
                  f"{'product' if mode == 'AVP' else 'sum'} shape"))
     return fit

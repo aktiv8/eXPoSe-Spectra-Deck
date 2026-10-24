@@ -762,7 +762,8 @@ class TestPage(unittest.TestCase):
         # +4_000: the Range normalisation (end points, click to move them)
         # +3_000: the plot order (V.orderGroups / V.moveKey, move buttons, drag)
         # +2_000: one line per element (V.siblings, the most-sensitive default)
-        self.assertLess(len(page), 207_000 + raw)     # far below plain JSON
+        # +1_000: the energy term of an Avantage component (V.compTerm)
+        self.assertLess(len(page), 208_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR

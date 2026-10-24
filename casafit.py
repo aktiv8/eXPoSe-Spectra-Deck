@@ -83,6 +83,12 @@ class FitComponent:
     area_p: float | None = None      # the source's own area (Avantage's Area
                                      # (P)), which a quantification uses in
                                      # place of ``area`` (the drawn shape's)
+    tx: float | None = None          # the transmission function at the peak
+                                     # (Avantage's TXFN column) a quantification
+                                     # divides by; None = none
+    mfp: str = ""                    # "tpp2m": a quantification also divides
+                                     # by the TPP-2M mean free path at the
+                                     # peak's KE (Avantage's ALTHERMO1)
     ecsf: float = 0.0                # exponent of the kinetic-energy term a
                                      # quantification divides by (Avantage's
                                      # library ECSF, 0.6 for ALTHERMO1; 0 = none)
