@@ -64,8 +64,11 @@ compared with the counts of the same project's ``.VGD`` (``tests/test_thermo_vgp
 * **A background** record: the two limits (KE), one end-point group (flag,
   averaging points, width in eV) and a type code. Code ``0`` fits as a linear
   background, ``1`` as Shirley (and carries a second group: 50, 0.01, flag --
-  read as iterations and tolerance, not confirmed), ``3`` as Shirley too
-  (Avantage's "Smart" by name; that is an inference, not read from the file).
+  read as iterations and tolerance, not confirmed), ``3`` is Avantage's
+  "Smart" background (``lineshapes.smart_bg``: the Shirley background clamped
+  to the data, as the manual defines it; the code-to-name pairing is still an
+  inference, but the 56 code-3 backgrounds fit a little better that way than
+  as plain Shirley).
 
 Anything this module cannot place is left out and said in ``Project.notes``;
 a file whose records do not parse as described raises :class:`VgpError`.
@@ -135,6 +138,8 @@ class FittedPeak:
     tail: tuple
     data_space: int | None = None
     background: int | None = None
+    rsf: float | None = None             # the project's own sensitivity factor
+    library: str = ""                    # the library it came from (ALTHERMO1)
 
     @property
     def ct(self) -> float:
@@ -155,6 +160,25 @@ class FittedPeak:
     def symmetric(self) -> bool:
         """No tail: ``CT = 0`` and ``TM = 1`` (``T`` is then 0)."""
         return abs(self.tail[0]) < 1e-9 and abs(self.tail[1] - 1.0) < 1e-9
+
+
+@dataclass
+class PeakDef:
+    """A peak *definition* (``Peaks/Contents``, class ``CPeakItem``): the
+    ``library`` it was taken from (``ALTHERMO1`` = Avantage's adjusted Scofield
+    set for a monochromated Al source; empty for a hand-made peak), its
+    ``name`` as the user sees it and ``rsf``, the sensitivity factor stored
+    with it (``None`` when the record has a layout this module does not read).
+    A doublet entered as one peak carries the factor of the whole line
+    (Ga 2p: 33.5 = 22.7 + 10.8). ``groups`` is the record's parameter-group
+    count (1, or 2 when the peak has a further group of numbers, whose meaning
+    -- constraints -- is not decoded) and ``raw`` the bytes after the name."""
+    index: int
+    library: str
+    name: str
+    rsf: float | None
+    groups: int
+    raw: bytes = b""
 
 
 @dataclass
@@ -183,6 +207,7 @@ class Project:
     data_spaces: list = field(default_factory=list)
     peaks: list = field(default_factory=list)
     backgrounds: list = field(default_factory=list)
+    peak_defs: list = field(default_factory=list)
     notes: list = field(default_factory=list)
 
     def peaks_of(self, data_space: int) -> list:
@@ -307,6 +332,59 @@ def _fitted_peak(index: int, rec: bytes) -> FittedPeak:
     raise VgpError(f"fitted peak {index}: no readable name field")
 
 
+# The stored sensitivity factor sits 37 bytes after the name in a definition
+# of one parameter group and 16 bytes further on (53) in one of two, followed
+# by the double -1.0 that marks the place (457 of 480 records: groups = 1; the
+# other 23: groups = 2); the value equals the library's ``Sensitivity`` for the
+# entry (checked against ``C:\AvantageSystem\Database\QuantLib01 ... .mdb``).
+_RSF_AT = {1: 37, 2: 53}
+
+
+def _peak_defs(b: bytes) -> list:
+    """The peak definitions of ``Peaks/Contents``."""
+    ver, n = _header(b)
+    if n == 0:
+        return []
+    _name, pos = _class_tag(b, 8)
+    guid = b[pos:pos + 16]
+    if len(guid) < 16:
+        raise VgpError("Peaks is cut short")
+    recs = b[pos + 16:].split(_TAG + guid)
+    if len(recs) != n:
+        raise VgpError(f"Peaks lists {n} peaks but {len(recs)} records were "
+                       "found")
+    out = []
+    for i, r in enumerate(recs):
+        try:
+            n1 = struct.unpack_from("<i", r, 4)[0]
+            if n1 < 0 or n1 % 2 or n1 > 512:
+                raise ValueError
+            lib = r[8:8 + n1].decode("utf-16le").rstrip(chr(0))
+            o = 8 + n1 + 4
+            n2 = struct.unpack_from("<i", r, o)[0]
+            if n2 < 0 or n2 % 2 or n2 > 512:
+                raise ValueError
+            name = r[o + 4:o + 4 + n2].decode("utf-16le").rstrip(chr(0))
+            o += 4 + n2
+        except (struct.error, ValueError, UnicodeDecodeError):
+            raise VgpError(f"peak definition {i}: no readable names")
+        tail = r[o:]
+        groups = struct.unpack_from("<i", tail, 0)[0] if len(tail) >= 4 else 0
+        rsf = None
+        at = _RSF_AT.get(groups)
+        if at is not None and len(tail) >= at + 16:
+            v, mark = struct.unpack_from("<dd", tail, at)
+            if mark == -1.0 and math.isfinite(v) and 0 < v < 1e4:
+                rsf = v
+        if not lib:
+            # a hand-made peak (satellite, loss feature, Auger line: 21 of
+            # 480) stores 1.0, the default, not a sensitivity factor
+            rsf = None
+        out.append(PeakDef(index=i, library=lib, name=name, rsf=rsf,
+                           groups=groups, raw=bytes(tail)))
+    return out
+
+
 def _backgrounds(b: bytes) -> list:
     ver, n = _header(b)
     if n == 0:
@@ -369,6 +447,18 @@ def parse(data: bytes, path: str = "") -> Project:
     prj.peaks = [_fitted_peak(i, r) for i, r in
                  enumerate(_fitted_records(_stream(ole, "Fitted Peaks/Contents")))]
 
+    try:
+        prj.peak_defs = _peak_defs(_stream(ole, "Peaks/Contents"))
+    except VgpError as exc:
+        prj.notes.append(f"the peak definitions were not read ({exc})")
+    # a definition belongs to the fitted peak the first table of Peaks/XRefs
+    # pairs it with (the identity in all 129 projects)
+    pt = _tables(_stream(ole, "Peaks/XRefs"))
+    for df, pk in (pt[0] if pt else []):
+        if 0 <= df < len(prj.peak_defs) and 0 <= pk < len(prj.peaks):
+            d = prj.peak_defs[df]
+            prj.peaks[pk].rsf, prj.peaks[pk].library = d.rsf, d.library
+
     # links: peak -> data space, background -> peaks / data space
     ft = _tables(_stream(ole, "Fitted Peaks/XRefs"))
     if prj.peaks:
@@ -406,6 +496,8 @@ SOURCE = "Avantage"
 PRODUCT_TOL = 0.02        # stored area within this of the product's: product
 MATCH_TOL = 0.05          # within this of either shape: the unit is understood
 POOR_FIT = 0.10           # residual (share of the data range) said on the plot
+ENERGY_TERM_NOTE = ("sensitivity factors are Avantage's own; its library's "
+                    "kinetic-energy term (KE^0.6) is not applied")
 
 
 def sniff(head: bytes, ext: str) -> bool:
@@ -497,8 +589,9 @@ def fit_for(peaks, bg, region, dwell: float, scans: int):
         reg.start_ke = region.photon_energy - max(region.energy)
         reg.end_ke = region.photon_energy - min(region.energy)
     else:
-        name = "Linear" if bg.code == 0 else "Shirley"
-        note = ("" if bg.code in (0, 1) else
+        name = {0: "Linear", 3: "Smart"}.get(bg.code, "Shirley")
+        # a code this module does not know is drawn as Shirley and says so
+        note = ("" if bg.code in (0, 1, 3) else
                 f"the {bg.kind} background (type {bg.code}) is drawn as a "
                 "Shirley background")
         reg = casafit.FitRegion(
@@ -508,13 +601,18 @@ def fit_for(peaks, bg, region, dwell: float, scans: int):
     mode, mode_note = detect_mode(peaks, k, step, reg.start_ke, reg.end_ke)
     if mode_note:
         reg.note = "; ".join(x for x in (reg.note, mode_note) if x)
+    if any(p.rsf for p in peaks):
+        # the library's own ECSF (0.6 for ALTHERMO1) is a kinetic-energy term
+        # Avantage divides by as well; not applied until it has been checked
+        # against a quantification made by Avantage
+        reg.note = "; ".join(x for x in (reg.note, ENERGY_TERM_NOTE) if x)
     fit.regions.append(reg)
     for i, p in enumerate(peaks):
         shape = shape_of(p, mode, step)
         fit.components.append(casafit.FitComponent(
             name=p.name or f"Peak {i + 1}", shape=shape,
             area=lineshapes.area_for_height(shape, p.fwhm, p.height / k),
-            fwhm=p.fwhm, pos_ke=p.ke, rsf=0.0, region=region.name,
+            fwhm=p.fwhm, pos_ke=p.ke, rsf=p.rsf or 0.0, region=region.name,
             line=f"Avantage fitted peak, area {p.area:.6g} counts/s eV, "
                  f"{'product' if mode == 'AVP' else 'sum'} shape"))
     return fit
@@ -638,4 +736,5 @@ class ThermoProjectFile(ThermoExperiment):
             r.extra["avantage_level"] = best
             r.extra["avantage_peaks"] = [
                 {"name": p.name, "area": p.area, "height_counts": p.height,
-                 "tail": list(p.tail)} for p in mine]
+                 "tail": list(p.tail), "rsf": p.rsf, "library": p.library}
+                for p in mine]

@@ -87,6 +87,29 @@ def xrefs(*tables):
     return out
 
 
+GUID_P = bytes.fromhex("5ae90d01e568d211851a006097c81436")
+
+
+def peaks_stream(defs):
+    """``defs``: dicts with ``lib``, ``name``, ``rsf`` and optional ``groups``
+    (1 or 2): the layout of a CPeakItem record read from real projects (the
+    sensitivity factor 37 bytes after the name, 53 for two groups, then -1.0)."""
+    out = struct.pack("<ii", 1, len(defs)) + class_tag("CPeakItem") + GUID_P
+    for k, d in enumerate(defs):
+        if k:
+            out += b"\x01\x80" + GUID_P
+        lib = (d["lib"] + "\x00").encode("utf-16le") if d["lib"] else b""
+        name = (d["name"] + "\x00").encode("utf-16le")
+        groups = d.get("groups", 1)
+        at = 37 if groups == 1 else 53
+        tail = struct.pack("<i", groups).ljust(at, b"\x00")
+        tail += struct.pack("<dd", d["rsf"], -1.0).ljust(102 if groups == 1
+                                                          else 150, b"\x00")[:]
+        out += (struct.pack("<ii", 6, len(lib)) + lib + struct.pack("<i", 0)
+                + struct.pack("<i", len(name)) + name + tail)
+    return out
+
+
 PEAKS = [
     dict(name="C1s C-C", ke=1202.2, fwhm=1.3, mix=0.23, area=5566.0,
          height=94.0),
@@ -98,7 +121,7 @@ PEAKS = [
 
 
 def make_project(peaks=PEAKS, bgs=None, paths=None, xr_peak_ds=None,
-                 count=None):
+                 count=None, defs=None):
     paths = paths or [".\\Demo.DATA\\C1s Scan.VGD", ".\\Demo.DATA\\Pd.VGD",
                       ".\\Demo.DATA\\Unfitted.VGD"]
     bgs = bgs or [dict(start=1195.0, end=1206.0, avg=10, width=0.05, code=3),
@@ -114,8 +137,11 @@ def make_project(peaks=PEAKS, bgs=None, paths=None, xr_peak_ds=None,
         "Backgrounds": {"Contents": background_stream(bgs),
                         "XRefs": xrefs([(0, 0), (0, 1), (1, 2)],
                                        [(0, 0), (1, 1)])},
-        "Peaks": {"Contents": b"\x01\x00\x00\x00\x00\x00\x00\x00",
-                  "XRefs": b""},
+        "Peaks": ({"Contents": peaks_stream(defs),
+                   "XRefs": xrefs([(i, i) for i in range(len(defs))])}
+                  if defs else
+                  {"Contents": b"\x01\x00\x00\x00\x00\x00\x00\x00",
+                   "XRefs": b""}),
     })
 
 
@@ -442,14 +468,16 @@ class TestProjectFile(unittest.TestCase):
         self.assertLess(cv.residual_rms, 0.01)
         self.assertEqual(cv.notes, [])                  # symmetric, linear
 
-    def test_a_tail_is_drawn_and_a_smart_background_is_said(self):
+    def test_a_tail_is_drawn_and_the_smart_background_is_reproduced(self):
         import casafit
         import numpy as np
         pd = self._doc().regions[1]
         self.assertTrue(pd.fit.components[0].shape.startswith("AV(26,"))
         cv = casafit.curves(pd.fit, pd.energy, pd.counts, HV, DWELL, 1)[0]
         self.assertTrue(cv.approximate)
-        self.assertTrue(any("Smart" in n for n in cv.notes))
+        self.assertEqual(pd.fit.regions[0].background, "Smart")
+        self.assertTrue(cv.background_known)
+        self.assertFalse(any("Smart" in n for n in cv.notes))  # reproduced
         self.assertFalse(any("tail" in n for n in cv.notes))   # it is drawn
         # the tail is on the low-KE (high binding energy) side only
         v = np.array(cv.components[0][1])
@@ -718,6 +746,132 @@ class TestRealProjects(unittest.TestCase):
         cv = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
                             dwell, scans)[0]
         self.assertLess(cv.residual_rms, 0.09)
+
+
+class TestPeakDefinitions(unittest.TestCase):
+    DEFS = [dict(lib="ALTHERMO1", name="C1s C-C", rsf=1.0),
+            dict(lib="", name="Satellite", rsf=1.0, groups=2),
+            dict(lib="ALTHERMO1", name="Pd3d5 metal", rsf=5.4, groups=2)]
+
+    def setUp(self):
+        self.prj = V.parse(make_project(defs=self.DEFS))
+
+    def test_definitions_are_read(self):
+        d = self.prj.peak_defs
+        self.assertEqual([(x.library, x.name, x.groups) for x in d],
+                         [("ALTHERMO1", "C1s C-C", 1), ("", "Satellite", 2),
+                          ("ALTHERMO1", "Pd3d5 metal", 2)])
+
+    def test_the_library_rsf_is_read_whatever_the_group_count(self):
+        self.assertEqual([x.rsf for x in self.prj.peak_defs],
+                         [1.0, None, 5.4])         # a hand-made peak: no RSF
+
+    def test_each_fitted_peak_takes_its_definitions_rsf(self):
+        self.assertEqual([(p.rsf, p.library) for p in self.prj.peaks],
+                         [(1.0, "ALTHERMO1"), (None, ""),
+                          (5.4, "ALTHERMO1")])
+
+    def test_an_unreadable_layout_leaves_the_rsf_unknown(self):
+        bad = make_project(defs=[dict(lib="ALTHERMO1", name="C1s", rsf=-3.0),
+                                 dict(lib="ALTHERMO1", name="O1s", rsf=2.9),
+                                 dict(lib="ALTHERMO1", name="N1s", rsf=1.8)])
+        self.assertEqual([p.rsf for p in V.parse(bad).peaks],
+                         [None, 2.9, 1.8])
+
+    def test_a_project_without_definitions_has_none(self):
+        prj = V.parse(make_project())
+        self.assertEqual(prj.peak_defs, [])
+        self.assertEqual([p.rsf for p in prj.peaks], [None] * 3)
+
+    def test_the_components_carry_the_rsf_into_quantification(self):
+        import quant
+        import casafit
+        from readers import thermo_vgp as vgp
+        region = Region(name="C 1s", index=0, offset=0,
+                        energy=[292.0 - 0.1 * i for i in range(121)],
+                        counts=[100.0 + 5.0 * (i % 3) for i in range(121)],
+                        decodable=True, photon_energy=1486.68, dwell=0.1,
+                        step=0.1, pass_energy=20.0)
+        region.extra["n_scans"] = 1
+        fit = vgp.fit_for(self.prj.peaks_of(0)[:1], None, region, 0.1, 1)
+        self.assertEqual([c.rsf for c in fit.components], [1.0])
+        self.assertIn("KE^0.6", fit.regions[0].note)           # said, not applied
+        fit2 = vgp.fit_for([self.prj.peaks[1]], None, region, 0.1, 1)
+        self.assertEqual([c.rsf for c in fit2.components], [0.0])
+        self.assertNotIn("KE^0.6", fit2.regions[0].note)
+        self.assertIsNotNone(quant)
+        self.assertIsNotNone(casafit)
+
+
+@unittest.skipUnless(_corpus() and os.environ.get("XPS_ALTHERMO1_JSON"),
+                     "set XPS_VGP_CORPUS and XPS_ALTHERMO1_JSON (ALTHERMO1 "
+                     "dumped from QuantLib01 .mdb: lookup, rsf per row)")
+class TestRsfAgainstTheLibrary(unittest.TestCase):
+    def test_every_library_peak_has_the_librarys_sensitivity(self):
+        import collections
+        import json
+        with open(os.environ["XPS_ALTHERMO1_JSON"],
+                  encoding="utf-8-sig") as fh:
+            rows = json.load(fh)
+        lib = collections.defaultdict(set)
+        for r in rows:
+            lib[str(r["lookup"]).lower()].add(r["rsf"])
+        n = 0
+        for f in _corpus():
+            for d in V.load(f).peak_defs:
+                self.assertIsNotNone(d.rsf if d.library else 1.0, f)
+                if d.library != "ALTHERMO1":
+                    self.assertIsNone(d.rsf)
+                    continue
+                vals = lib.get((d.name.split() or [""])[0].lower())
+                if not vals:
+                    continue                 # a doublet entered as one peak
+                n += 1
+                self.assertTrue(any(abs(d.rsf - v) <= 2e-3 * max(1, v)
+                                    for v in vals), (f, d.name, d.rsf))
+        self.assertGreater(n, 400)
+
+
+class TestSmartBackground(unittest.TestCase):
+    """``lineshapes.smart_bg``: Shirley that never exceeds the data."""
+
+    def peak(self, n=121, base=100.0, slope=0.0):
+        import numpy as np
+        x = np.linspace(0.0, 12.0, n)
+        return x, base + slope * x + 800.0 * np.exp(-((x - 6.0) / 0.8) ** 2)
+
+    def test_it_never_exceeds_the_data(self):
+        import numpy as np
+        import lineshapes as ls
+        rng = np.random.default_rng(3)
+        for slope in (0.0, 25.0, -25.0):
+            _x, y = self.peak(slope=slope)
+            y = y + rng.normal(0.0, 4.0, len(y))
+            b = ls.smart_bg(y, avg=5)
+            self.assertTrue(np.all(b <= y + 1e-9))
+
+    def test_it_is_shirley_where_shirley_stays_below_the_data(self):
+        import numpy as np
+        import lineshapes as ls
+        _x, y = self.peak()
+        np.testing.assert_allclose(ls.smart_bg(y), ls.shirley(y), atol=1e-9)
+
+    def test_it_follows_the_data_where_shirley_would_rise_above_it(self):
+        import numpy as np
+        import lineshapes as ls
+        _x, y = self.peak(slope=-40.0)          # the low-KE end is the high one
+        y[:8] = y[:8] - 150.0                   # a dip: the end level is too high
+        plain = ls.shirley(y, avg=8)
+        smart = ls.smart_bg(y, avg=8)
+        self.assertTrue(np.any(plain > y + 1.0))
+        self.assertTrue(np.all(smart <= y + 1e-9))
+
+    def test_background_dispatch_knows_smart(self):
+        import lineshapes as ls
+        _x, y = self.peak()
+        import numpy as np
+        np.testing.assert_allclose(ls.background("Smart", y, 1, params=(0, 0)),
+                                   ls.smart_bg(y))
 
 
 if __name__ == "__main__":

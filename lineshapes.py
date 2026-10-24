@@ -1715,6 +1715,39 @@ def shirley(y, avg=1, iters=100, st_offset=0.0, end_offset=0.0):
     return b
 
 
+def smart_bg(y, avg=1, iters=100, st_offset=0.0, end_offset=0.0):
+    """Avantage's "Smart" background of ``y`` (ascending-KE slice): the Shirley
+    background with the constraint that it never exceeds the data (Avantage
+    Data Processing Reference Manual v5, p.47: where the background would be
+    above the data it is set to follow the data, so the Shirley-type
+    background effectively starts further inside the region). Each iteration
+    clamps the background to the data before the next area is summed, so the
+    peak area it uses is the one left by the clamped background. Measured on
+    the 56 Smart backgrounds of the 129 Avantage projects in
+    ``C:\\AvantageSystem\\Knowledge``, against the same peaks' data: median
+    residual 1.14 % of the range with plain Shirley, 1.12 % here (p90 2.26 %
+    -> 2.11 %); moving the start inside by a threshold rule instead was worse
+    (p90 up to 26 %), so the clamp is the form used."""
+    np = _np()
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    if n < 3:
+        return y.copy()
+    k = max(1, min(int(avg), n // 2 or 1))
+    lo = float(y[:k].mean()) * (1.0 - st_offset / 100.0)
+    hi = float(y[-k:].mean()) * (1.0 - end_offset / 100.0)
+    b = np.minimum(np.full(n, lo), y)
+    for _ in range(iters):
+        cum = np.cumsum(np.maximum(y - b, 0.0))
+        tot = cum[-1] if cum[-1] > 0 else 1.0
+        nb = np.minimum(lo + (hi - lo) * cum / tot, y)
+        done = float(np.abs(nb - b).max()) < 1e-9 * max(1.0, abs(hi - lo))
+        b = nb
+        if done:
+            break
+    return b
+
+
 def linear_bg(y, avg=1, st_offset=0.0, end_offset=0.0):
     """Linear background between the two averaged end levels, with the same
     CasaXPS ``St Offset``/``End Offset`` percentage reduction as
@@ -1888,6 +1921,8 @@ def background(kind, y, avg=1, x=None, params=()):
     en = params[1] if len(params) > 1 else 0.0
     if t.startswith("shirley"):
         return shirley(y, avg, st_offset=st, end_offset=en)
+    if t.startswith("smart"):
+        return smart_bg(y, avg, st_offset=st, end_offset=en)
     if _TOUGAARD_U2.match(t):
         if x is None or len(params) < 4 or not params[2]:
             return None
