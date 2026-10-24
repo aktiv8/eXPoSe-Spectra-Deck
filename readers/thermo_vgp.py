@@ -169,6 +169,9 @@ class PeakDef:
     set for a monochromated Al source; empty for a hand-made peak), its
     ``name`` as the user sees it and ``rsf``, the sensitivity factor stored
     with it (``None`` when the record has a layout this module does not read).
+    A hand-made peak (no library: a satellite, loss feature or Auger line, 21
+    of 480) stores 1.0, and Avantage quantifies it with that factor like any
+    other peak (a plasmon in a PET C 1s fit is counted at SF 1.000).
     A doublet entered as one peak carries the factor of the whole line
     (Ga 2p: 33.5 = 22.7 + 10.8). ``groups`` is the record's parameter-group
     count (1, or 2 when the peak has a further group of numbers, whose meaning
@@ -376,10 +379,6 @@ def _peak_defs(b: bytes) -> list:
             v, mark = struct.unpack_from("<dd", tail, at)
             if mark == -1.0 and math.isfinite(v) and 0 < v < 1e4:
                 rsf = v
-        if not lib:
-            # a hand-made peak (satellite, loss feature, Auger line: 21 of
-            # 480) stores 1.0, the default, not a sensitivity factor
-            rsf = None
         out.append(PeakDef(index=i, library=lib, name=name, rsf=rsf,
                            groups=groups, raw=bytes(tail)))
     return out
@@ -496,8 +495,15 @@ SOURCE = "Avantage"
 PRODUCT_TOL = 0.02        # stored area within this of the product's: product
 MATCH_TOL = 0.05          # within this of either shape: the unit is understood
 POOR_FIT = 0.10           # residual (share of the data range) said on the plot
-ENERGY_TERM_NOTE = ("sensitivity factors are Avantage's own; its library's "
-                    "kinetic-energy term (KE^0.6) is not applied")
+# The exponent of the kinetic-energy term each library applies (table
+# ``Library``, column ECSF, of Avantage's ``QuantLib01 ... .mdb``). Avantage's
+# Area (N) = Area (P) / (SF x TXFN x KE^ECSF), the atomic percent that Area (N)
+# as a share of the total: reproduced to its printed digits for ALTHERMO1
+# (0.6) on the PET C 1s project. The other libraries' values are the database's
+# own and have not been compared with a table made by Avantage.
+LIBRARY_ECSF = {"ALTHERMO1": 0.6, "ALSCOF": 0.6, "MGSCOF": 0.6,
+                "ALWAGNER": 1.0, "MGWAGNER": 1.0, "AUGQNT": 0.0,
+                "10kvcrr4": 0.0, "ISS": 0.0}
 
 
 def sniff(head: bytes, ext: str) -> bool:
@@ -576,10 +582,12 @@ def detect_mode(peaks, k: float, step: float, lo: float, hi: float):
     return "AV", ""
 
 
-def fit_for(peaks, bg, region, dwell: float, scans: int):
+def fit_for(peaks, bg, region, dwell: float, scans: int, library: str = ""):
     """The :class:`casafit.Fit` of one spectrum from its fitted ``peaks`` and
-    ``bg`` (a :class:`BackgroundDef` or None). Nothing is guessed: the RSFs are
-    left unknown (0), the project stores none that was read."""
+    ``bg`` (a :class:`BackgroundDef` or None). The RSF of a component is the
+    one stored in the project (0 when it has none) and its ``ecsf`` the
+    exponent of the kinetic-energy term of its library (``LIBRARY_ECSF``; a
+    hand-made peak takes the project's ``library``)."""
     k = dwell * (scans or 1)
     step = channel_step(region)
     fit = casafit.Fit()
@@ -601,11 +609,6 @@ def fit_for(peaks, bg, region, dwell: float, scans: int):
     mode, mode_note = detect_mode(peaks, k, step, reg.start_ke, reg.end_ke)
     if mode_note:
         reg.note = "; ".join(x for x in (reg.note, mode_note) if x)
-    if any(p.rsf for p in peaks):
-        # the library's own ECSF (0.6 for ALTHERMO1) is a kinetic-energy term
-        # Avantage divides by as well; not applied until it has been checked
-        # against a quantification made by Avantage
-        reg.note = "; ".join(x for x in (reg.note, ENERGY_TERM_NOTE) if x)
     fit.regions.append(reg)
     for i, p in enumerate(peaks):
         shape = shape_of(p, mode, step)
@@ -613,6 +616,9 @@ def fit_for(peaks, bg, region, dwell: float, scans: int):
             name=p.name or f"Peak {i + 1}", shape=shape,
             area=lineshapes.area_for_height(shape, p.fwhm, p.height / k),
             fwhm=p.fwhm, pos_ke=p.ke, rsf=p.rsf or 0.0, region=region.name,
+            area_p=p.area,
+            ecsf=(LIBRARY_ECSF.get(p.library or library, 0.0)
+                  if p.rsf else 0.0),
             line=f"Avantage fitted peak, area {p.area:.6g} counts/s eV, "
                  f"{'product' if mode == 'AVP' else 'sum'} shape"))
     return fit
@@ -711,7 +717,7 @@ class ThermoProjectFile(ThermoExperiment):
                         f"{r.name}: the dwell time is unknown, so the fit "
                         "cannot be drawn (its heights are in counts)")
                     continue
-                fit = fit_for(mine, bg, r, dwell, scans)
+                fit = fit_for(mine, bg, r, dwell, scans, prj.library)
                 cands.append((r, mine, fit, residual_of(fit, r)))
             if not cands:
                 continue

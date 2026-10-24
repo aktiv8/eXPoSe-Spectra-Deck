@@ -103,7 +103,10 @@ def fit_rows(r, curves=False, prefer_csv=False):
         for c, _v in cv.components:
             comp = {"name": c.name, "group": c.group, "index": c.index,
                     "be": hv - (c.pos_ke + cshift), "fwhm": c.fwhm,
-                    "area": c.area, "shape": c.shape, "rsf": c.rsf}
+                    "area": c.area, "shape": c.shape, "rsf": c.rsf,
+                    "ke": c.pos_ke, "ecsf": getattr(c, "ecsf", 0.0)}
+            if getattr(c, "area_p", None) is not None:
+                comp["area_p"] = c.area_p
             comp["gk"], comp["state"] = state_of(comp, cv.region)
             comps.append(comp)
         area = area_t = None
@@ -167,6 +170,25 @@ def _curves_of(cv):
         return [None if v != v else v for v in c[i0:i1]]
     return {"i0": i0, "bg": cut(cv.background), "env": cut(cv.envelope),
             "comps": [cut(v) for _c, v in cv.components]}
+
+
+def comp_term(c):
+    """``area / (RSF x KE^ECSF)`` of one component (Avantage's "Area (N)":
+    its Area (P) over the library sensitivity factor and the kinetic energy
+    to the library's exponent, 0.6 for ALTHERMO1 -- checked against a Peak
+    Table made by Avantage, which this reproduces to its printed digits),
+    ``None`` when the component has no RSF or area (``area_p``, the source's
+    own area, wins over the drawn shape's ``area`` when there is one).
+    ``ecsf`` 0 (the default,
+    and every KherveFitting / CasaXPS component) leaves the energy term out."""
+    rsf = c.get("rsf")
+    area = c.get("area_p") if c.get("area_p") is not None else c.get("area")
+    if not (rsf and rsf > 0) or area is None:
+        return None
+    ecsf, ke = c.get("ecsf") or 0.0, c.get("ke")
+    if ecsf and ke and ke > 0:
+        return area / (rsf * ke ** ecsf)
+    return area / rsf
 
 
 def normalise(rows, include=None, transmission=False, rsf_table=None,
@@ -241,8 +263,8 @@ def normalise(rows, include=None, transmission=False, rsf_table=None,
                 res["corrected"] = area / own_rsf
         else:
             comp_total = sum(
-                c["area"] / c["rsf"] for c in (row.get("components") or [])
-                if c.get("rsf") and c["rsf"] > 0 and c.get("area") is not None)
+                t for t in (comp_term(c) for c in (row.get("components") or []))
+                if t is not None)
             if comp_total > 0:
                 res["corrected"] = comp_total
                 res["rsf_source"] = "component"
@@ -294,8 +316,14 @@ def states(row, at_pct=None):
     share of the row's positive component area. Components with the same INDEX
     (>= 0) are one state (see ``state_of``); the rest stand alone."""
     groups = {}
-    for c in row.get("components") or []:
-        a = max(0.0, c.get("area") or 0.0)
+    comps = row.get("components") or []
+    # a region quantified from its components' own RSFs shares them out by
+    # area / (RSF x KE^ECSF) (Avantage's Area (N)), else by area
+    own = row.get("rsf")
+    weighted = (not (own and own > 0) and comps
+                and all(comp_term(c) is not None for c in comps))
+    for c in comps:
+        a = max(0.0, comp_term(c) if weighted else (c.get("area") or 0.0))
         key, name = state_of(c, row.get("region"))
         groups.setdefault(key, {"name": name, "area": 0.0})["area"] += a
     tot = sum(g["area"] for g in groups.values())

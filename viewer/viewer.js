@@ -615,6 +615,15 @@
      they reuse the "scofield" rows verbatim, then multiply by a kinetic-
      energy-dependent factor (see V.imfpNm/V.kePowerFactor above). */
   var IMFP_LIBRARIES = { scofield_tpp2m: 'scofield', scofield_tpp2m_casa: 'scofield', scofield_ke06: 'scofield' };
+  /* mirrors quant.comp_term: area / (RSF x KE^ECSF) of one component (Avantage's Area (N); area_p,
+     the source's own area, wins over the drawn shape's area; no exponent = the plain ratio) */
+  V.compTerm = function (c) {
+    if (!(c.rsf && c.rsf > 0)) return null;
+    var area = c.area_p !== undefined && c.area_p !== null ? c.area_p : c.area;
+    if (area === null || area === undefined) return null;
+    var e = c.ecsf || 0;
+    return e && c.ke > 0 ? area / (c.rsf * Math.pow(c.ke, e)) : area / c.rsf;
+  };
   V.quantNormalise = function (rows, include, transmission, rsfTable, rsfLibrary) {
     var out = rows.map(function (row, i) {
       var area = transmission && row.area_t !== null && row.area_t !== undefined ? row.area_t : row.area;
@@ -632,7 +641,8 @@
         return res;
       }
       var compTotal = (row.components || []).reduce(function (a, c) {
-        return a + (c.rsf && c.rsf > 0 && c.area !== null && c.area !== undefined ? c.area / c.rsf : 0);
+        var t = V.compTerm(c);
+        return a + (t === null ? 0 : t);
       }, 0);
       if (compTotal > 0) { res.corrected = compTotal; res.rsfSource = 'component'; return res; }
       if (rsfTable && rsfTable.length) {
@@ -679,11 +689,14 @@
   }
   /* the chemical states of one row: each one's share of the positive component area */
   V.quantStates = function (row, at) {
-    var groups = [], by = {};
-    (row.components || []).forEach(function (c) {
+    var groups = [], by = {}, comps = row.components || [];
+    /* a region quantified from its components' own RSFs shares out by area / (RSF x KE^ECSF), as quant.states */
+    var weighted = !(row.rsf && row.rsf > 0) && comps.length > 0 &&
+      comps.every(function (c) { return V.compTerm(c) !== null; });
+    comps.forEach(function (c) {
       var g = by[c.gk];
       if (!g) { g = by[c.gk] = { name: c.state, area: 0 }; groups.push(g); }
-      g.area += Math.max(0, c.area || 0);
+      g.area += Math.max(0, weighted ? V.compTerm(c) : (c.area || 0));
     });
     var tot = groups.reduce(function (a, g) { return a + g.area; }, 0);
     if (!(tot > 0)) return [];

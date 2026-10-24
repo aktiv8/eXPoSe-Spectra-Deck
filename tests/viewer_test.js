@@ -498,6 +498,18 @@ function near(a, b, msg, tol) {
       const dup = [{ key: 'a', row: r('C 1s', 1, 1) }, { key: 'b', row: r('C 1s', 1, 1) }];
       eq(V.siblings(dup, 'a'), [], 'a second copy of one region is not a sibling');
     }
+    {
+      // Avantage's Area (N) = Area (P) / (SF x KE^0.6), shared out by state (mirrors quant.comp_term / states)
+      const c = (n, p, ke) => ({ gk: n, state: n, area: p * 1.05, area_p: p, rsf: 1.0, ke: ke, ecsf: 0.6 });
+      near(V.compTerm(c('A', 10954.67, 1201.745)), 155.49, 'compTerm: Area (N) of the PET C 1s phenyl peak', 0.02);
+      near(V.compTerm({ area: 6, rsf: 2, ke: 1000 }), 3, 'compTerm: no exponent is the plain ratio');
+      eq(V.compTerm({ area: 6, rsf: 0 }), null, 'compTerm: no RSF');
+      const row = { rsf: 0, components: [c('A', 10954.67, 1201.745), c('B', 4379.85, 1200.199), c('C', 3578.5, 1197.795), c('D', 943.5, 1195.459)] };
+      eq(V.quantStates(row, 100).map((s) => +s.at.toFixed(2)), [55.13, 22.06, 18.05, 4.76], 'states follow Area (N)');
+      eq(V.quantNormalise([row], null, false, null, '')[0].rsfSource, 'component', 'component RSF tier');
+      const own = { rsf: 0.3, components: [{ gk: 'a', state: 'A', area: 30, rsf: 0.3, ke: 1000, ecsf: 0.6 }, { gk: 'b', state: 'B', area: 10, rsf: 0.3, ke: 800, ecsf: 0.6 }] };
+      near(V.quantStates(own, 100)[0].at, 75, 'a region with its own RSF shares out by area');
+    }
     eq(V.quantStates({ components: [{ gk: 'i1', state: 'A', area: 3 }, { gk: 'i1', state: 'A', area: 1 }, { gk: 'nB', state: 'B', area: -2 }] }, 40)
       .map((s) => s.name + ':' + s.at), ['A:40', 'B:0'], 'states share the row, negative areas count as zero');
   }

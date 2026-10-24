@@ -763,12 +763,12 @@ class TestPeakDefinitions(unittest.TestCase):
                           ("ALTHERMO1", "Pd3d5 metal", 2)])
 
     def test_the_library_rsf_is_read_whatever_the_group_count(self):
-        self.assertEqual([x.rsf for x in self.prj.peak_defs],
-                         [1.0, None, 5.4])         # a hand-made peak: no RSF
+        # a hand-made peak stores the default 1.0, which Avantage counts too
+        self.assertEqual([x.rsf for x in self.prj.peak_defs], [1.0, 1.0, 5.4])
 
     def test_each_fitted_peak_takes_its_definitions_rsf(self):
         self.assertEqual([(p.rsf, p.library) for p in self.prj.peaks],
-                         [(1.0, "ALTHERMO1"), (None, ""),
+                         [(1.0, "ALTHERMO1"), (1.0, ""),
                           (5.4, "ALTHERMO1")])
 
     def test_an_unreadable_layout_leaves_the_rsf_unknown(self):
@@ -795,12 +795,45 @@ class TestPeakDefinitions(unittest.TestCase):
         region.extra["n_scans"] = 1
         fit = vgp.fit_for(self.prj.peaks_of(0)[:1], None, region, 0.1, 1)
         self.assertEqual([c.rsf for c in fit.components], [1.0])
-        self.assertIn("KE^0.6", fit.regions[0].note)           # said, not applied
-        fit2 = vgp.fit_for([self.prj.peaks[1]], None, region, 0.1, 1)
-        self.assertEqual([c.rsf for c in fit2.components], [0.0])
-        self.assertNotIn("KE^0.6", fit2.regions[0].note)
+        self.assertEqual([c.ecsf for c in fit.components], [0.6])
+        fit2 = vgp.fit_for([self.prj.peaks[1]], None, region, 0.1, 1, "ALTHERMO1")
+        self.assertEqual([(c.rsf, c.ecsf) for c in fit2.components],
+                         [(1.0, 0.6)])      # a hand-made peak: the project's library
+        fit3 = vgp.fit_for([self.prj.peaks[1]], None, region, 0.1, 1)
+        self.assertEqual([c.ecsf for c in fit3.components], [0.0])
         self.assertIsNotNone(quant)
         self.assertIsNotNone(casafit)
+
+
+@unittest.skipUnless(os.path.isfile(os.path.join(CORPUS, "C1s PET.vgp")),
+                     "C1s PET.vgp not found (XPS_VGP_CORPUS)")
+class TestQuantificationAgainstAvantage(unittest.TestCase):
+    """The Peak Table Avantage made for the second fit of ``C1s PET.vgp``
+    (SF 1.000 and TXFN 1.00 for every peak, the p-p* plasmon included):
+    Area (N) = Area (P) / (SF x KE^0.6), Atomic % = its share of the total."""
+    TABLE = {"C1s phenyl": (10954.67, 155.49, 55.13),
+             "C1s C-O": (4379.85, 62.21, 22.06),
+             "C1s C=O": (3578.5, 50.89, 18.05),
+             "p-p* plasmon": (943.5, 13.43, 4.76)}
+
+    def test_the_project_reproduces_the_table(self):
+        import quant
+        doc = readers.load_file(os.path.join(CORPUS, "C1s PET.vgp"))
+        reg = [r for r in doc.regions if r.fit and any(
+            c.name == "p-p* plasmon" for c in r.fit.components)][0]
+        row = quant.fit_rows(reg, curves=True)[0]
+        by = {c["name"]: c for c in row["components"]}
+        for name, (p, n, _pct) in self.TABLE.items():
+            self.assertAlmostEqual(
+                reg.extra["avantage_peaks"][[x["name"] for x in
+                                             reg.extra["avantage_peaks"]]
+                                            .index(name)]["area"], p, places=2)
+            self.assertAlmostEqual(quant.comp_term(by[name]), n, delta=0.03)
+        res = quant.normalise([row])
+        self.assertEqual(res[0]["rsf_source"], "component")
+        st = {s["name"]: s["at_pct"] for s in quant.states(row, 100.0)}
+        for name, (_p, _n, pct) in self.TABLE.items():
+            self.assertAlmostEqual(st[name], pct, delta=0.02)
 
 
 @unittest.skipUnless(_corpus() and os.environ.get("XPS_ALTHERMO1_JSON"),
@@ -819,9 +852,9 @@ class TestRsfAgainstTheLibrary(unittest.TestCase):
         n = 0
         for f in _corpus():
             for d in V.load(f).peak_defs:
-                self.assertIsNotNone(d.rsf if d.library else 1.0, f)
+                self.assertIsNotNone(d.rsf, f)
                 if d.library != "ALTHERMO1":
-                    self.assertIsNone(d.rsf)
+                    self.assertEqual(d.rsf, 1.0)     # hand-made: the default
                     continue
                 vals = lib.get((d.name.split() or [""])[0].lower())
                 if not vals:

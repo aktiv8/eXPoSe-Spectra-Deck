@@ -220,6 +220,22 @@ class TestRsfFallback(unittest.TestCase):
         self.assertEqual(out[0]["rsf_source"], "component")
         self.assertEqual(out[0]["at_pct"], 100.0)
 
+    def test_a_kinetic_energy_term_divides_each_component(self):
+        # Avantage: Area (N) = Area (P) / (SF x KE^ECSF), ECSF 0.6 (ALTHERMO1)
+        row = {"area": 999.0, "rsf": 0.0, "components": [
+            {"area": 10954.67, "rsf": 1.0, "ke": 1201.745, "ecsf": 0.6},
+            {"area": 943.5, "rsf": 1.0, "ke": 1195.459, "ecsf": 0.6}]}
+        out = quant.normalise([row])
+        expect = 10954.67 / 1201.745 ** 0.6 + 943.5 / 1195.459 ** 0.6
+        self.assertAlmostEqual(out[0]["corrected"], expect)
+        self.assertAlmostEqual(quant.comp_term(row["components"][0]), 155.49,
+                               places=2)
+        # no exponent (CasaXPS, KherveFitting) or no energy: the plain ratio
+        self.assertAlmostEqual(quant.comp_term({"area": 6.0, "rsf": 2.0,
+                                                "ke": 1000.0}), 3.0)
+        self.assertAlmostEqual(quant.comp_term({"area": 6.0, "rsf": 2.0,
+                                                "ecsf": 0.6}), 3.0)
+
     def test_components_with_no_rsf_are_skipped_not_zero_filled(self):
         row = {"area": 10.0, "rsf": 0.0, "components": [
             {"area": 5.0, "rsf": 2.0}, {"area": 3.0, "rsf": 0.0}]}
@@ -367,6 +383,28 @@ class TestRsfFallback(unittest.TestCase):
 
 
 class TestStates(unittest.TestCase):
+    def test_states_share_out_by_area_over_rsf_and_energy_term(self):
+        # a region quantified from its components' RSFs: the shares are those
+        # of Avantage's Area (N) (a PET C 1s: 55.13 / 22.06 / 18.05 / 4.76 %)
+        comps = [("C1s phenyl", 10954.67, 1201.745), ("C1s C-O", 4379.85,
+                                                       1200.199),
+                 ("C1s C=O", 3578.5, 1197.795), ("p-p* plasmon", 943.5,
+                                                 1195.459)]
+        row = {"region": "C 1s", "rsf": 0.0, "components": [
+            {"name": n, "group": "", "index": -1, "area": a, "rsf": 1.0,
+             "ke": ke, "ecsf": 0.6} for n, a, ke in comps]}
+        st = quant.states(row, 100.0)
+        self.assertEqual([round(s["at_pct"], 2) for s in st],
+                         [55.13, 22.06, 18.05, 4.76])
+
+    def test_a_region_with_its_own_rsf_shares_out_by_area(self):
+        row = {"region": "C 1s", "rsf": 0.3, "components": [
+            {"name": "A", "group": "", "index": -1, "area": 30.0,
+             "rsf": 0.3, "ke": 1000.0, "ecsf": 0.6},
+            {"name": "B", "group": "", "index": -1, "area": 10.0,
+             "rsf": 0.3, "ke": 800.0, "ecsf": 0.6}]}
+        self.assertAlmostEqual(quant.states(row, 100.0)[0]["at_pct"], 75.0)
+
     def test_index_groups_and_standalone_components(self):
         row = {"components": [
             {"name": "A 3/2", "group": "Metal", "index": 1, "area": 60.0},

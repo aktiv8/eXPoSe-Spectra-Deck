@@ -80,6 +80,12 @@ class FitComponent:
     group: str = ""                  # the group's tag, e.g. "Metal"
     region: str = ""                 # name of the region it belongs to
     line: str = ""
+    area_p: float | None = None      # the source's own area (Avantage's Area
+                                     # (P)), which a quantification uses in
+                                     # place of ``area`` (the drawn shape's)
+    ecsf: float = 0.0                # exponent of the kinetic-energy term a
+                                     # quantification divides by (Avantage's
+                                     # library ECSF, 0.6 for ALTHERMO1; 0 = none)
 
 
 @dataclass
