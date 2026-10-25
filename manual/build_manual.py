@@ -290,16 +290,24 @@ FORMATS_ROWS = [
     ("Thermo Avantage experiment", "a folder, or .VGX",
      "Opens the whole experiment as one session: samples, analysis points, scans in "
      "run order, camera images and SnapMaps (Chapter 22)."),
+    ("Thermo Avantage project", ".vgp (or a folder holding one)",
+     "The spectra of the project’s .DATA folder with its fitted peaks, "
+     "backgrounds, sensitivity factors and constraints (Chapter 22). The fit "
+     "is read, never refitted."),
     ("PHI / ULVAC-PHI MultiPak", ".spe",
      "Intensities are counts per second, as stored. Reads float64 and float32 data "
      "(the block headers say which, e.g. the Quantes) in either byte order."),
     ("Scienta Omicron SES", ".txt", "Detector/angle columns are summed to one spectrum."),
-    ("Numbers in columns", ".csv .asc .txt .dat .tsv",
+    ("Numbers in columns", ".csv .asc .txt .dat .tsv .xy .xlsx",
      "Any spectrum saved as plain columns (tab, comma, semicolon or space separated, "
      "with or without a header), as Surface Science Spectra asks for. An import dialog "
      "checks the energy and intensity columns, binding or kinetic energy, the unit and "
      "the name, and takes the sample, photon energy and pass energy; how each file was "
-     "read is saved in the workbook."),
+     "read is saved in the workbook. A SPECS .xy file is read with its header "
+     "(photon and pass energy, dwell, scans), an Excel workbook (needs the "
+     "optional openpyxl) through the sheet with the longest table, and the wide "
+     "CSV this application writes (one spectrum per pair of columns) reads back; "
+     "a photon or pass energy can be set per file in the dialog."),
     ("Kratos Vision2 dataset", ".dset",
      "The binary file Vision2 writes, read directly without the DumpDataset step. Gives the "
      "same spectra and settings as its .kal. A setting the reader has not met before is left "
@@ -353,6 +361,7 @@ SHORTCUTS = [
     ("Space", "Tick or untick the selected row"),
     ("F2", "Rename the selected sample or region"),
     ("F11", "Focus mode — hide the side panels"),
+    ("Ctrl+Shift+H", "Fold or show the view options above the plot"),
     ("Ctrl+S", "Save the workbook"),
     ("Ctrl+O / Ctrl+Shift+O", "Open spectra files / a folder"),
     ("Ctrl+E", "Export spectra (choose regions and levels)"),
@@ -378,8 +387,9 @@ def build_chapters(doc):
         "spectra can be exported to CSV, VAMAS (ISO 14976) or NeXus, and a complete "
         "experiment can be turned into a PDF report, a PowerPoint deck, a Word "
         "document, a hand-over ZIP, or a self-contained offline HTML browser for a "
-        "customer or collaborator. CasaXPS peak fits in your files are displayed, "
-        "quantified and reported, never edited."
+        "customer or collaborator. CasaXPS, KherveFitting and Thermo Avantage "
+        "peak fits in your files are displayed, quantified and reported, never "
+        "edited."
     )
     h2(doc, "Supported file formats")
     add_table(doc, FORMATS_HEADERS, FORMATS_ROWS, widths_cm=[4.0, 3.2, 9.4])
@@ -418,6 +428,17 @@ def build_chapters(doc):
     para(doc, "For more control, run the launcher directly: python launch.py "
         "(python3 launch.py on macOS/Linux).")
     add_table(doc, ["Flag", "Effect"], LAUNCH_FLAGS, widths_cm=[3.5, 13.1])
+    h2(doc, "Portable Windows build (no Python needed)")
+    para(doc,
+        "Each release on the project’s GitHub page carries "
+        "SpectraDeck-<version>-win64.zip. Unzip it anywhere and double-click "
+        "SpectraDeck.exe: the Python runtime and every library are inside, and "
+        "nothing is installed. Settings are kept in your user folder as usual; "
+        "put an empty file called portable.txt next to the exe to keep them in "
+        "a data folder beside it instead, so a USB stick carries its own "
+        "settings. The exe is not code-signed, so Windows may say “Windows "
+        "protected your PC”: choose More info, then Run anyway."
+    )
     add_figure(doc, "The splash screen shown while the application starts.")
 
     # 3. Workspace window --------------------------------------------------
@@ -475,6 +496,11 @@ def build_chapters(doc):
         "that pair of formats; File → “Forget my choice for duplicate files” "
         "brings the question back. A folder’s own "
         "index-only .dset, which holds no spectra, is skipped."
+    )
+    para(doc,
+        "File → Close all files unloads every file and resets the workbook. It "
+        "does not ask for confirmation and cannot be undone, so save first "
+        "(Ctrl+S) if you want to keep your ticks and annotations."
     )
     para(doc,
         "Every node that holds spectra has a tick box — click it, or press "
@@ -606,7 +632,8 @@ def build_chapters(doc):
     add_figure(doc, "The Details panel for a selected spectrum.")
     h2(doc, "Quantification tab")
     para(doc,
-        "When a ticked region carries a CasaXPS fit, a Quantification tab joins "
+        "When a ticked region carries a peak fit (CasaXPS, KherveFitting or "
+        "Avantage), a Quantification tab joins "
         "the Images and Stage map tabs. It gives atomic percent from the fit "
         "areas divided by sensitivity factors (RSF), for the samples you have "
         "ticked, using the same code as the PDF, the slides and the HTML page, "
@@ -619,9 +646,13 @@ def build_chapters(doc):
         "fits appear as their own “<sample> (survey)” entry.",
         "Each fitted region has a tick box. A region fitted in more than one "
         "spectrum is counted once by default (the dedicated scan, not the "
-        "survey), and an element with a known standard line (Pt 4f rather than "
-        "Pt 4d) counts that line. Tick or untick any region to decide for "
-        "yourself; Reset ticks returns to the automatic choice. Your ticks are "
+        "survey), and an element fitted from more than one line (Pt 4f and "
+        "Pt 4d, or Ti 2p and Ti 3p) counts from one only, so it is not counted "
+        "twice: its standard line where there is one (Pt 4f rather than "
+        "Pt 4d), otherwise the line with the highest sensitivity factor. Tick "
+        "another line of the element and the first is unticked for you, so "
+        "switching from Pt 4f to Pt 4d is one click; untick a region to leave "
+        "it out. Reset ticks returns to the automatic choice. Your ticks are "
         "saved in the workbook and followed by the reports and the HTML page.",
         "RSF chooses the sensitivity-factor fallback for a region whose file "
         "records none (off by default): the file’s own factor is always used "
@@ -681,6 +712,15 @@ def build_chapters(doc):
         "panels, and Focus (F11) hides both so the plot fills the window. Hover "
         "any control for a short explanation."
     )
+    para(doc,
+        "The rows of view controls above the plot (group, normalise, offset, "
+        "view, energy, colour, fit and style) fold away when you want the "
+        "height back: choose View → Show view options, press Ctrl+Shift+H, or "
+        "double-click the header above them. A one-line summary of the current "
+        "view stays in their place while they are folded. The choice is "
+        "remembered between sessions; it is layout, so it is not part of a "
+        "saved figure."
+    )
     add_figure(doc, "The same experiment shown in the Light and Dark themes.",
               image_path=os.path.join(FIGDIR, "fig_theme_compare.png"))
 
@@ -711,6 +751,19 @@ def build_chapters(doc):
         "with Intensity and the spectrometer's Transmission function as a "
         "corresponding variable (toggle it off in the dialog if you do not want "
         "it)."
+    )
+    para(doc,
+        "Two VAMAS options in the Export dialog are for CasaXPS users. “Restore "
+        "the transmission function as CasaXPS does for Avantage data” (only for "
+        "K-Alpha, NEXSA and HYPULSE files; other instruments’ files are "
+        "unchanged) writes counts and transmission the way CasaXPS’s own "
+        "import of Avantage data does. “Write CasaXPS’s escape-depth "
+        "correction” adds the escape-depth type CasaXPS uses in its "
+        "quantification (none, KE exponent, EAL, IMFP, CH film, TPP-2M or "
+        "Layer) with its exponent or overlayer thickness, so CasaXPS applies "
+        "that mean-free-path correction when it reads the file; left unticked, "
+        "none is written. VAMAS files also carry the acquisition date, the work "
+        "function and the X-ray beam width where the source file recorded them."
     )
     para(doc,
         "Export → Metadata to CSV / PDF saves the per-sample acquisition "
@@ -954,9 +1007,12 @@ def build_chapters(doc):
         "factors: one table per sample (with chemical states), or, for a depth "
         "profile, a chart and a table by level. A region fitted in more than "
         "one spectrum at a level is counted once — the dedicated scan, not "
-        "the survey — and this is stated on the page. An element counted "
-        "from two different lines is flagged. No transmission correction is "
-        "applied in reports. Each sample can be ticked separately in the "
+        "the survey — and this is stated on the page. An element fitted "
+        "from several lines counts from one (its standard line, else the one "
+        "with the highest sensitivity factor), the page says which, and a line "
+        "you choose in the Quantification tab replaces it. No transmission "
+        "correction is applied in reports, except inside Avantage’s own "
+        "numbers (Chapter 22). Each sample can be ticked separately in the "
         "Report generator."
     )
     para(doc,
@@ -1037,8 +1093,8 @@ def build_chapters(doc):
     )
     para(doc,
         "Quantification and Depth profile tabs mirror the application’s "
-        "(the same numbers, including the RSF fallback choice, the preferred-"
-        "line default and CasaXPS’s own percentages); the page starts from "
+        "(the same numbers, including the RSF fallback choice, the one-line-"
+        "per-element default and CasaXPS’s own percentages); the page starts from "
         "the regions you ticked or unticked in the Quantification tab, and the "
         "reader can change them. Fits are drawn on single-spectrum panels "
         "(components, envelope, background and a residual band) with a "
@@ -1170,25 +1226,63 @@ def build_chapters(doc):
     add_figure(doc, "A Fit stack of three depth levels. Left: every peak, coloured by its INDEX. "
                     "Right: Merge INDEX groups draws the two O-C=O peaks (one INDEX) as one outline.",
               image_path=os.path.join(FIGDIR, "fig_fitstack.png"))
+    h2(doc, "Goodness of fit")
+    para(doc,
+        "Three boxes in the Fit row choose which fit statistics are shown, each "
+        "on its own: RMS (the residual as a share of the data range), Reduced "
+        "χ² (the Poisson-weighted reduced chi-square) and Residual StDev, "
+        "CasaXPS’s own statistic (the root-mean-square of the residual in units "
+        "of the counting noise, about 1 when the fit explains the data to "
+        "counting statistics). RMS and Reduced χ² are on by default, Residual "
+        "StDev is off. The plot writes RMS and Residual StDev under the fit; the "
+        "fit tables of the reports and the fit header of the HTML page show "
+        "whichever are ticked. They need the dwell time and the number of scans, "
+        "and a figure or workbook saved before the Residual StDev box existed "
+        "keeps showing RMS and Reduced χ² as it did."
+    )
+    para(doc,
+        "A scan fitted with several regions of the same name that touch, such "
+        "as a piecewise Shirley background, is treated as one fit: its "
+        "background is stitched together and every component is drawn across "
+        "the whole span, instead of the narrower regions being taken for "
+        "duplicates."
+    )
     para(doc,
         "CasaXPS's own binding-energy charge correction is carried over "
         "automatically and appears in Details (“BE calibration "
         "(CasaXPS)”) and in the report's calibration statement."
     )
     para(doc,
-        "GL and SGL peak shapes, and Shirley, linear and the two-parameter "
-        "(U 2) Tougaard backgrounds, are computed exactly. The St Offset and "
-        "End Offset of a CasaXPS region are applied to the background. Other "
-        "shapes are reconstructions: LA and LF, Doniach-Sunjic (DS), the "
-        "asymmetric Gelius shapes A(a,b,n)GL / SGL and TLA, and the other "
-        "Tougaard cross sections (U Poly, U Si, U SiO2, U Ge, U Al, U 4, plain "
-        "and W Tougaard). The ones checked against real CasaXPS fits agree to "
-        "within a few percent of peak height; where a shape cannot be "
-        "reproduced (CasaXPS’s H, F and QF shapes, E Tougaard, Spline "
-        "backgrounds), the components are drawn without an envelope and the "
-        "status bar says so. The fit itself is read-only — fit your data in "
-        "CasaXPS, then review it here. The fit table also gives each region’s "
-        "residual and Poisson-weighted reduced chi-square."
+        "GL and SGL peak shapes, with or without a T(k) tail, are computed "
+        "exactly. The other shapes follow CasaXPS’s own tables, which were "
+        "read from the program and checked against its exported curves, "
+        "agreeing to between 0.02 % and 1.3 % of the peak height: LA, LF, "
+        "Doniach-Sunjic (DS), H, F, E, the asymmetric Gelius shapes "
+        "A(a,b,n)GL / SGL, TLA, LS, LSF, QA, QS, QF, QSF, GL(m,n) and the PHI "
+        "and SL tails. Backgrounds are Shirley, linear and the Tougaard "
+        "cross sections; the two-parameter (U 2) Tougaard is exact, the U Poly "
+        "one was checked against a real fit, and the others (U Si, U SiO2, "
+        "U Ge, U Al, U 4, plain and W Tougaard) are reconstructions. The St "
+        "Offset and End Offset of a CasaXPS region are applied to the "
+        "background. Where a shape or background cannot be reproduced (the "
+        "K(...) suffixes and the shapes SS, TP, THG, PGL, IRP, IRS, VS, VGT, "
+        "CS, SLA, LD and RG; E Tougaard; Spline backgrounds), the components "
+        "are drawn without an envelope and the status bar says so. The fit "
+        "itself is read-only — fit your data in CasaXPS, then review it here. "
+        "The fit table also gives each region’s residual and Poisson-weighted "
+        "reduced chi-square."
+    )
+    h2(doc, "Which transmission function a CasaXPS file holds")
+    para(doc,
+        "A CasaXPS VAMAS export of Avantage data carries a Transmission "
+        "column, and its comment text does not always say which function that "
+        "is. Details names it, judged from the numbers themselves: Avantage’s "
+        "polynomial, CasaXPS’s recalculated VG function (the same form with "
+        "new coefficients), or a measured transmission file, which is not in "
+        "the export and cannot be rebuilt here, so its column is used as "
+        "written. A column that matches none is not given a name. The "
+        "Quantification tab says which function “Divide out the "
+        "transmission function” divides by."
     )
     h2(doc, "Importing a CasaXPS CSV export")
     para(doc,
@@ -1240,6 +1334,23 @@ def build_chapters(doc):
         "energy. ISS markers sit at kinetic energy, so a binding-energy "
         "calibration never moves them."
     )
+    para(doc,
+        "Thermo ISS files record the ion, the beam energy, Avantage’s "
+        "calibrated beam energy and the scattering angle, and the dialog fills "
+        "them in (the calibrated energy is the one the peaks fit). Kratos files "
+        "do not, so the dialog offers He⁺, 1000 eV and 135° (the Axis Ultra "
+        "geometry) but states nothing in a report until you choose Use for "
+        "this file."
+    )
+    para(doc,
+        "The ISS axis box beside Energy chooses the x axis of ion scattering "
+        "spectra: Kinetic energy (the default) or the energy ratio E/E₀, as ISS "
+        "tables are usually shown. The ratio needs the beam energy, from the "
+        "file or saved with Use for this file; a Kratos spectrum with none "
+        "stays on kinetic energy and says so. XPS spectra on the same page keep "
+        "their own Binding / Kinetic choice, and the offline HTML browser has "
+        "the same ISS axis box."
+    )
     add_figure(doc, "An ISS spectrum with candidate elements marked at their "
               "predicted scattered-ion energies.",
               image_path=os.path.join(FIGDIR, "fig_iss.png"))
@@ -1257,7 +1368,7 @@ def build_chapters(doc):
 
     # 22. Avantage / SnapMap -----------------------------------------------------
     add_page_break(doc)
-    h1(doc, "22. Avantage experiments, camera images and SnapMaps")
+    h1(doc, "22. Avantage experiments, projects, camera images and SnapMaps")
     para(doc,
         "Thermo Avantage writes one .VGD file per scan into a folder tree "
         "beside its .VGX file. Open → Folder… on that folder (or on "
@@ -1288,6 +1399,63 @@ def build_chapters(doc):
     )
     add_figure(doc, "The SnapMap viewer: the element map and the selected area's spectrum.")
 
+    h2(doc, "Avantage projects (.vgp)")
+    para(doc,
+        "An Avantage project holds a session’s peak fits. Open the .vgp file, "
+        "or the folder that holds just one, and the spectra it uses (its "
+        ".DATA folder of .VGD files) load together, named after the project, "
+        "with the project’s fitted peaks and backgrounds drawn through the same "
+        "Fit row, Quantification tab, reports and exports as a CasaXPS fit. The "
+        "fit is read, never refitted. Peaks follow Avantage’s Gaussian/"
+        "Lorentzian shape (product or sum, told from the stored areas) with "
+        "its tail, and the background is Linear, Shirley or Avantage’s Smart "
+        "background, a Shirley that never rises above the data. A fit that "
+        "does not describe its spectrum says so on the plot, and a file with "
+        "two traces takes the fit on the trace it matches."
+    )
+    para(doc,
+        "Quantification uses Avantage’s own numbers, which this application "
+        "reproduces to the digits printed in Avantage’s Peak Table (checked on "
+        "S 2p, Te 3d, Mn 2p and C 1s fits). Each peak’s area (Avantage’s Area "
+        "(P)) is divided by its sensitivity factor from the library the "
+        "project names (ALTHERMO1 is Thermo’s adjusted Scofield set for a "
+        "monochromated Al source), by the transmission function at the peak "
+        "(unless the file says it was already removed, which gives TXFN 1.00) "
+        "and by an energy term: the TPP-2M mean free path for ALTHERMO1, a "
+        "power of the kinetic energy (KE^0.6) for the Scofield libraries. A "
+        "peak typed in by hand, such as a satellite, carries Avantage’s "
+        "default factor of 1 and is counted as Avantage counts it."
+    )
+    para(doc,
+        "Details lists what each fit constrained under “Peak constraints "
+        "(Avantage)”: a peak’s position tied to another’s with an offset and "
+        "limits, its height or FWHM as a ratio of another’s, and FWHM limits. "
+        "A doublet’s “area ratio” constraint is a height ratio in the file, "
+        "which is the area ratio only while both peaks have the same width. "
+        "Constraints are shown, not applied, and a layout the reader does not "
+        "know is left out rather than guessed."
+    )
+    h2(doc, "Older and converted Avantage files")
+    para(doc,
+        "Files from older Avantage versions, such as the sample data converted "
+        "from VG Eclipse, read as before and now also give their scan count, "
+        "the source (“Al Kα, non-monochromated” when the file says so), the "
+        "Avantage version and the file they were converted from. Their "
+        "recorded times are not labelled UTC, because those files do not say "
+        "which zone they use, and the transmission coefficients they hold are "
+        "neither applied nor claimed, since the file does not say whether the "
+        "counts already have the function removed. A SnapMap’s scan count, and "
+        "so its counting time, is read too."
+    )
+    h2(doc, "Angle-resolved (tilt) series")
+    para(doc,
+        "A series recorded at several stage tilts is recognised: each spectrum "
+        "shows its Sample tilt, the Z axis of a waterfall or heatmap can be "
+        "Tilt, the methods text says the spectra are angle-resolved, and the "
+        "series is not mistaken for a sputter depth profile. The take-off angle "
+        "and any intensity correction are not inferred."
+    )
+
     # 23. Depth profiles -------------------------------------------------------
     add_page_break(doc)
     h1(doc, "23. Depth profiles")
@@ -1305,9 +1473,63 @@ def build_chapters(doc):
         "as comment lines."
     )
 
+    # 24. NEXAFS ----------------------------------------------------------------------
+    add_page_break(doc)
+    h1(doc, "24. NEXAFS scans")
+    para(doc,
+        "A NEXAFS scan from a beamline (Diamond B07 / GDA, as a NeXus .nxs file) "
+        "opens as one spectrum per detector channel, photon energy against "
+        "current, named by detector. Nothing is guessed: which channel is total "
+        "electron yield or fluorescence yield is not in the file, so none is "
+        "assumed, the energy axis is never converted to binding energy, and "
+        "nothing is normalised until you ask."
+    )
+    h2(doc, "Ring-current scaling")
+    para(doc,
+        "Tick Ring-current scaling (beside the view controls, or in the View "
+        "menu) to scale every point to the mean ring current of its scan. It is "
+        "off by default and saved in the workbook. The ring current’s unit is "
+        "not recorded, so the signal is scaled to the mean rather than divided "
+        "by the current (which would claim a unit), and a point whose ring "
+        "current is zero is left blank. The plot, the exports, the reports and "
+        "the HTML page all follow."
+    )
+    h2(doc, "Edge normalisation")
+    para(doc,
+        "Tools → NEXAFS edge step… normalises a spectrum to its absorption "
+        "edge, with two methods. Edge step is the usual one: a line (or a "
+        "constant or a parabola) is fitted over a pre-edge window and "
+        "subtracted, and the result is divided by the step at the edge "
+        "energy E0 taken from a fit over a post-edge window, so the edge step "
+        "becomes 1. Min–max follows a spreadsheet processing "
+        "template: the pre-edge line is subtracted and the spectrum "
+        "is scaled so its lowest point is 0 and its highest 1."
+    )
+    para(doc,
+        "The dialog proposes windows (the first few eV of the scan for the "
+        "pre-edge, the last tenth for the post-edge, the steepest rise for "
+        "E0) and shows them as “Not saved yet” until you choose Use for this "
+        "spectrum, or Use for all listed, which applies the same energies to "
+        "every listed spectrum they fit and names the others. A choice that "
+        "cannot be applied (a window with too few points or outside the data, "
+        "a pre-edge ending above E0, a zero step) is explained and the spectrum "
+        "is left as it was. Each choice is saved per spectrum in the workbook "
+        "and applied wherever the spectrum is drawn or exported; the metadata "
+        "rows “Edge normalisation” and “Edge step” and one sentence of the "
+        "methods text say what was done."
+    )
+    para(doc,
+        "Flatten the post-edge fits a line (or a constant or a parabola) to "
+        "the normalised data over the post-edge window and removes its slope "
+        "above E0, so the post-edge sits level at about 1 while the edge step "
+        "stays 1; nothing below E0 changes. Dividing by the I0 monitor channel "
+        "is not done, so a raw total-electron-yield spectrum still shows the "
+        "dip of the beamline monitor at the carbon edge."
+    )
+
     # 24. Troubleshooting -------------------------------------------------------
     add_page_break(doc)
-    h1(doc, "24. Troubleshooting and notes")
+    h1(doc, "25. Troubleshooting and notes")
     bullets(doc, [
         "tkinter is part of Python but needs an extra OS package on some "
         "Linux systems: sudo apt-get install python3-tk (Debian/Ubuntu), or "
@@ -1334,6 +1556,9 @@ def build_chapters(doc):
         "A Kratos file records when each run started but not when it ended, "
         "so the report’s Timing section is shorter for Kratos data; it is "
         "left out rather than estimated.",
+        "An Avantage project whose .VGD files have been moved loads the files "
+        "it can find and names each missing one; keep the .vgp beside its "
+        ".DATA folder.",
         "To test the application against your own data, set the XPS_CORPUS "
         "environment variable to a folder of spectra files and run the test "
         "suite to check that every recognised file loads.",
