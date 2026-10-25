@@ -141,6 +141,8 @@ class FittedPeak:
     background: int | None = None
     rsf: float | None = None             # the project's own sensitivity factor
     library: str = ""                    # the library it came from (ALTHERMO1)
+    links: dict = field(default_factory=dict)    # parameter -> PeakLink
+    limits: dict = field(default_factory=dict)   # parameter -> (low, high)
 
     @property
     def ct(self) -> float:
@@ -161,6 +163,23 @@ class FittedPeak:
     def symmetric(self) -> bool:
         """No tail: ``CT = 0`` and ``TM = 1`` (``T`` is then 0)."""
         return abs(self.tail[0]) < 1e-9 and abs(self.tail[1] - 1.0) < 1e-9
+
+
+@dataclass
+class PeakLink:
+    """A constraint tying one parameter of a fitted peak to another peak
+    (``parent``: its index in ``Project.peaks``), as Avantage stores it.
+    ``parameter`` is ``"position"`` (``value`` = the child's binding energy
+    minus the parent's, i.e. the parent's kinetic energy minus the child's, in
+    eV; the offset may lie between ``value - lo`` and ``value + hi``),
+    ``"height"`` or ``"fwhm"`` (``value`` = child / parent). A doublet's
+    "area ratio" is a **height** ratio in the file (the SF ratio, 0.5108 for
+    S 2p), which is the area ratio only while the two widths are equal."""
+    parameter: str
+    parent: int
+    value: float
+    lo: float = 0.0
+    hi: float = 0.0
 
 
 @dataclass
@@ -310,6 +329,103 @@ def _fitted_records(b: bytes) -> list:
     return recs
 
 
+# What follows a fitted peak's eight numbers is its constraint structure
+# (decoded from the 129 projects and five controlled Avantage fits of one S 2p
+# spectrum, ``tests/test_thermo_vgp.py``). It starts with eight int32, the
+# index of the block that governs each parameter (-1 = free): the first is
+# always -1, then position, height, FWHM, L/G mix and the three tail terms.
+# Then ``m`` blocks (the int32 at +8 of the record), each (n, kind, code) and
+# three doubles; block 0 stands alone (a FWHM range 0.5-3.5 on a peak with no
+# parent: kind 0, code 6; a 1.0 ratio on a child), every other block of a child
+# is a *link*, ``n`` words of reference (pointer words, the parent peak's index
+# last: 2 words for a 32-bit Avantage, 1 for the older build) and a count, then
+# (n, kind, code) and the doubles. Kinds: 2 = position offset (code 5, or 7
+# with the doubles value / low / high), 3 = ratio child / parent, 4 = the
+# reciprocal, ratio parent / child. Every relation read this way holds on the
+# peaks themselves: 122 of 122 positions inside their limits, 116 of 116 FWHM
+# ratios and 119 of 119 height ratios within 0.5 % (all that parse; a peak
+# whose blocks are laid out otherwise, 143 of 484 with a link or a range, is
+# left with no constraints rather than guessed).
+def _peak_links(suffix: bytes, m: int):
+    """``(links, limits)`` of one fitted peak (see above); empty when the
+    structure is not the one decoded."""
+    w = struct.unpack("<%di" % (len(suffix) // 4), suffix[:len(suffix) // 4 * 4])
+    if m < 1 or len(w) < 17:
+        return {}, {}
+    n, k0, c0 = w[8:11]
+    if n not in (2, 3):
+        return {}, {}
+
+    def dbl(i):
+        return struct.unpack_from("<d", suffix, 4 * i)[0]
+
+    head = w[:8]
+    names = ("", "position", "height", "fwhm")
+    blocks = [(n, k0, c0, dbl(11), dbl(13), dbl(15))]
+    p, parent = 17, None
+    for _ in range(1, m):
+        if p + n + 10 > len(w):
+            blocks = blocks[:1]
+            break
+        par = w[p + n - 1]
+        a, n2, k, c = w[p + n:p + n + 4]
+        if n2 != n or not 0 <= par < 10000:
+            blocks = blocks[:1]
+            break
+        blocks.append((n, k, c, dbl(p + n + 4), dbl(p + n + 6),
+                       dbl(p + n + 8)))
+        parent = par if parent is None else parent
+        p += n + 10
+    else:
+        if p + n <= len(w) and 0 <= w[p + n - 1] < 10000:
+            parent = w[p + n - 1] if parent is None else parent
+    links, limits = {}, {}
+    for slot in (1, 2, 3):
+        idx = head[slot]
+        if not 0 <= idx < len(blocks):
+            continue
+        _n, kind, code, v0, v1, v2 = blocks[idx]
+        name = names[slot]
+        if kind == 0 and code == 6:                      # a range
+            limits[name] = (v0, v1)
+        elif parent is None:
+            continue
+        elif name == "position" and kind == 2:
+            links[name] = PeakLink(name, parent, v0,
+                                   v1 if code == 7 else 0.0,
+                                   v2 if code == 7 else 0.0)
+        elif name in ("height", "fwhm") and kind in (3, 4) and v0:
+            links[name] = PeakLink(name, parent, v0 if kind == 3 else 1.0 / v0)
+    return links, limits
+
+
+def constraint_lines(peak: FittedPeak, peaks) -> list:
+    """The constraints of ``peak`` as short sentences ("position = S2p3 Scan A
+    + 1.2 eV (1.1 to 1.3)", "height = 0.5108 x S2p3 Scan A", "FWHM limited to
+    0.5-3.5 eV"). Positions are binding-energy offsets. Read, never applied
+    (the fit is not refitted)."""
+    def who(i):
+        if 0 <= i < len(peaks) and peaks[i].name:
+            return peaks[i].name
+        return f"peak {i + 1}"
+    out = []
+    pos = peak.links.get("position")
+    if pos:
+        lim = (f" ({pos.value - pos.lo:g} to {pos.value + pos.hi:g})"
+               if pos.lo or pos.hi else "")
+        out.append(f"position = {who(pos.parent)} + {pos.value:g} eV{lim}")
+    h = peak.links.get("height")
+    if h:
+        out.append(f"height = {h.value:.4g} x {who(h.parent)}")
+    f = peak.links.get("fwhm")
+    if f:
+        out.append(f"FWHM = {f.value:.4g} x {who(f.parent)}")
+    if "fwhm" in peak.limits:
+        lo, hi = peak.limits["fwhm"]
+        out.append(f"FWHM limited to {lo:g}-{hi:g} eV")
+    return out
+
+
 def _fitted_peak(index: int, rec: bytes) -> FittedPeak:
     # prefix: int32 2, int32 1 or 2 (the name sits at +40, or +56 when it is
     # 2: 23 of the 480 peaks); an empty name is a zero length, so the second
@@ -330,9 +446,12 @@ def _fitted_peak(index: int, rec: bytes) -> FittedPeak:
             continue
         d = off + 4 + n
         v = [struct.unpack_from("<d", rec, d + 8 * k)[0] for k in range(8)]
+        links, limits = _peak_links(rec[d + 64:], struct.unpack_from(
+            "<i", rec, 8)[0])
         return FittedPeak(index=index, name=name, area=v[0], ke=v[1],
                           height=v[2], fwhm=v[3], mix=v[4],
-                          tail=(v[5], v[6], v[7]))
+                          tail=(v[5], v[6], v[7]), links=links,
+                          limits=limits)
     raise VgpError(f"fitted peak {index}: no readable name field")
 
 
@@ -763,5 +882,12 @@ class ThermoProjectFile(ThermoExperiment):
             r.extra["avantage_level"] = best
             r.extra["avantage_peaks"] = [
                 {"name": p.name, "area": p.area, "height_counts": p.height,
-                 "tail": list(p.tail), "rsf": p.rsf, "library": p.library}
+                 "tail": list(p.tail), "rsf": p.rsf, "library": p.library,
+                 "constraints": constraint_lines(p, prj.peaks)}
                 for p in mine]
+            cons = [f"{p.name or 'peak'}: " + ", ".join(
+                constraint_lines(p, prj.peaks)) for p in mine
+                if constraint_lines(p, prj.peaks)]
+            if cons:
+                r.extra.setdefault("acq_metadata", {})[
+                    "Peak constraints (Avantage)"] = "; ".join(cons)

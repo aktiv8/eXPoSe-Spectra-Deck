@@ -9,6 +9,7 @@ documented in ``readers/thermo_vgp.py``. The real ones are the 129 projects of
 Run:  python -m unittest tests.test_thermo_vgp
 """
 
+import collections
 import os
 import struct
 import sys
@@ -46,14 +47,14 @@ def fitted_stream(peaks, count=None):
             out += b"\x01\x80" + GUID_F
         ver = p.get("ver", 1)
         off = 40 if ver == 1 else 56
-        rec = struct.pack("<iii", 2, ver, 3).ljust(off, b"\x00")
+        rec = struct.pack("<iii", 2, ver, p.get("m", 3)).ljust(off, b"\x00")
         name = p["name"]
         raw = (name + "\x00").encode("utf-16le") if name else b""
         rec += struct.pack("<I", len(raw)) + raw
         tail = p.get("tail", (0.0, 1.0, 0.0))
         rec += struct.pack("<8d", p["area"], p["ke"], p["height"], p["fwhm"],
                            p["mix"], *tail)
-        rec += b"\x00" * 48                   # the parameter blocks, unread
+        rec += p.get("suffix", b"\x00" * 48)   # the constraint structure
         out += rec
     return out
 
@@ -748,6 +749,74 @@ class TestRealProjects(unittest.TestCase):
         self.assertLess(cv.residual_rms, 0.09)
 
 
+def child_suffix(parent, pos=None, height=None, fwhm=None, n=3):
+    """The constraint structure of a doublet's second peak, as Avantage writes
+    it: eight block indices, block 0 (ratio 1.0), a link block per constraint
+    (n reference words ending with the parent peak's index, a count, (n, kind,
+    code), three doubles) and a short trailer. ``pos`` = (offset, low, high),
+    ``height`` / ``fwhm`` = child / parent."""
+    ptr = [-1632269152, 543][:n - 1]
+    links = []
+    if pos:
+        links.append(("position", 2, 7, pos))
+    if height:
+        links.append(("height", 3, 5, (height, 0.0, 0.0)))
+    if fwhm:
+        links.append(("fwhm", 3, 5, (fwhm, 0.0, 0.0)))
+    idx = {name: 1 + i for i, (name, _k, _c, _d) in enumerate(links)}
+    head = [-1, idx.get("position", -1), idx.get("height", -1),
+            idx.get("fwhm", -1), 0, 0, 0, 0]
+    w = struct.pack("<8i", *head) + struct.pack("<3i", n, 3, 5)
+    w += struct.pack("<3d", 1.0, 0.0, 0.0)
+    for _name, kind, code, d in links:
+        w += struct.pack("<%di" % n, *(ptr + [parent]))
+        w += struct.pack("<4i", 1, n, kind, code) + struct.pack("<3d", *d)
+    w += struct.pack("<%di" % n, *(ptr + [parent]))
+    w += struct.pack("<3i", 1, 2, 0)
+    return w, 1 + len(links)
+
+
+class TestPeakConstraints(unittest.TestCase):
+    def project(self, n=3, **kw):
+        suffix, m = child_suffix(0, n=n, **kw)
+        peaks = [dict(name="S2p3", ke=1320.0, fwhm=1.2, mix=0.3, area=4000.0,
+                      height=4700.0),
+                 dict(name="S2p1", ke=1318.8, fwhm=0.6, mix=0.3, area=1200.0,
+                      height=2400.0, suffix=suffix, m=m)]
+        return V.parse(make_project(peaks=peaks, xr_peak_ds=[(0, 0), (1, 0)]))
+
+    def test_the_three_links_of_a_doublet_are_read(self):
+        p = self.project(pos=(1.2, 0.1, 0.1), height=0.5108, fwhm=0.5)
+        link = p.peaks[1].links
+        self.assertEqual((link["position"].parent, link["position"].value,
+                          link["position"].lo, link["position"].hi),
+                         (0, 1.2, 0.1, 0.1))
+        self.assertAlmostEqual(link["height"].value, 0.5108)
+        self.assertAlmostEqual(link["fwhm"].value, 0.5)
+        self.assertEqual(p.peaks[0].links, {})
+
+    def test_a_missing_link_is_a_free_parameter(self):
+        p = self.project(height=0.5108)        # no position, FWHM free
+        self.assertEqual(set(p.peaks[1].links), {"height"})
+
+    def test_the_older_32_bit_layout_is_read_too(self):
+        p = self.project(n=2, pos=(1.16, 0.1, 0.1), height=0.51)
+        self.assertEqual(p.peaks[1].links["position"].value, 1.16)
+        self.assertEqual(p.peaks[1].links["position"].parent, 0)
+
+    def test_sentences_say_what_the_file_says(self):
+        p = self.project(pos=(1.2, 0.1, 0.1), height=0.5108)
+        self.assertEqual(V.constraint_lines(p.peaks[1], p.peaks),
+                         ["position = S2p3 + 1.2 eV (1.1 to 1.3)",
+                          "height = 0.5108 x S2p3"])
+
+    def test_an_unknown_layout_gives_no_constraints(self):
+        peaks = [dict(name="A", ke=1300.0, fwhm=1.0, mix=0.3, area=10.0,
+                      height=10.0, suffix=b"\x07" * 40, m=3)]
+        prj = V.parse(make_project(peaks=peaks, xr_peak_ds=[(0, 0)]))
+        self.assertEqual(prj.peaks[0].links, {})
+
+
 class TestPeakDefinitions(unittest.TestCase):
     DEFS = [dict(lib="ALTHERMO1", name="C1s C-C", rsf=1.0),
             dict(lib="", name="Satellite", rsf=1.0, groups=2),
@@ -954,6 +1023,96 @@ class TestQuantificationAgainstAvantage(unittest.TestCase):
         st = {s["name"]: s["at_pct"] for s in quant.states(row, 100.0)}
         for name, (_p, _n, pct) in self.TABLE.items():
             self.assertAlmostEqual(st[name], pct, delta=0.02)
+
+
+@unittest.skipUnless(_corpus(), "no .vgp projects (XPS_VGP_CORPUS)")
+class TestConstraintsOnRealProjects(unittest.TestCase):
+    def test_every_decoded_constraint_holds_on_the_peaks(self):
+        n = collections.Counter()
+        for f in _corpus():
+            prj = V.load(f)
+            for pk in prj.peaks:
+                for name, link in pk.links.items():
+                    par = prj.peaks[link.parent]
+                    if name == "position":
+                        off = par.ke - pk.ke
+                        ok = (link.value - link.lo - 2e-3 <= off
+                              <= link.value + link.hi + 2e-3)
+                    else:
+                        r = (pk.height / par.height if name == "height"
+                             else pk.fwhm / par.fwhm)
+                        ok = abs(r - link.value) <= 0.005 * max(1, link.value)
+                    self.assertTrue(ok, (f, pk.name, name, link))
+                    n[name] += 1
+                if "fwhm" in pk.limits:
+                    lo, hi = pk.limits["fwhm"]
+                    self.assertTrue(lo - 1e-6 <= pk.fwhm <= hi + 1e-6,
+                                    (f, pk.name, pk.limits))
+                    n["limit"] += 1
+        self.assertGreater(n["position"], 100)
+        self.assertGreater(n["height"], 100)
+        self.assertGreater(n["fwhm"], 100)
+        self.assertGreater(n["limit"], 150)
+
+
+CONSTRAINT_DIR = os.environ.get("XPS_VGP_CONSTRAINTS", "D:\\Temp")
+NA_S = "for claude Na sulfite and sulfate %s.vgp"
+
+
+@unittest.skipUnless(os.path.isfile(os.path.join(CONSTRAINT_DIR, NA_S % "1")),
+                     "the five controlled S 2p fits are not there "
+                     "(XPS_VGP_CONSTRAINTS=<folder>)")
+class TestControlledConstraintFits(unittest.TestCase):
+    """Five fits of one S 2p spectrum made in Avantage with different
+    constraints on the 2p1 peaks (each file's own numbers show which links are
+    active): 1 = position, height ratio and FWHM linked; 2 = FWHM free; 3 =
+    FWHM ratios 1.5 and 2; 4 = no position link; 6 = linked with mix and tail
+    free. All are product-shape fits."""
+    EXPECT = {"1": ({"position", "height", "fwhm"}, (1.0, 1.0)),
+              "2": ({"position", "height"}, (None, None)),
+              "3": ({"position", "height", "fwhm"}, (1.5, 2.0)),
+              "4": ({"height", "fwhm"}, (1.5, 2.0)),
+              "6": ({"position", "height", "fwhm"}, (1.0, 1.0))}
+
+    def project(self, k):
+        return V.load(os.path.join(CONSTRAINT_DIR, NA_S % k))
+
+    def test_each_file_has_the_links_it_was_made_with(self):
+        for k, (names, ratios) in self.EXPECT.items():
+            p = self.project(k)
+            for child, parent, ratio in ((1, 0, ratios[0]), (3, 2, ratios[1])):
+                got = p.peaks[child].links
+                self.assertEqual(set(got), names, k)
+                for link in got.values():
+                    self.assertEqual(link.parent, parent, k)
+                self.assertAlmostEqual(got["height"].value, 0.510811, 5)
+                if ratio:
+                    self.assertAlmostEqual(got["fwhm"].value, ratio, 6)
+                if "position" in got:
+                    self.assertAlmostEqual(got["position"].value, 1.2, 6)
+                    self.assertAlmostEqual(got["position"].lo, 0.1, 6)
+                    self.assertAlmostEqual(got["position"].hi, 0.1, 6)
+            self.assertEqual(p.peaks[0].limits, {"fwhm": (0.5, 3.5)}, k)
+
+    def test_the_height_link_is_the_doublet_ratio_not_the_area_ratio(self):
+        p = self.project("2")
+        a, b = p.peaks[0], p.peaks[1]
+        self.assertAlmostEqual(b.height / a.height, 0.510811, 4)
+        self.assertGreater(abs(b.area / a.area - 0.510811), 0.05)
+
+    def test_every_fit_is_the_product_shape(self):
+        for k in self.EXPECT:
+            doc = readers.load_file(os.path.join(CONSTRAINT_DIR, NA_S % k))
+            r = [x for x in doc.regions if x.fit][0]
+            self.assertTrue(r.fit.components[0].shape.startswith("AVP("), k)
+
+    def test_the_sentences_reach_the_metadata(self):
+        doc = readers.load_file(os.path.join(CONSTRAINT_DIR, NA_S % "3"))
+        r = [x for x in doc.regions if x.fit][0]
+        text = doc.region_metadata(r)["Peak constraints (Avantage)"]
+        self.assertIn("S2p1 Scan A: position = S2p3 Scan A + 1.2 eV "
+                      "(1.1 to 1.3), height = 0.5108 x S2p3 Scan A, "
+                      "FWHM = 1.5 x S2p3 Scan A", text)
 
 
 @unittest.skipUnless(_corpus() and os.environ.get("XPS_ALTHERMO1_JSON"),
