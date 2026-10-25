@@ -1879,6 +1879,71 @@ def tougaard_w(x, y, b, c):
     return bg * dx
 
 
+# CasaXPS's own Tougaard family, read from CasaXPS.exe (FUN_140424f70 ->
+# FUN_14043db50). The tail integral of (data - baseline) with a cross section
+# K(T), summed over the data of higher kinetic energy; the baseline is the
+# window mean at the high-KE end (less "End Offset" per cent); the stored B is
+# not used -- the scale is set by the program: types with a preset or
+# parameters (U Al/Si/SiO2/Ge/Poly, U 3) meet the data at the low-KE end (the
+# window mean less "St Offset" per cent); plain Tougaard and B&G use the
+# universal kernel T / (T^2 + 1643)^2 with a scale that is never allowed to
+# lift the background above the data; W Tougaard is the universal kernel
+# matched at the low-KE end.
+_CASA_PRESETS = {"u al": (230.0, 4.5, 0.0), "u si": (325.0, 96.0, 0.0),
+                 "u sio2": (542.0, 275.0, 9.3), "u ge": (260.0, 62.0, 0.0),
+                 "u poly": (551.0, 436.0, 3.0)}
+_CASA_TG = re.compile(r"^(?:(u\s*(?:al|si|sio2|ge|poly)|u\s*3|w)\s*)?tougaard\b")
+
+
+def casa_tougaard(x, y, kind, params, avg=1):
+    """CasaXPS's Tougaard background of one of its own types (see above);
+    ``kind`` is the lower-case type name, ``params`` the region line's six
+    numbers after the averaging width. None for a name this does not cover."""
+    np = _np()
+    m = _CASA_TG.match(kind)
+    if m is None:
+        return None
+    sub = re.sub(r"\s+", " ", m.group(1) or "")
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    if n < 3:
+        return y.copy()
+    a = max(int(avg), 1)
+    st = params[0] if len(params) > 0 else 0.0
+    en = params[1] if len(params) > 1 else 0.0
+    start = float(y[:a].mean()) * (1.0 - st / 100.0)
+    base = float(y[-a:].mean()) * (1.0 - en / 100.0)
+    step = float(np.abs(np.diff(x)).mean())
+    t = np.arange(n) * step
+    if sub in _CASA_PRESETS:
+        c, d, t0 = _CASA_PRESETS[sub]
+        kern = np.where(t >= t0, t / ((c - t * t) ** 2 + d * t * t), 0.0)
+    elif sub == "u 3":
+        if len(params) < 6:
+            return None
+        c, d, t0 = params[3], params[4], params[5]
+        kern = np.where(t >= t0, t / ((c - t * t) ** 2 + d * t * t), 0.0)
+    else:
+        kern = t / (t * t + 1643.0) ** 2
+    yb = np.maximum(y - base, 0.0)
+    tail = np.correlate(yb, kern, mode="full")[n - 1:] * step
+    if sub:                                             # matched at the low-KE end
+        s = (start - base) / tail[0] if (start >= base and tail[0] > 1e-200)             else (1.0 if sub == "u 3" else 0.0)
+        return tail * s + base
+    if sub == "" and kind.startswith("tougaard"):       # never above the data
+        s = 1.0 if tail[0] <= 1e-20 else yb[0] / tail[0]
+        out = np.empty(n)
+        for k in range(n):
+            if yb[k] < tail[k] * s and tail[k] > 1e-20 and yb[k] > 0:
+                r = yb[k] / tail[k]
+                if 1e-20 < r < s:
+                    s = r
+            out[k] = tail[k] * s + base
+        return out
+    return tail * 1.0 + base
+
+
 _TOUGAARD_U2 = re.compile(r"^u\s*2\s*tougaard")
 _TOUGAARD_3P = re.compile(r"^(?:u\s*(?:poly|sio2|si|ge|al|4)\s*)?tougaard\b")
 _TOUGAARD_W = re.compile(r"^w\s*tougaard\b")
@@ -1902,15 +1967,14 @@ def background(kind, y, avg=1, x=None, params=()):
     ``params[2:5]`` are the Tougaard B/C/D as each variant's own docstring
     describes.
 
-    Plain ``'Tougaard'`` (no ``U ...`` prefix) shares :func:`tougaard_3param`
-    with the ``U ...`` family: KherveFitting's own ``calculate_
-    tougaard_background`` uses the identical ``B T / ((C - T^2)^2 + D T^2)``
-    cross section (confirmed by reading both side by side) with generic
-    default constants instead of a named material preset -- a second,
-    independent confirmation of that function (Tougaard's own paper was the
-    first), though still not a validation against a real CasaXPS file using
-    literally ``"Tougaard"`` as its type (none found), so it carries the
-    same caveat :func:`tougaard_3param`'s own docstring already states.
+    Plain ``'Tougaard'``, ``'W Tougaard'``, the named ``U <material> Tougaard``
+    types and ``'U 3 Tougaard'`` follow CasaXPS's own program
+    (:func:`casa_tougaard`, read from CasaXPS.exe and checked on the
+    CasaXPS Models corpus): the stored B is not used, the program sets the
+    scale itself. ``'SP2SP3'`` (a difference-spectrum type) is the program's
+    zero background. ``'U 4 Tougaard'`` still uses the stored B / C / D
+    (:func:`tougaard_3param`).
+    The old :func:`tougaard_w` reading below is kept for reference.
     ``'W Tougaard'`` is a distinct cross section (:func:`tougaard_w`, its own
     caveats there); its ``C`` sign convention (which family it follows,
     :func:`tougaard_u2`'s negated storage or :func:`tougaard_3param`'s
@@ -1928,6 +1992,8 @@ def background(kind, y, avg=1, x=None, params=()):
             return None
         return tougaard_u2(x, y, params[2], abs(params[3]) or 1643.0, avg,
                            end_offset=en)
+    if x is not None and _CASA_TG.match(t):
+        return casa_tougaard(x, y, t, params, avg)
     if _TOUGAARD_W.match(t):
         if x is None or len(params) < 4 or not params[2] or not params[3]:
             return None
@@ -1939,7 +2005,7 @@ def background(kind, y, avg=1, x=None, params=()):
                                end_offset=en)
     if t.startswith("linear"):
         return linear_bg(y, avg, st_offset=st, end_offset=en)
-    if t in ("none", "", "offset"):
+    if t in ("none", "", "offset", "sp2sp3", "zero"):
         np = _np()
         return np.zeros(len(y))
     return None

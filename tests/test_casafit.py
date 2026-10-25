@@ -383,10 +383,27 @@ class TestBackgrounds(unittest.TestCase):
         plain = ls.background("Tougaard", y, x=x, params=(0, 0, 300, 400, 1))
         upoly = ls.background("U Poly Tougaard", y, x=x,
                               params=(0, 0, 300, 400, 1))
-        np.testing.assert_allclose(plain, upoly)
+        # CasaXPS's own program: the plain type uses the universal kernel and
+        # the U Poly type its preset, neither reads the stored B / C / D
+        same = ls.background("Tougaard", y, x=x, params=(0, 0, 1, 2, 3))
+        np.testing.assert_allclose(plain, same)
         w = ls.background("W Tougaard", y, x=x, params=(0, 0, 300, 400))
         self.assertEqual(len(w), 51)
-        self.assertFalse(np.allclose(w, plain))
+
+    def test_casa_tougaard_never_rises_above_the_data(self):
+        x = np.linspace(1000.0, 1030.0, 151)
+        y = self.peak(151) + 20.0
+        bg = ls.background("Tougaard", y, x=x, params=(0, 0, 650, 11, 10, 0))
+        self.assertTrue(np.all(bg <= y + 1e-9))
+        self.assertAlmostEqual(bg[-1], y[-1], 6)       # the high-KE end
+
+    def test_casa_u_types_meet_the_data_at_the_low_ke_end(self):
+        x = np.linspace(1000.0, 1030.0, 151)
+        y = self.peak(151) + 20.0
+        for name in ("U SiO2 Tougaard", "U Poly Tougaard", "U Al Tougaard"):
+            bg = ls.background(name, y, x=x, params=(0, 0, 1, 2, 3, 0))
+            self.assertAlmostEqual(bg[0], y[0], 6, msg=name)
+            self.assertAlmostEqual(bg[-1], y[-1], 6, msg=name)
 
     # -- CasaXPS "St Offset"/"End Offset" (region params[0]/[1]) -----------
     def test_shirley_st_end_offset_reduces_the_anchors_by_percent(self):
@@ -749,8 +766,8 @@ class TestCurves(unittest.TestCase):
         upoly = casafit.curves(casafit.parse(lines), be, counts, self.hv,
                                0.27, 25)[0]
         self.assertTrue(plain.background_known)
-        np.testing.assert_allclose(np.nan_to_num(plain.background),
-                                   np.nan_to_num(upoly.background))
+        self.assertFalse(np.allclose(np.nan_to_num(plain.background),
+                                     np.nan_to_num(upoly.background)))
 
     def test_w_tougaard_reconstructs_and_differs_from_the_3param_family(self):
         be, counts = model_data(self.fit, self.hv, 0.27, 25)

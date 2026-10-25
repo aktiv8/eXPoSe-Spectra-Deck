@@ -213,8 +213,10 @@ class TestTougaard(unittest.TestCase):
         np.testing.assert_allclose(
             got, ls.tougaard_u2(self.x, y, 2000.0, 650.0, 6))
         self.assertIsNone(ls.background("U 2 Tougaard", y, 6))   # no x
+        self.assertIsNotNone(ls.background("U 3 Tougaard", y, 6, x=self.x,
+                                           params=params))
         self.assertIsNone(ls.background("U 3 Tougaard", y, 6, x=self.x,
-                                        params=params))
+                                        params=params[:4]))
 
     def test_the_region_line_is_parsed_and_reconstructed(self):
         lines = [
@@ -272,17 +274,20 @@ class TestTougaard3Param(unittest.TestCase):
         y = self.peak()
         params = (0.0, 0.0, 396.0, 551.0, 436.0, 3.0)
         want = ls.tougaard_3param(self.x, y, 396.0, 551.0, 436.0, 6)
-        for name in ("U Poly Tougaard", "U Si Tougaard", "U SiO2 Tougaard",
-                     "U Ge Tougaard", "U Al Tougaard", "U 4 Tougaard",
-                     "u poly tougaard"):
+        for name in ("U 4 Tougaard", "u 4 tougaard"):
             got = ls.background(name, y, 6, x=self.x, params=params)
             np.testing.assert_allclose(got, want, err_msg=name)
+        # the named materials are CasaXPS's own presets (casa_tougaard)
+        for name in ("U Poly Tougaard", "U Si Tougaard", "U SiO2 Tougaard",
+                     "U Ge Tougaard", "U Al Tougaard", "u poly tougaard"):
+            got = ls.background(name, y, 6, x=self.x, params=params)
+            np.testing.assert_allclose(
+                got, ls.casa_tougaard(self.x, y, name.lower(), params, 6),
+                err_msg=name)
         self.assertIsNone(
-            ls.background("U Poly Tougaard", y, 6, params=params))  # no x
+            ls.background("U 4 Tougaard", y, 6, params=params))  # no x
         self.assertIsNone(
-            ls.background("U Poly Tougaard", y, 6, x=self.x, params=params[:4]))
-        self.assertIsNone(ls.background("U 3 Tougaard", y, 6, x=self.x,
-                                        params=params))     # not this family
+            ls.background("U 4 Tougaard", y, 6, x=self.x, params=params[:4]))
 
     def test_the_real_PET_region_line_is_parsed_and_reconstructed(self):
         # The literal C 1s CASA region line from a real CasaXPS "U Poly
