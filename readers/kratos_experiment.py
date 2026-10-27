@@ -293,7 +293,8 @@ class EscapeParser(SpectrumFile):
         # strings
         j = self._record_before(self.ANALYSIS_PAIR, off)
         v = self._doubles(j, 3)
-        if v is not None and abs(v[0]) < 0.1 and abs(v[1]) < 0.1 \
+        if v is not None and abs(v[0]) < self.STAGE_LIMIT_M \
+                and abs(v[1]) < self.STAGE_LIMIT_M \
                 and abs(v[2]) < 0.05 and any(abs(x) > 1e-7 for x in v):
             reg.pos_x, reg.pos_y = v[0] * 1000.0, v[1] * 1000.0
             reg.extra["pos_z"] = v[2] * 1000.0
@@ -495,6 +496,12 @@ class EscapeParser(SpectrumFile):
         except (struct.error, IndexError, ZeroDivisionError):
             return False
 
+    # a stage position is plausible inside this range (metres). The Axis
+    # Supra's stage reaches about 122 mm in x (the calibration samples of
+    # one real file), so the old limit of 100 mm (60 mm for the fallback)
+    # sent those regions to a wrong position
+    STAGE_LIMIT_M = 0.2
+
     TF_MARKER = b"TransFunc.Core.VisionTf"
 
     @staticmethod
@@ -638,7 +645,8 @@ class EscapeParser(SpectrumFile):
                     x = d(e + k); y = d(e + k + 8)
                 except struct.error:
                     break
-                if (x == x and y == y and abs(x) < 0.06 and abs(y) < 0.06
+                if (x == x and y == y and abs(x) < self.STAGE_LIMIT_M
+                        and abs(y) < self.STAGE_LIMIT_M
                         and (abs(x) + abs(y)) > 1e-5):
                     xy = (x * 1000.0, y * 1000.0)
                     break

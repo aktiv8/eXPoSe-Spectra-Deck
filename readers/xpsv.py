@@ -166,6 +166,7 @@ class XpsvFile(SpectrumFile):
     def __init__(self):
         super().__init__()
         self._etch = set()
+        self._multi = []        # multi-level spectra (one sweep count each)
 
     def load(self, path: str):
         self.path = path
@@ -187,6 +188,18 @@ class XpsvFile(SpectrumFile):
             self._add_spectrum(sp, samples.get(sp.get("sample_id")),
                                names, modal, exp)
         self._images(exp)
+        if self._multi:
+            self.warnings.append(
+                "XPSView keeps one number of sweeps and one dwell for a "
+                "whole spectrum, taken from its first level. Where the "
+                "instrument changed the sweeps with depth (a Kratos depth "
+                "profile does: 2, 3 and 4 sweeps in one C 1s series were "
+                "seen) the counting time of the later levels is the first "
+                "level's here, not the measured one, which only the "
+                "instrument file records. Affects "
+                + str(len(self._multi)) + " spectra with several levels ("
+                + ", ".join(self._multi[:3])
+                + (", ..." if len(self._multi) > 3 else "") + ").")
         self._ion_gun()
         self._profile()
         self.warnings.append(
@@ -356,6 +369,8 @@ class XpsvFile(SpectrumFile):
                 f"{label} ({sample_label}): fits of a multi-level spectrum "
                 "are not read from a session.")
 
+        if len(rows) > 1:
+            self._multi.append(f"{label} ({sample_label})")
         for li, row in enumerate(rows):
             y = [None if v is None else float(v) for v in row]
             if any(v is None for v in y):
@@ -379,6 +394,8 @@ class XpsvFile(SpectrumFile):
                                "level": li, "name": sp.get("name"),
                                "casa_shift_baked": shift,
                                "hv_stored": hv_stored}
+            if len(rows) > 1:
+                r.extra["xpsv"]["counting_of_first_level"] = True
             if abs(user_shift) > 1e-9:
                 r.extra["xpsv"]["user_shift"] = user_shift
             if sp.get("notes"):

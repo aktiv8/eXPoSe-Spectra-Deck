@@ -102,6 +102,17 @@ class TestRecords(unittest.TestCase):
         reg = self.read(stage(9.0, 0.0, 0.0))             # 9 m: not a stage
         self.assertIsNone(reg.pos_x)
 
+    def test_the_stage_is_read_to_the_end_of_its_travel(self):
+        # the Axis Supra's stage reaches about 122 mm in x: the calibration
+        # samples of one real file sat at (121.9, 14.2) mm and were given a
+        # wrong fallback position while the limit was 100 mm
+        reg = self.read(stage(0.1219, 0.0142, -0.0065))
+        self.assertAlmostEqual(reg.pos_x, 121.9)
+        self.assertAlmostEqual(reg.pos_y, 14.2)
+        self.assertTrue(reg.extra["stage_own"])
+        for x, y in ((0.3, 0.01), (0.01, -0.4), (1e30, 0.0)):
+            self.assertIsNone(self.read(stage(x, y, 0.0)).pos_x, (x, y))
+
     def test_a_record_cut_short_by_the_end_of_the_file_is_not_read(self):
         raw = neutraliser()[:len(NEU) + 12]
         self.assertNotIn("neutraliser", self.read(raw).extra)

@@ -204,6 +204,20 @@ class TestLoad(unittest.TestCase):
         self.assertTrue(d.depth_profile["is_profile"])
         self.assertEqual(d.regions[1].counts[0], 1100.0)
 
+    def test_one_sweep_count_for_all_levels_is_said(self):
+        d = self.load(spectrum("a", "s1", "C 1s", 292.0, levels=3),
+                      spectrum("b", "s1", "O 1s", 534.0))
+        w = [x for x in d.warnings if "first level" in x]
+        self.assertEqual(len(w), 1)
+        self.assertIn("Affects 1 spectra", w[0])
+        self.assertTrue(all(r.extra["xpsv"].get("counting_of_first_level")
+                            for r in d.regions[:3]))
+        self.assertNotIn("counting_of_first_level",
+                         d.regions[3].extra["xpsv"])
+        # nothing to say when no spectrum has more than one level
+        d2 = self.load(spectrum("a", "s1", "C 1s", 292.0))
+        self.assertFalse([x for x in d2.warnings if "first level" in x])
+
     def test_repeats_without_etch_time_stay_plain_regions(self):
         sp = spectrum("a", "s1", "C 1s", 292.0, levels=2)
         for lv in sp["levels"]:
