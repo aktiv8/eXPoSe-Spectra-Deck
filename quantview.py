@@ -20,6 +20,7 @@ from __future__ import annotations
 import copy
 
 import quant
+import repeats
 import resultspages
 
 PROFILE_MODES = (("element", "Element (at %)"),
@@ -256,3 +257,54 @@ def csv_table(samples, state):
         out += quant.csv_rows(groups, inc, state.transmission, s.rsf_table,
                               s.rsf_library)[1:]
     return out
+
+
+def repeat_samples(samples, state):
+    """Copies of the one-level samples whose only level is the one the user
+    sees (their ticks and the transmission choice applied), which is what a
+    repeat group averages. A depth profile is passed on unchanged so
+    ``repeats.compute`` can say why it is left out."""
+    out = []
+    for s in samples:
+        if not s.levels or s.is_profile:
+            out.append(s)
+            continue
+        c = copy.copy(s)
+        c.levels = [effective(s, 0, state)]
+        out.append(c)
+    return out
+
+
+def repeat_groups(samples, groups, state):
+    """``repeats.compute`` over ``samples`` as the user sees them."""
+    return repeats.compute(repeat_samples(samples, state), groups)
+
+
+MAX_MEMBER_COLUMNS = 6
+
+
+def repeat_table(group):
+    """``(header, rows)`` of one repeat group for the tab: ``rows`` are
+    ``(kind, cells, partial)`` with ``kind`` "region" or "state" and
+    ``partial`` true when fewer members than the group has contributed (the
+    row's ``n`` is below its size). Each member gets its own column up to
+    ``MAX_MEMBER_COLUMNS``, else the values are listed in one column."""
+    heads = repeats.short_labels(group.members)
+    wide = len(group.members) <= MAX_MEMBER_COLUMNS
+    header = ["Region", "State", "Mean at %", "SD (n-1)", "n"]
+    header += heads if wide else ["Values"]
+    rows = []
+    for r in group.rows:
+        by = dict(r.values)
+        cells = [("    " if r.state else "") + r.region, r.state,
+                 f"{r.mean:.2f}", "–" if r.sd is None else f"{r.sd:.2f}",
+                 str(r.n)]
+        if wide:
+            cells += [f"{by[m]:.2f}" if m in by else "–"
+                      for m in group.members]
+        else:
+            cells.append("; ".join(f"{h}={by[m]:.2f}"
+                                   for h, m in zip(heads, group.members)
+                                   if m in by))
+        rows.append(("state" if r.state else "region", cells, r.n < r.of))
+    return header, rows

@@ -212,3 +212,23 @@ def suggest(samples):
         found.setdefault(name, []).append(s.key)
     return {n: {"kind": DEFAULT_KIND, "samples": keys}
             for n, keys in found.items() if n and len(keys) > 1}
+
+
+def short_labels(labels, limit=26):
+    """Column heads for the members of a group: each label without the words
+    every label has (the sample name, "Spot sequence", a shared date), the
+    separators that are left over trimmed. A label with nothing left keeps its
+    last word; one longer than ``limit`` characters is cut."""
+    labels = list(labels)
+    words = [lab.split() for lab in labels]
+    common = set(words[0]) if words else set()
+    for w in words[1:]:
+        common &= set(w)
+    out = []
+    for lab, w in zip(labels, words):
+        kept = [x for x in w if x not in common]
+        t = " ".join(kept).strip(" -–—,") if len(labels) > 1 else lab
+        if not t:
+            t = w[-1] if w else lab
+        out.append(t if len(t) <= limit else t[:limit - 1] + "…")
+    return out

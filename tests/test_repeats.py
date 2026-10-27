@@ -163,6 +163,24 @@ class TestAnnotations(unittest.TestCase):
             {})
 
 
+class TestShortLabels(unittest.TestCase):
+    def test_words_every_label_has_are_dropped(self):
+        got = repeats.short_labels([
+            "ATH PR035 - Spot sequence - 13 Sep 2026 03:34",
+            "ATH PR035 - Spot sequence - location 1 - 13 Sep 2026 03:54",
+            "ATH PR035 - Spot sequence - location 2 - 13 Sep 2026 04:17"])
+        self.assertEqual(got, ["03:34", "location 1 03:54",
+                               "location 2 04:17"])
+
+    def test_edges(self):
+        self.assertEqual(repeats.short_labels(["A", "B"]), ["A", "B"])
+        self.assertEqual(repeats.short_labels(["Same"]), ["Same"])
+        self.assertEqual(repeats.short_labels(["S x", "S"]), ["x", "S"])
+        self.assertEqual(repeats.short_labels([]), [])
+        self.assertEqual(len(repeats.short_labels(
+            ["a" + "x" * 60, "b" + "y" * 60])[0]), 26)
+
+
 class TestSuggest(unittest.TestCase):
     def test_base_label(self):
         for label, want in (

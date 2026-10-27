@@ -39,6 +39,7 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 
 import quantview
+import repeats
 import reportspec
 import resultspages
 import rsf as rsf_lib
@@ -63,6 +64,9 @@ class QuantPanel(ttk.Frame):
         self._row_entry = {}            # tree row id -> entry index (ticks)
         self._level_of_row = None       # level index the rows belong to
         self._choices = []              # [(label, level index or None)]
+        self.group = None               # name of the repeat group shown
+        self._group_labels = {}         # sample-box text -> group name
+        self._groups_dialog = None
 
         top = ttk.Frame(self)
         top.pack(side="top", fill="x", padx=6, pady=(6, 2))
@@ -116,6 +120,9 @@ class QuantPanel(ttk.Frame):
         self.export_btn = ttk.Button(bar, text="Export CSV…",
                                      command=self.export_csv)
         self.export_btn.pack(side="right")
+        self.groups_btn = ttk.Button(bar, text="Groups…",
+                                     command=self.open_groups)
+        self.groups_btn.pack(side="right", padx=(0, 6))
         self.reset_btn = ttk.Button(bar, text="Reset ticks",
                                     command=self.reset_ticks)
         self.reset_btn.pack(side="right", padx=(0, 6))
@@ -183,8 +190,14 @@ class QuantPanel(ttk.Frame):
         self._show_sample()
 
     def reset_ticks(self):
-        """Back to the report's own choice of what counts."""
-        self.view.reset(self.sample.key if self.sample else None)
+        """Back to the report's own choice of what counts (in a group view,
+        of every member)."""
+        if self.group is not None:
+            for k in self.app.ann.repeat_groups.get(self.group, {}).get(
+                    "samples", []):
+                self.view.reset(k)
+        else:
+            self.view.reset(self.sample.key if self.sample else None)
         self._show_sample()
 
     def reset_all_ticks(self):
@@ -212,7 +225,7 @@ class QuantPanel(ttk.Frame):
         # a sample with no fit of its own (CasaXPS's own export only) is
         # already shown in the "CasaXPS quant" tab -- not duplicated here
         self.samples = [s for s in results.samples if s.levels]
-        self.sample_box["values"] = [s.label for s in self.samples]
+        self._set_box_values()
         has_t = quantview.transmission_available(self.samples)
         self.trans_check.configure(state="normal" if has_t else "disabled")
         if not has_t and self.view.transmission:
@@ -223,6 +236,13 @@ class QuantPanel(ttk.Frame):
             self.sample = None
             self._show_sample()
             return
+        shown = next((lab for lab, n in self._group_labels.items()
+                      if n == self.group), None)
+        if shown is not None:               # keep showing the group
+            self.sample_var.set(shown)
+            self._show_sample()
+            return
+        self.group = None
         key = self.sample.key if self.sample else None
         match = next((s for s in self.samples if s.key == key), None) \
             or self.samples[0]
@@ -230,8 +250,67 @@ class QuantPanel(ttk.Frame):
         self.sample_var.set(match.label)
         self._show_sample()
 
+    def _set_box_values(self):
+        """The samples, then one entry per saved repeat group that has at
+        least one sample here."""
+        keys = {s.key for s in self.samples}
+        self._group_labels = {}
+        for name, g in self.app.ann.repeat_groups.items():
+            n = sum(1 for k in g["samples"] if k in keys)
+            if n:
+                plural = "s" if n != 1 else ""
+                self._group_labels[f"Group: {name} ({n} sample{plural})"] = name
+        self.sample_box["values"] = ([s.label for s in self.samples]
+                                     + list(self._group_labels))
+
+    def _show_group(self, name):
+        """The mean, spread and count of a repeat group (``repeats.py``) with
+        the user's ticks applied; no tick column, no depth-level choice."""
+        self.group = name
+        self.sample = None
+        self._row_entry = {}
+        self._level_of_row = None
+        self._choices = []
+        self._show_row(False)
+        self.view_box["values"] = []
+        self.view_var.set("")
+        self.view_box.configure(state="disabled")
+        self.mode_box.configure(state="disabled")
+        g = quantview.repeat_groups(
+            self.samples, {name: self.app.ann.repeat_groups[name]},
+            self.view)[0]
+        header, rows = quantview.repeat_table(g)
+        self.tree.configure(show="headings")
+        self._set_columns(header)
+        self._fill([(k, c) for k, c, _p in rows])
+        for iid, (_k, _c, partial) in zip(self.tree.get_children(), rows):
+            if partial:
+                self.tree.item(iid, tags=tuple(self.tree.item(iid, "tags"))
+                               + ("changed",))
+        self._set_notes(list(g.notes) + [
+            "Each value is that sample's own composition with your ticks "
+            "applied. A bold row was found in fewer samples than the group "
+            "has; a mean over one sample has no spread."])
+
+    def open_groups(self):
+        """The repeat-group editor (one window at a time)."""
+        d = self._groups_dialog
+        try:
+            if d is not None and d.winfo_exists():
+                d.lift()
+                return d
+        except tk.TclError:
+            pass
+        self._groups_dialog = RepeatGroupsDialog(self, self.app)
+        return self._groups_dialog
+
     def _show_sample(self):
         label = self.sample_var.get()
+        gname = self._group_labels.get(label)
+        if gname is not None:
+            self._show_group(gname)
+            return
+        self.group = None
         self.sample = next((s for s in self.samples if s.label == label),
                            None)
         self._row_entry = {}
@@ -322,14 +401,20 @@ class QuantPanel(ttk.Frame):
         ``path`` is given. Returns the path written, or None."""
         if not self.samples:
             return None
+        in_group = self.group is not None
+        if in_group:
+            rows = repeats.csv_rows(quantview.repeat_groups(
+                self.samples, self.app.ann.repeat_groups, self.view))
         if path is None:
             path = filedialog.asksaveasfilename(
                 parent=self, defaultextension=".csv",
-                initialfile="quantification.csv",
+                initialfile=("quantification_repeat_groups.csv" if in_group
+                             else "quantification.csv"),
                 filetypes=[("CSV", "*.csv"), ("All files", "*.*")])
         if not path:
             return None
-        rows = quantview.csv_table(self.samples, self.view)
+        if not in_group:
+            rows = quantview.csv_table(self.samples, self.view)
         # UTF-8 with a BOM so Excel reads the Greek/degree signs
         with open(path, "w", encoding="utf-8-sig", newline="") as fh:
             csv.writer(fh).writerows(rows)
@@ -373,3 +458,230 @@ class QuantPanel(ttk.Frame):
         self.notes.delete("1.0", "end")
         self.notes.insert("end", "\n".join(notes))
         self.notes.configure(state="disabled")
+
+
+class RepeatGroupsDialog(tk.Toplevel):
+    """Create and edit repeat groups (``repeats.py``): which samples are
+    repeats of one another. Every change is saved to the workbook's
+    annotations at once and the Quantification tab redrawn. The behaviour is
+    in plain methods (``new_group``, ``select``, ``set_name``, ``set_kind``,
+    ``toggle_sample``, ``suggest``, ``delete_group``) that the widgets call,
+    so tests need no mouse.
+
+    A group with no sample is kept only in this window (the annotations store
+    none); a sample key that is no longer among the quantified samples stays
+    in its group, listed as missing, until it is unticked."""
+
+    def __init__(self, panel, app):
+        super().__init__(panel)
+        self.panel, self.app = panel, app
+        self.title("Repeat groups")
+        self.drafts = {name: {"kind": g["kind"],
+                              "samples": list(g["samples"])}
+                       for name, g in app.ann.repeat_groups.items()}
+        self.current = next(iter(self.drafts), None)
+        self._build()
+        self._fill_groups()
+        import workbook_ui
+        workbook_ui._finish(self, app, 760, 460)
+        workbook_ui.keep_in_front(self, panel.winfo_toplevel())
+
+    # -- what can be a member -------------------------------------------------
+    def candidates(self):
+        """``[(key, label, usable)]``: the quantified samples, then the keys
+        a group names that are no longer there. A depth profile is not a
+        repeat, so it is listed but cannot be ticked."""
+        out = [(s.key, s.label, bool(s.levels) and not s.is_profile)
+               for s in self.panel.samples]
+        have = {k for k, _l, _u in out}
+        for g in self.drafts.values():
+            for k in g["samples"]:
+                if k not in have:
+                    have.add(k)
+                    out.append((k, f"{k} (missing)", True))
+        return out
+
+    # -- behaviour --------------------------------------------------------------
+    def _commit(self, name):
+        g = self.drafts.get(name)
+        if g and g["samples"]:
+            self.app.ann.set_repeat_group(name, g["kind"], g["samples"])
+        else:
+            self.app.ann.remove_repeat_group(name)
+        self.app._ann_changed(relabel=False)
+        self.panel.refresh()
+
+    def new_group(self, name=None):
+        base = (name or "Group").strip() or "Group"
+        name, n = base, 1
+        while name in self.drafts:
+            n += 1
+            name = f"{base} {n}"
+        self.drafts[name] = {"kind": repeats.DEFAULT_KIND, "samples": []}
+        self.current = name
+        self._fill_groups()
+        return name
+
+    def select(self, name):
+        if name in self.drafts:
+            self.current = name
+            self._fill_groups()
+
+    def set_name(self, new):
+        """Rename the current group; False when the name is empty or taken."""
+        new = (new or "").strip()
+        old = self.current
+        if old is None or not new or (new != old and new in self.drafts):
+            return False
+        if new != old:
+            self.drafts = {(new if k == old else k): v
+                           for k, v in self.drafts.items()}
+            self.app.ann.remove_repeat_group(old)
+            self.current = new
+            self._commit(new)
+            self._fill_groups()
+        return True
+
+    def set_kind(self, kind):
+        g = self.drafts.get(self.current)
+        if g is None or kind not in repeats.KINDS:
+            return False
+        g["kind"] = kind
+        self._commit(self.current)
+        return True
+
+    def toggle_sample(self, key):
+        """Add or remove a sample; False for one that cannot be a member."""
+        g = self.drafts.get(self.current)
+        usable = {k: u for k, _l, u in self.candidates()}
+        if g is None or key not in usable:
+            return False
+        if key in g["samples"]:
+            g["samples"].remove(key)
+        elif usable[key]:
+            g["samples"].append(key)
+        else:
+            return False
+        self._commit(self.current)
+        self._fill_members()
+        return True
+
+    def suggest(self):
+        """Add the groups the sample names suggest; none that exist already
+        and no sample list is changed. Returns the names added."""
+        added = []
+        for name, g in repeats.suggest(self.panel.samples).items():
+            if name not in self.drafts:
+                self.drafts[name] = g
+                self._commit(name)
+                added.append(name)
+        if added:
+            self.current = self.current or added[0]
+            self._fill_groups()
+        return added
+
+    def delete_group(self, name=None):
+        name = name or self.current
+        if name not in self.drafts:
+            return
+        del self.drafts[name]
+        self.app.ann.remove_repeat_group(name)
+        self.current = next(iter(self.drafts), None)
+        self.app._ann_changed(relabel=False)
+        self.panel.refresh()
+        self._fill_groups()
+
+    # -- widgets ------------------------------------------------------------------
+    def _build(self):
+        left = ttk.Frame(self)
+        left.pack(side="left", fill="y", padx=(8, 4), pady=8)
+        ttk.Label(left, text="Groups").pack(anchor="w")
+        self.listbox = tk.Listbox(left, width=24, exportselection=False,
+                                  height=10)
+        self.listbox.pack(fill="y", expand=True, pady=(2, 6))
+        self.listbox.bind("<<ListboxSelect>>", self._picked)
+        row = ttk.Frame(left)
+        row.pack(fill="x")
+        ttk.Button(row, text="New", command=self.new_group).pack(side="left")
+        ttk.Button(row, text="Delete", command=self.delete_group).pack(
+            side="left", padx=(6, 0))
+        ttk.Button(left, text="Suggest from names",
+                   command=self.suggest).pack(fill="x", pady=(8, 0))
+
+        right = ttk.Frame(self)
+        right.pack(side="left", fill="both", expand=True, padx=(4, 8), pady=8)
+        form = ttk.Frame(right)
+        form.pack(fill="x")
+        ttk.Label(form, text="Name").grid(row=0, column=0, sticky="w")
+        self.name_var = tk.StringVar()
+        name = ttk.Entry(form, textvariable=self.name_var)
+        name.grid(row=0, column=1, sticky="we", padx=6, pady=2)
+        name.bind("<Return>", lambda e: self.set_name(self.name_var.get()))
+        name.bind("<FocusOut>", lambda e: self.set_name(self.name_var.get()))
+        ttk.Label(form, text="Kind").grid(row=1, column=0, sticky="w")
+        self.kind_var = tk.StringVar()
+        self.kind_box = ttk.Combobox(
+            form, textvariable=self.kind_var, state="readonly",
+            values=list(repeats.KINDS.values()))
+        self.kind_box.grid(row=1, column=1, sticky="we", padx=6, pady=2)
+        self.kind_box.bind("<<ComboboxSelected>>", lambda e: self.set_kind(
+            next((k for k, t in repeats.KINDS.items()
+                  if t == self.kind_var.get()), None)))
+        form.columnconfigure(1, weight=1)
+        ttk.Label(right, text="Samples in this group").pack(
+            anchor="w", pady=(8, 2))
+        frame = ttk.Frame(right)
+        frame.pack(fill="both", expand=True)
+        self.members = ttk.Treeview(frame, show="tree", selectmode="none")
+        vsb = ttk.Scrollbar(frame, orient="vertical",
+                            command=self.members.yview)
+        self.members.configure(yscrollcommand=vsb.set)
+        self.members.pack(side="left", fill="both", expand=True)
+        vsb.pack(side="right", fill="y")
+        self.members.tag_configure("off", foreground="#8a9099")
+        self.members.bind("<Button-1>", self._member_click)
+        self._member_key = {}
+        ttk.Label(right, foreground="#5b6470", wraplength=480,
+                  text="Renaming a sample takes it out of its group. "
+                       "Depth profiles are not repeats.").pack(
+            anchor="w", pady=(6, 0))
+        ttk.Button(right, text="Close", command=self.destroy).pack(
+            anchor="e", pady=(6, 0))
+
+    def _picked(self, _event=None):
+        sel = self.listbox.curselection()
+        if sel:
+            self.select(self.listbox.get(sel[0]))
+
+    def _fill_groups(self):
+        self.listbox.delete(0, "end")
+        for name in self.drafts:
+            self.listbox.insert("end", name)
+        if self.current in self.drafts:
+            i = list(self.drafts).index(self.current)
+            self.listbox.selection_set(i)
+        g = self.drafts.get(self.current)
+        self.name_var.set(self.current or "")
+        self.kind_var.set(repeats.KINDS[g["kind"]] if g else "")
+        self._fill_members()
+
+    def _fill_members(self):
+        self.members.delete(*self.members.get_children())
+        self._member_key = {}
+        g = self.drafts.get(self.current)
+        if g is None:
+            return
+        for key, label, usable in self.candidates():
+            on = key in g["samples"]
+            text = (TICK_ON if on else TICK_OFF) + " " + label
+            if not usable:
+                text += "  (depth profile: not a repeat)"
+            iid = self.members.insert("", "end", text=text,
+                                      tags=() if usable else ("off",))
+            self._member_key[iid] = key
+
+    def _member_click(self, event):
+        iid = self.members.identify_row(event.y)
+        if iid in self._member_key:
+            self.toggle_sample(self._member_key[iid])
+        return "break"
