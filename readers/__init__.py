@@ -8,7 +8,7 @@ from .base import Region, ImageBlob, TreeNode, SpectrumFile
 from .kratos_experiment import EscapeParser
 from . import (vamas, thermo_avg, thermo_vgd, phi_spe, scienta_txt,
                kratos_kal, kratos_dset, thermo_vgx, thermo_vgp,
-               khervefitting_kfit, column_text, nexus_nexafs, nexus_xps)
+               khervefitting_kfit, column_text, nexus_nexafs, nexus_xps, xpsv)
 from .thermo_experiment import (ThermoExperiment, LoadCancelled, find_vgx,
                                 looks_like_experiment, experiment_roots)
 
@@ -43,6 +43,7 @@ READERS = [
      ("*.dset",)),
     ("Kratos ESCApe (.experiment)", _sniff_experiment, EscapeParser,
      ("*.experiment",)),
+    ("XPSView session (.xpsv)", xpsv.sniff, xpsv.XpsvFile, xpsv.PATTERNS),
     # before .kfit: its sniff accepts any HDF5 signature
     ("NeXus (.nxs): NXxps spectra, NEXAFS scans", nexus_nexafs.sniff,
      nexus_xps.NexusFile, ("*.nxs",)),
