@@ -86,6 +86,37 @@ class Annotations:
     repeat_groups: dict = field(default_factory=dict)    # name -> {kind, samples} (repeats.py)
     extra: dict = field(default_factory=dict)            # unknown keys kept
 
+    # -- samples a reader split into several (Kratos runs) ------------------------
+    ADOPTED = ("region_names", "sample_notes", "region_notes", "shifts",
+               "markers", "sputter", "reels", "nexafs_edge")
+
+    def adopt_aliases(self, fid, aliases):
+        """``aliases`` maps a sample the reader made out of a plainer one
+        (``SpectrumFile.sample_aliases``) to that plain name. Whatever was
+        saved for the plain sample (notes, BE shifts, markers, sputter
+        settings ...) is copied to the new one where it has nothing of its own,
+        so edits made before a file's runs were told apart still apply. The
+        plain sample's rename is not copied (the new name says which run it
+        is). Returns how many entries were copied."""
+        n = 0
+        for new, plain in (aliases or {}).items():
+            if new == plain:
+                continue
+            ps, ns = sample_key(fid, plain), sample_key(fid, new)
+            for table in self.ADOPTED:
+                d = getattr(self, table)
+                for key in list(d):
+                    if key == ps:
+                        target = ns
+                    elif key.startswith(ps + "|"):
+                        target = ns + key[len(ps):]
+                    else:
+                        continue
+                    if target not in d:
+                        d[target] = copy.deepcopy(d[key])
+                        n += 1
+        return n
+
     # -- names -----------------------------------------------------------------
     def sample_label(self, fid, sample):
         return self.sample_names.get(sample_key(fid, sample)) or sample

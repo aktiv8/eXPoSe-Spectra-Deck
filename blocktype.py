@@ -77,11 +77,14 @@ def text(b):
 def kratos_runs(raw, regions):
     """Give each region of a Kratos ESCApe ``.experiment`` the block of the run it
     sits in: the last run marker in the file before its spectrum. A region
-    before any marker, or a file with none, gets nothing."""
+    before any marker, or a file with none, gets nothing. Returns the runs that
+    have spectra, in file order: ``[{"run", "kind", "start", "end",
+    "regions"}]`` with ``start`` / ``end`` the byte range from its marker to the
+    next one (the run's own records, such as its etch durations, lie there)."""
     marks = [(m.start(), m.group(1).decode()) for m in RUN_MARKER.finditer(raw)
              if m.group(1).decode() in RUN_CLASSES]
     if not marks:
-        return 0
+        return []
     starts = [o for o, _n in marks]
     import bisect
     members = {}
@@ -89,11 +92,16 @@ def kratos_runs(raw, regions):
         i = bisect.bisect_right(starts, r.offset) - 1
         if i >= 0:
             members.setdefault(i, []).append(r)
-    for i, rs in members.items():
+    runs = []
+    for i in sorted(members):
+        rs = members[i]
         kind, why = RUN_CLASSES[marks[i][1]]
         for r in rs:
             r.extra["block"] = make(kind, why, run=i + 1, size=len(rs))
-    return len(members)
+        runs.append({"run": i + 1, "kind": kind, "regions": rs,
+                     "start": starts[i],
+                     "end": starts[i + 1] if i + 1 < len(starts) else len(raw)})
+    return runs
 
 
 def levels_block(n_levels, etch=False, tilt=False):

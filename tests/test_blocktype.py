@@ -60,8 +60,10 @@ class TestKratosRuns(unittest.TestCase):
         raw = (b"x" * 100 + RUN + b"UserSequenceData\x00" + b"y" * 100
                + RUN + b"DepthProfileData\x00" + b"z" * 100)
         a, b, c, d = self.regions(10, 150, 300, 310)
-        n = blocktype.kratos_runs(raw, [a, b, c, d])
-        self.assertEqual(n, 2)
+        runs = blocktype.kratos_runs(raw, [a, b, c, d])
+        self.assertEqual([r["run"] for r in runs], [1, 2])
+        self.assertEqual(runs[0]["regions"], [b])
+        self.assertEqual(runs[0]["end"], runs[1]["start"])     # up to the next
         self.assertNotIn("block", a.extra)           # before the first run
         self.assertEqual((b.extra["block"]["kind"], b.extra["block"]["run"],
                           b.extra["block"]["size"]), ("sequence", 1, 1))
@@ -82,9 +84,9 @@ class TestKratosRuns(unittest.TestCase):
     def test_an_unknown_class_or_no_marker_labels_nothing(self):
         (r,) = self.regions(500)
         self.assertEqual(blocktype.kratos_runs(
-            RUN + b"SomethingNewData" + b"." * 600, [r]), 0)
+            RUN + b"SomethingNewData" + b"." * 600, [r]), [])
         self.assertNotIn("block", r.extra)
-        self.assertEqual(blocktype.kratos_runs(b"nothing", [r]), 0)
+        self.assertEqual(blocktype.kratos_runs(b"nothing", [r]), [])
 
     def test_the_metadata_row(self):
         f = SpectrumFile()

@@ -51,6 +51,8 @@ class EscapeParser(SpectrumFile):
                               "etch_source": ""}
         self.corruption = {"corrupted": False, "message": ""}
         self.summary = {}
+        self._runs = []                # blocktype.kratos_runs
+        self.sample_aliases = {}       # split sample -> its plain name
 
     # -- public ---------------------------------------------------------
     def load(self, path: str):
@@ -65,8 +67,10 @@ class EscapeParser(SpectrumFile):
         for r in self.regions:
             r.source = os.path.basename(path)
         self._parse_positions()
+        self._runs = blocktype.kratos_runs(self.raw, self.regions)
+        self._assign_run_samples()
         self._parse_depth_profile()
-        blocktype.kratos_runs(self.raw, self.regions)
+        self._qualify_samples()
         self._parse_images()
         self._build_tree()
         self._build_summary()
@@ -558,27 +562,118 @@ class EscapeParser(SpectrumFile):
             if len(ys) >= 2:
                 result = ys
                 break
+            if len(ys) == 1 and not result:
+                result = ys        # one etch: nothing to tell the strides apart
         return result
 
-    def _parse_depth_profile(self):
-        raw = self.raw
-        is_profile = (b"DepthProfileData" in raw or b"Depth Profile" in raw
-                      or b"Mb6EtchSettings" in raw)
-        if not is_profile or not self.regions:
-            return
+    LOCATION_MARKER_NAME = b"InstrumentAnalysisLocation"
 
-        names = [r.name for r in self.regions]
+    def _assign_run_samples(self):
+        """The sample of each run, from the analysis-location record just
+        before the run's marker: the two strings "Analysis", "Analysis", the
+        stage position, and then the sample's name. The sample blocks alone
+        (``_parse_samples``) name only the runs that open a new sample, so the
+        depth profiles that followed the last one all took its name (in one
+        file the four profiles of the first sample were given to the second).
+        A run whose record has no such name keeps what it had."""
+        import bisect
+        locs = self._find_all(self.LOCATION_MARKER_NAME)
+        if not self._runs or not locs:
+            return
+        ignore = {"Analysis", "Spectroscopy", "Slot", "Hybrid", "Tilt"}
+        for run in self._runs:
+            i = bisect.bisect_left(locs, run["start"]) - 1
+            if i < 0:
+                continue
+            names = [s for _, s in self._strings_between(
+                locs[i], min(run["start"], locs[i] + 400))]
+            ends = [j for j, s in enumerate(names) if s == "Analysis"]
+            if len(ends) < 2:
+                continue
+            name = None
+            for s in names[ends[-1] + 1:]:
+                if "Kernel" in s or "." in s:      # the next record: no name
+                    break
+                if s not in ignore and any(c.isalnum() for c in s):
+                    name = s
+                    break
+            if name:
+                for r in run["regions"]:
+                    r.sample = name
+
+    # what a run is called when a sample has several (see _qualify_samples)
+    RUN_NAMES = {"sequence": "Sequence", "depth_profile": "Depth profile",
+                 "angle_resolved": "Angle-resolved", "etch": "Etch",
+                 "repeat_sequence": "Repeated sequence"}
+
+    def _parse_depth_profile(self):
+        """Levels and etch times of each depth-profile run. With the run
+        markers (``blocktype.kratos_runs``) every profile is its own series of
+        levels 0, 1, 2 ... with the etch durations of its own run, and the
+        spectra of any other run have no level or etch time; a file without
+        markers keeps the old reading, one profile over the whole file."""
+        raw = self.raw
+        if self._runs:
+            groups = [(r["regions"], r["start"], r["end"])
+                      for r in self._runs if r["kind"] == "depth_profile"]
+        elif (b"DepthProfileData" in raw or b"Depth Profile" in raw
+              or b"Mb6EtchSettings" in raw) and self.regions:
+            groups = [(self.regions, 0, len(raw))]
+        else:
+            groups = []
+        profiles = [self._profile_of(*g) for g in groups]
+        if not profiles:
+            return
+        import sputter
+        for p in profiles:
+            if p["beam"]:
+                self.sputter_hint = sputter.from_text(p["beam"])
+                break
+        longest = max(profiles, key=lambda p: p["n_levels"])
+        sources = {p["etch_source"] for p in profiles}
+        self.depth_profile = {
+            "is_profile": True,
+            "n_levels": longest["n_levels"],
+            "regions_per_level": longest["regions_per_level"],
+            "etch_per_level": profiles[0]["etch_per_level"],
+            "total_etch_time": max(p["total_etch_time"] for p in profiles),
+            "cumulative": longest["cumulative"],
+            "etch_source": (sources.pop() if len(sources) == 1
+                            else "from the instrument record of each run"),
+            "n_etches": longest["n_etches"],
+            "n_runs": len(profiles),
+            "runs": [{k: p[k] for k in ("n_levels", "regions_per_level",
+                                        "etch_per_level", "total_etch_time",
+                                        "etch_source", "beam")}
+                     for p in profiles],
+        }
+
+    def _profile_of(self, regions, lo, hi):
+        """Number the levels of one depth profile (``regions`` in file order,
+        its records between byte ``lo`` and ``hi``) and give each its etch
+        time; returns what was found."""
+        raw = self.raw
+        names = [r.name for r in regions]
         rpl = next((i for i in range(1, len(names))
                     if names[i] == names[0]), len(names))
         if rpl < 1 or len(names) % rpl != 0:
             rpl = 1
-        n_levels = len(self.regions) // rpl
+        n_levels = len(regions) // rpl
 
         durs = []
         for off in self._find_all(self.GRAPH_MARKER):
+            if not lo <= off < hi:
+                continue
             labels = [s for _, s in self._strings_between(off, off + 60)]
             if any("Duration" in s for s in labels):
-                durs += self._decode_duration_graph(off)
+                got = self._decode_duration_graph(off)
+                if not got and n_levels == 2:
+                    # one etch: the graph holds no points, only the value in
+                    # its header (60, 300, 600 s in three profiles of one
+                    # file, equal to XPSView's), 87 bytes after the marker
+                    v = self._doubles(off + 87, 1)
+                    got = [v[0]] if v and 0 < v[0] < 1e5 else []
+                durs += got
 
         n_etches = max(0, n_levels - 1)
         per_etch, source = [], ""
@@ -603,21 +698,23 @@ class EscapeParser(SpectrumFile):
         for dd in per_etch:
             cumulative.append(cumulative[-1] + dd)
 
-        for idx, r in enumerate(self.regions):
+        for idx, r in enumerate(regions):
             lvl = idx // rpl
             r.etch_level = lvl
             r.etch_time = cumulative[lvl] if lvl < len(cumulative) else None
 
-        # the etch settings name the beam, e.g. "5 keV Ar+"
-        import sputter
-        m = re.search(rb"(\d+(?:\.\d+)?)\s?keV\s+([A-Za-z][A-Za-z0-9]*\+)",
-                      raw)
-        if m:
-            self.sputter_hint = sputter.from_text(
-                f"{m.group(1).decode()} keV {m.group(2).decode()}")
-
-        self.depth_profile = {
-            "is_profile": True,
+        # the etch settings of this run name the beam, e.g. "5 keV Ar+"
+        beam_re = rb"(\d+(?:\.\d+)?)\s?keV\s+([A-Za-z][A-Za-z0-9]*\+)"
+        if self._runs:      # the run's etch settings are written before its marker
+            found = list(re.finditer(beam_re, raw[max(0, lo - 3000):lo]))
+            m = found[-1] if found else None
+        else:
+            m = re.search(beam_re, raw)
+        beam = f"{m.group(1).decode()} keV {m.group(2).decode()}" if m else ""
+        if beam:
+            for r in regions:
+                r.extra.setdefault("acq_metadata", {})["Etch beam"] = beam
+        return {
             "n_levels": n_levels,
             "regions_per_level": rpl,
             "etch_per_level": (per_etch[0] if per_etch else 0.0),
@@ -625,7 +722,47 @@ class EscapeParser(SpectrumFile):
             "cumulative": cumulative,
             "etch_source": source,
             "n_etches": n_etches,
+            "beam": beam,
         }
+
+    def _qualify_samples(self):
+        """A sample measured in several runs (a spot sequence, then depth
+        profiles ...) is one name in the file, which pooled them: two profiles
+        of one sample overlaid in a waterfall, levels of different profiles in
+        one quantification. Each run of such a sample becomes its own sample,
+        "<sample> - Depth profile 2", numbered by kind through the file
+        (``RUN_NAMES``). A sample with one run keeps its name. The plain name is
+        kept in ``Region.extra["sample_plain"]`` and ``sample_aliases``, from
+        which the app lets the new samples start with the annotations the plain
+        one had."""
+        if not self._runs:
+            return
+        runs_of = {}
+        for run in self._runs:
+            for s in {r.sample for r in run["regions"]}:
+                runs_of.setdefault(s, []).append(run)
+        count, number = {}, {}
+        for run in self._runs:
+            count[run["kind"]] = count.get(run["kind"], 0) + 1
+            number[run["run"]] = count[run["kind"]]
+        for sample, runs in runs_of.items():
+            if len(runs) < 2:
+                continue
+            for run in runs:
+                new = (f"{sample} - {self.RUN_NAMES[run['kind']]} "
+                       f"{number[run['run']]}")
+                mine = [r for r in run["regions"] if r.sample == sample]
+                for r in mine:
+                    r.sample = new
+                    r.extra["sample_plain"] = sample
+                self.sample_aliases[new] = sample
+                first = next((r for r in mine if r.pos_x is not None), None)
+                if first is not None:
+                    self._sample_pos[new] = (first.pos_x, first.pos_y)
+                elif sample in self._sample_pos:
+                    self._sample_pos[new] = self._sample_pos[sample]
+            if not any(r.sample == sample for r in self.regions):
+                self._sample_pos.pop(sample, None)
 
     # -- analysis positions --------------------------------------------
     def _parse_positions(self):

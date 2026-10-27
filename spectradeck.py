@@ -2454,6 +2454,7 @@ class Workspace:
         self.file_ids[id(parser)] = fid
         self.file_origin[id(parser)] = origin or path
         parser.annotations, parser.file_id = self.ann, fid
+        self.ann.adopt_aliases(fid, getattr(parser, "sample_aliases", None))
         if getattr(parser, "import_options", None):     # how it was read
             self.ann.set_import(fid, parser.import_options)
         for r in parser.regions:

@@ -321,6 +321,10 @@ class SpectrumFile:
         self.annotations = None
         self.file_id = ""
         self._pos = {}                 # id(region) -> position in regions
+        # sample name -> the plainer name it came from, where a reader split a
+        # sample into several (Kratos runs); the app lets the new sample begin
+        # with the annotations of the plain one
+        self.sample_aliases: dict = {}
 
     def load(self, path: str):
         raise NotImplementedError
@@ -432,7 +436,11 @@ class SpectrumFile:
                            TreeNode(sample_name or "(unnamed)",
                                     "sample", cols=(pstr, "", "", "")))
 
-            if (not is_profile and not flat
+            # a sample is laid out as a depth profile only if its own spectra
+            # have levels (a file can hold a profile beside plain sequences)
+            prof = bool(is_profile) and any(
+                r.etch_level is not None for r in groups[sample_name])
+            if (not prof and not flat
                     and len(groups[sample_name]) == 1):
                 # one spectrum in this sample: a single row, not three levels
                 r = groups[sample_name][0]
@@ -444,7 +452,7 @@ class SpectrumFile:
                           "")))
                 continue
 
-            if is_profile:
+            if prof:
                 # Sample -> Region type -> per-level leaves
                 byname, rorder = {}, []
                 for r in groups[sample_name]:
