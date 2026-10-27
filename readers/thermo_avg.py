@@ -15,6 +15,7 @@ import os
 import re
 from array import array
 
+import blocktype
 import timing
 from kratosterms import is_iss_lens
 from .base import (Region, ImageBlob, SpectrumFile, canon_region_name,
@@ -372,7 +373,17 @@ class ThermoDataSpaceFile(SpectrumFile):
                     self._sample_pos[sample] = pos
 
         self.regions = regions
+        if extra_kind == "position" and len(regions) > 1:
+            for r in regions:
+                r.extra["block"] = blocktype.make(
+                    "multi_point", f"{len(regions)} analysis points in this "
+                    "file", size=len(regions))
         if extra_kind == "levels":
+            blk = blocktype.levels_block(
+                len(regions), any(r.etch_time is not None for r in regions),
+                any("tilt" in r.extra for r in regions))
+            for r in regions:
+                r.extra["block"] = dict(blk)
             times = sorted({r.etch_time for r in regions
                             if r.etch_time is not None})
             self.depth_profile = {

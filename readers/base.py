@@ -13,6 +13,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Optional
 
+import blocktype
 import timing
 import txfn
 from kratosterms import is_iss_lens
@@ -574,6 +575,8 @@ class SpectrumFile:
             md["Analyser mode"] = r.extra["analyser_mode"]
         if r.extra.get("acq_mode"):
             md["Acquisition mode"] = r.extra["acq_mode"]
+        if r.extra.get("block"):
+            md["Block type"] = blocktype.text(r.extra["block"])
         tx = r.extra.get("txfn")
         if tx and tx.get("removed") is not None:
             md["Transmission function"] = (

@@ -11,6 +11,7 @@ import struct
 import datetime
 from typing import Optional
 
+import blocktype
 from .base import Region, ImageBlob, TreeNode, SpectrumFile
 
 
@@ -65,6 +66,7 @@ class EscapeParser(SpectrumFile):
             r.source = os.path.basename(path)
         self._parse_positions()
         self._parse_depth_profile()
+        blocktype.kratos_runs(self.raw, self.regions)
         self._parse_images()
         self._build_tree()
         self._build_summary()
