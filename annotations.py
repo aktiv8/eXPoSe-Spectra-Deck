@@ -22,6 +22,7 @@ import columntext
 import elements
 import nexafs
 import nexus_settings
+import repeats
 import sputter as sputter_mod
 
 VERSION = 1
@@ -82,6 +83,7 @@ class Annotations:
     imports: dict = field(default_factory=dict)          # file id -> how a column-text file is read
     nexafs_ring: bool = False                            # NEXAFS scaled to the mean ring current
     nexafs_edge: dict = field(default_factory=dict)      # region key -> edge normalisation (nexafs.py)
+    repeat_groups: dict = field(default_factory=dict)    # name -> {kind, samples} (repeats.py)
     extra: dict = field(default_factory=dict)            # unknown keys kept
 
     # -- names -----------------------------------------------------------------
@@ -277,6 +279,21 @@ class Annotations:
         else:
             self.nexafs_edge.pop(key, None)
 
+    # -- repeat groups (samples that repeat one another; see repeats.py) ------------
+    def set_repeat_group(self, name, kind, sample_keys):
+        """Create or replace a group; an empty list of samples removes it."""
+        name = (name or "").strip()
+        if not name:
+            return
+        g = repeats.sanitise_group({"kind": kind, "samples": sample_keys})
+        if g:
+            self.repeat_groups[name] = g
+        else:
+            self.repeat_groups.pop(name, None)
+
+    def remove_repeat_group(self, name):
+        self.repeat_groups.pop(name, None)
+
     # -- instrument settings for NeXus (per file) ------------------------------------
     def instrument_for(self, fid):
         """The file's instrument settings (only what is set), or {}."""
@@ -322,7 +339,7 @@ class Annotations:
                     or self.calibration_statement or self.experiment_notes
                     or self.sputter or self.reels or self.instrument
                     or self.iss or self.imports or self.nexafs_ring
-                    or self.nexafs_edge)
+                    or self.nexafs_edge or self.repeat_groups)
 
     def copy(self):
         return copy.deepcopy(self)
@@ -338,6 +355,8 @@ class Annotations:
             d["nexafs_ring"] = True
         if self.nexafs_edge:
             d["nexafs_edge"] = copy.deepcopy(self.nexafs_edge)
+        if self.repeat_groups:
+            d["repeat_groups"] = copy.deepcopy(self.repeat_groups)
         d.update(self.extra)
         return d
 
@@ -351,7 +370,7 @@ class Annotations:
                  "region_notes", "md_edits", "shifts", "calibration",
                  "calibration_statement", "markers", "experiment_notes",
                  "sputter", "reels", "instrument", "iss", "imports",
-                 "nexafs_ring", "nexafs_edge"}
+                 "nexafs_ring", "nexafs_edge", "repeat_groups"}
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes"):
             v = data.get(name)
@@ -408,6 +427,7 @@ class Annotations:
                 clean = nexafs.sanitise_edge(x)
                 if clean:
                     a.nexafs_edge[str(k)] = clean
+        a.repeat_groups = repeats.sanitise_groups(data.get("repeat_groups"))
         v = data.get("instrument")
         if isinstance(v, dict):
             for k, x in v.items():
