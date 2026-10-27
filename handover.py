@@ -215,6 +215,7 @@ def casaquant_parts(raw):
 
 
 REPEAT_GROUPS_ARC = "quantification/quantification_repeat_groups.csv"
+QUANT_ARC = "quantification/quantification.csv"
 
 
 def repeat_group_parts(groups):
@@ -232,6 +233,27 @@ def repeat_group_parts(groups):
     return [Part(REPEAT_GROUPS_ARC,
                  "mean, standard deviation (n-1) and n of the atomic % over "
                  "each repeat group, with the individual values",
+                 data=buf.getvalue().encode("utf-8-sig"))]
+
+
+def quantification_parts(results, skip=()):
+    """``quantification/quantification.csv``: atomic % per sample, depth level,
+    fitted region and chemical state, as the report states them
+    (``resultspages.csv_table``), UTF-8 with a byte-order mark; [] when no
+    sample has a fit."""
+    import csv
+    import io
+    import resultspages
+    samples = [s for s in (results.chosen(skip) if results else [])
+               if s.levels]
+    rows = resultspages.csv_table(samples)
+    if len(rows) < 2:
+        return []
+    buf = io.StringIO(newline="")
+    csv.writer(buf).writerows(rows)
+    return [Part(QUANT_ARC,
+                 "atomic % per sample, depth level, fitted region and "
+                 "chemical state, as in the report",
                  data=buf.getvalue().encode("utf-8-sig"))]
 
 
@@ -293,6 +315,16 @@ def readme_text(details, parts, file_rows=(), calibration="", when=None):
                          f"{_human(r.get('size', 0))})")
             if r.get("sha256"):
                 lines.append(f"      sha256 {r['sha256']}")
+    if any(p.arc == QUANT_ARC for p in parts):
+        import resultspages
+        lines += ["", "About the quantification", "------------------------"]
+        lines += [resultspages.METHOD, ""]
+        lines += ["quantification.csv has one row per fitted region (area, "
+                  "RSF, area / RSF and",
+                  "atomic %) and, under it, one per chemical state; each "
+                  "sample and depth level",
+                  "is a separate total. A region left out says why in the "
+                  "Note column.", ""]
     if any(p.arc == REPEAT_GROUPS_ARC for p in parts):
         lines += ["", "About the repeat groups", "-----------------------",
                   "Each group is a set of samples that repeat one another "

@@ -362,6 +362,24 @@ def repeat_table(group, weights_total=1.0):
     return title, header, [(k, c) for k, c, _p in rows], weights, left_out
 
 
+def csv_table(samples):
+    """The quantification table of ``samples`` as rows of cells, header first
+    (``quant.csv_rows``, the table the app's Quantification tab and the HTML
+    page export): one row per fitted region and one per chemical state under
+    it, each sample and depth level normalised on its own, with the regions
+    that count as the report settled them (``Level.include``). A sample with
+    no fit of its own (CasaXPS's export only) is left out."""
+    out = [list(quant.CSV_HEADER)]
+    for s in samples:
+        if not s.levels:
+            continue
+        groups = [{"sample": s.label, "level": lv.level,
+                   "entries": lv.entries} for lv in s.levels]
+        out += quant.csv_rows(groups, [list(lv.include) for lv in s.levels],
+                              False, s.rsf_table, s.rsf_library)[1:]
+    return out
+
+
 def _num_cell(v, spec=".2f"):
     return "" if v is None else format(v, spec)
 
