@@ -5603,6 +5603,13 @@ class Workspace:
             parts += handover.metadata_parts(self.docs)
             if self.casa_quant:
                 parts += handover.casaquant_parts(self.casa_quant.raw)
+        if "quantification" in sections:
+            groups = self._results().repeat_groups()
+            if groups:
+                parts += handover.repeat_group_parts(groups)
+            else:
+                notes.append("quantification: no repeat groups (make them in "
+                             "the Quantification tab, Groups…)")
         if "figures" in sections and HAVE_MPL:
             figs = self._report_figures()
             pages = [self._figure_pngs(f) for f in figs]
@@ -5674,6 +5681,7 @@ class Workspace:
              ("methods", "Methods text"),
              ("spectra", "Spectra: VAMAS and CSV, one per sample"),
              ("metadata", "Acquisition metadata (CSV)"),
+             ("quantification", "Quantification: repeat groups (CSV)"),
              ("figures", "Figures (PNG)"),
              ("browser", "Interactive data browser (HTML, works offline)"),
              ("workbook", "The workbook (.xpscontainer)")], go)

@@ -8,6 +8,8 @@ experiment in one ZIP.
     <name>/methods.txt         the methods text
     <name>/metadata/<file>.csv acquisition metadata, one row per spectrum
     <name>/metadata/Quant_*.txt CasaXPS's own exported quantification (optional)
+    <name>/quantification/quantification_repeat_groups.csv  mean, sd and n
+                               of the at % over each repeat group (optional)
     <name>/spectra/vamas/<sample>.vms   one VAMAS file per sample
     <name>/spectra/csv/<sample>.csv     the same spectra as CSV
     <name>/spectra/nexus/<sample>.nxs   the same as NeXus NXxps (when h5py is installed)
@@ -34,6 +36,7 @@ from dataclasses import dataclass
 import appinfo
 import exporters
 import nexus_export
+import repeats
 import reportspec
 
 TOOL = appinfo.NAME
@@ -211,6 +214,27 @@ def casaquant_parts(raw):
     return parts
 
 
+REPEAT_GROUPS_ARC = "quantification/quantification_repeat_groups.csv"
+
+
+def repeat_group_parts(groups):
+    """The repeat-group table (``repeats.csv_rows``, XPSView's layout) as a
+    UTF-8 CSV with a byte-order mark, so Excel reads the Greek letters and
+    degree signs of region and sample names; [] when there are no groups (``groups`` is the
+    ``[repeats.Group]`` list a report shows)."""
+    import csv
+    import io
+    groups = [g for g in groups if g.rows]
+    if not groups:
+        return []
+    buf = io.StringIO(newline="")
+    csv.writer(buf).writerows(repeats.csv_rows(groups))
+    return [Part(REPEAT_GROUPS_ARC,
+                 "mean, standard deviation (n-1) and n of the atomic % over "
+                 "each repeat group, with the individual values",
+                 data=buf.getvalue().encode("utf-8-sig"))]
+
+
 def figure_parts(figures, pages):
     """PNG parts for saved figures. ``pages[i]`` is the list of PNG bytes for
     ``figures[i]`` (one per page)."""
@@ -269,6 +293,18 @@ def readme_text(details, parts, file_rows=(), calibration="", when=None):
                          f"{_human(r.get('size', 0))})")
             if r.get("sha256"):
                 lines.append(f"      sha256 {r['sha256']}")
+    if any(p.arc == REPEAT_GROUPS_ARC for p in parts):
+        lines += ["", "About the repeat groups", "-----------------------",
+                  "Each group is a set of samples that repeat one another "
+                  "(locations on a",
+                  "sample, a repeated spot). For every region and chemical "
+                  "state the CSV gives",
+                  "the mean, the standard deviation (n - 1) and n, the number "
+                  "of samples in",
+                  "which it was found, then each sample's own value; a mean "
+                  "over one sample",
+                  "has no standard deviation. The values are the atomic % of "
+                  "the report.", ""]
     lines += ["", "About the spectra", "-----------------",
               "Binding energy is photon energy minus kinetic energy and, "
               "unless the",
