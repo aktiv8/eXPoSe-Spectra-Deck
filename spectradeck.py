@@ -5420,6 +5420,7 @@ class Workspace:
                 casa_numbers=self.quant_panel.view.casa_numbers))
         res = self._results_memo[1]
         res.stats = self.fit_stats()                # a display choice only
+        res.repeat_spec = dict(self.ann.repeat_groups)
         return res
 
     def quant_hand_count(self):

@@ -280,31 +280,23 @@ def repeat_groups(samples, groups, state):
     return repeats.compute(repeat_samples(samples, state), groups)
 
 
-MAX_MEMBER_COLUMNS = 6
+MAX_MEMBER_COLUMNS = repeats.MAX_MEMBER_COLUMNS
 
 
 def repeat_table(group):
-    """``(header, rows)`` of one repeat group for the tab: ``rows`` are
-    ``(kind, cells, partial)`` with ``kind`` "region" or "state" and
-    ``partial`` true when fewer members than the group has contributed (the
-    row's ``n`` is below its size). Each member gets its own column up to
-    ``MAX_MEMBER_COLUMNS``, else the values are listed in one column."""
-    heads = repeats.short_labels(group.members)
-    wide = len(group.members) <= MAX_MEMBER_COLUMNS
-    header = ["Region", "State", "Mean at %", "SD (n-1)", "n"]
-    header += heads if wide else ["Values"]
-    rows = []
-    for r in group.rows:
-        by = dict(r.values)
-        cells = [("    " if r.state else "") + r.region, r.state,
-                 f"{r.mean:.2f}", "–" if r.sd is None else f"{r.sd:.2f}",
-                 str(r.n)]
-        if wide:
-            cells += [f"{by[m]:.2f}" if m in by else "–"
-                      for m in group.members]
-        else:
-            cells.append("; ".join(f"{h}={by[m]:.2f}"
-                                   for h, m in zip(heads, group.members)
-                                   if m in by))
-        rows.append(("state" if r.state else "region", cells, r.n < r.of))
+    """``(header, rows)`` of one repeat group for the tab (``repeats.table``):
+    one column per member, or one "Values" column beyond
+    ``MAX_MEMBER_COLUMNS`` members."""
+    header, rows = repeats.table(group, MAX_MEMBER_COLUMNS)
+    if len(group.members) > MAX_MEMBER_COLUMNS:
+        heads = repeats.short_labels(group.members)
+        header = header + ["Values"]
+        out = []
+        for r, (k, cells, partial) in zip(group.rows, rows):
+            by = dict(r.values)
+            cells = cells + ["; ".join(f"{h}={by[m]:.2f}"
+                                       for h, m in zip(heads, group.members)
+                                       if m in by)]
+            out.append((k, cells, partial))
+        rows = out
     return header, rows

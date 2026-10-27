@@ -730,6 +730,39 @@ def _results_slides(deck, results, skip=()):
             finish(slide)
 
 
+def _repeat_slides(deck, results, skip=()):
+    """One slide (or more for a long table) per repeat group, after the
+    samples of the Quantification section."""
+    groups = results.repeat_groups(skip) if results else []
+    for g in groups:
+        title, header, rows, weights, left_out = resultspages.repeat_table(
+            g, BODY_W)
+        for i in range(0, len(rows), RESULT_ROWS):
+            chunk = rows[i:i + RESULT_ROWS]
+            slide = deck.content_slide(
+                f"Quantification \u2013 repeat group: {g.name}"
+                + (" (continued)" if i else ""),
+                None if i else "Repeat groups")
+            shape = deck.table(slide, MARGIN, TABLE_TOP, BODY_W, weights,
+                               header, [c for _k, c in chunk], size=11,
+                               row_h=0.32)
+            _right_align(deck, shape, 2)
+            for ri, (kind, _c) in enumerate(chunk, 1):
+                if kind == "state":
+                    for cell in shape.table.rows[ri].cells:
+                        for p in cell.text_frame.paragraphs:
+                            for r in p.runs:
+                                r.font.size = deck.Pt(10)
+                                r.font.color.rgb = deck.rgb(GREY)
+            lines = [f"{g.kind_text}; {len(g.members)} samples. "
+                     + resultspages.REPEAT_METHOD]
+            if left_out and i + RESULT_ROWS >= len(rows):
+                lines.append(left_out)
+            deck.text(slide, MARGIN, 6.4, BODY_W, 0.6, lines, size=10,
+                      color=GREY, space_after=0)
+            slide.notes_slide.notes_text_frame.text = "\n".join(g.notes)
+
+
 # -- the last pass: dividers, contents, order, footers -----------------------------
 def _entries(deck):
     """``[(section, level, title, slide index)]`` for the contents: one line
@@ -927,6 +960,7 @@ def build_deck(path, details, logo, file_rows, docs, figures, render_images,
             _text_slides(deck, "Summary", paras, size=16)
         elif sid == "results":
             _results_slides(deck, results, skip)
+            _repeat_slides(deck, results, skip)
         elif sid == "methods":
             _text_slides(deck, "Methods", paragraphs(methods), size=14)
         elif sid == "timing" and timing:

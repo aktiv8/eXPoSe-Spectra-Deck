@@ -375,6 +375,19 @@ def _results_section(d, results, skip=()):
                 d.picture(png)
             header, rows = resultspages.profile_cells(s)
             d.table(header, rows, [1.0] * len(header))
+    groups = results.repeat_groups(skip)
+    if groups:
+        d.heading("Repeat groups", level=2)
+        d.paragraph(resultspages.REPEAT_METHOD, size=8)
+        for g in groups:
+            title, header, rows, weights, left_out = \
+                resultspages.repeat_table(g)
+            d.paragraph(title, bold=True, size=9)
+            d.table(header, [c for _k, c in rows], weights)
+            if left_out:
+                d.paragraph(left_out, size=8)
+            for note in g.notes:
+                d.paragraph("• " + note, size=8)
     for note in results.notes_for(samples):
         d.paragraph("• " + note, size=8)
     return True

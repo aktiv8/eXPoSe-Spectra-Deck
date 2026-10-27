@@ -369,11 +369,41 @@ def results_story(results, skip=(), look=None, sid="results"):
         story += [Spacer(1, 2 * mm),
                   _grid(header, rows, [first] + [rest] * (len(header) - 1),
                         look)]
+    story += _repeat_story(results, skip, look, st, sid)
     notes = results.notes_for(samples)
     if notes:
         story.append(Spacer(1, 3 * mm))
         for note in notes:
             story.append(Paragraph("• " + xml_escape(note), st["small"]))
+    return story
+
+
+def _repeat_story(results, skip, look, st, sid):
+    """The repeat groups of the Quantification section (nothing when the user
+    made none or they have fewer than two samples here)."""
+    from reportlab.lib.units import mm
+    from reportlab.platypus import CondPageBreak, Paragraph, Spacer
+    import resultspages
+
+    groups = results.repeat_groups(skip)
+    if not groups:
+        return []
+    story = [CondPageBreak(60 * mm),
+             _mark(Paragraph("Repeat groups", st["h2"]), sid, "Repeat groups"),
+             Paragraph(xml_escape(resultspages.REPEAT_METHOD), st["small"]),
+             Spacer(1, 2 * mm)]
+    for g in groups:
+        title, header, rows, weights, left_out = resultspages.repeat_table(
+            g, 180)
+        story += [CondPageBreak(40 * mm),
+                  Paragraph(xml_escape(title), st["label"]),
+                  _grid(header, [c for _k, c in rows], weights, look,
+                        right_from=2, kinds=[k for k, _c in rows])]
+        if left_out:
+            story.append(Paragraph(xml_escape(left_out), st["small"]))
+        for note in g.notes:
+            story.append(Paragraph("• " + xml_escape(note), st["small"]))
+        story.append(Spacer(1, 3 * mm))
     return story
 
 

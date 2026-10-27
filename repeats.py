@@ -168,6 +168,34 @@ def compute(samples, groups):
     return out
 
 
+MAX_MEMBER_COLUMNS = 6
+
+
+def table(group, max_members=MAX_MEMBER_COLUMNS):
+    """``(header, rows)`` of one repeat group for display: ``rows`` are
+    ``(kind, cells, partial)`` with ``kind`` "region" or "state" and
+    ``partial`` true when fewer members than the group has contributed (the
+    row's ``n`` is below its size). Each member gets its own column up to
+    ``max_members``; with more, the tab lists the values in one column
+    (``max_members`` None) and a report leaves them out (``max_members`` 0
+    gives no member columns at all)."""
+    heads = short_labels(group.members)
+    wide = len(group.members) <= max_members
+    header = ["Region", "State", "Mean at %", "SD (n-1)", "n"]
+    header += heads if wide else []
+    rows = []
+    for r in group.rows:
+        by = dict(r.values)
+        cells = [("    " if r.state else "") + r.region, r.state,
+                 f"{r.mean:.2f}", "–" if r.sd is None else f"{r.sd:.2f}",
+                 str(r.n)]
+        if wide:
+            cells += [f"{by[m]:.2f}" if m in by else "–"
+                      for m in group.members]
+        rows.append(("state" if r.state else "region", cells, r.n < r.of))
+    return header, rows
+
+
 def _g(v, nd=3):
     return "" if v is None else f"{v:.{nd}f}"
 

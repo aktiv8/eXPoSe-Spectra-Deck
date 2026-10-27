@@ -41,6 +41,7 @@ import casamatch
 import casaquant
 import quant
 import reportspec
+import repeats
 import rsf as rsf_lib
 
 METHOD = ("Atomic percent is each fitted region's area divided by its "
@@ -147,6 +148,10 @@ class Results:
     stats: tuple = DEFAULT_STATS    # the fit-quality columns shown (a display
                                     # choice, set by the caller, never by
                                     # ``collect``)
+    repeat_spec: dict = field(default_factory=dict)
+                                    # the user's repeat groups (``repeats``;
+                                    # ``Annotations.repeat_groups``), set by
+                                    # the caller like ``stats``
 
     def __bool__(self):
         return bool(self.samples)
@@ -157,6 +162,22 @@ class Results:
 
     def chosen(self, skip=()):
         return [s for s in self.samples if s.key not in skip]
+
+    def repeat_groups(self, skip=()):
+        """The repeat groups the report shows: ``repeats.Group`` for each
+        saved group with at least two members among the samples that go in
+        (a sample left out of the report is left out of its group, and a
+        group left with one member says nothing a table of that sample does
+        not)."""
+        chosen = self.chosen(skip)
+        keys = {s.key for s in chosen}
+        spec = {}
+        for name, g in (self.repeat_spec or {}).items():
+            members = [k for k in g.get("samples", []) if k in keys]
+            if len(members) >= 2:
+                spec[name] = {"kind": g.get("kind"), "samples": members}
+        return [g for g in repeats.compute(chosen, spec)
+                if len(g.members) >= 2 and g.rows]
 
     @staticmethod
     def notes_for(samples):
@@ -314,6 +335,31 @@ def collect(docs, display=None, key_of=None, casa_quant=None, ticked=None,
                         notes=[CASAXPS_NOTE])
         out.samples.append(sample)
     return out
+
+
+REPEAT_METHOD = ("The mean and standard deviation (n \u2212 1) "
+                 "of the atomic percent over the samples of each group, each "
+                 "from that sample's own composition above. n is the number "
+                 "of samples in which the region or state was found; a mean "
+                 "over one sample has no standard deviation.")
+REPEAT_MAX_MEMBERS = 4        # member columns in a report table
+
+
+def repeat_table(group, weights_total=1.0):
+    """``(title, header, rows, weights, left_out)`` of one repeat group for a
+    report: ``rows`` are ``(kind, cells)``; ``weights`` sum to
+    ``weights_total``; ``left_out`` is a sentence when the members' own
+    values do not fit as columns (more than ``REPEAT_MAX_MEMBERS``)."""
+    header, rows = repeats.table(group, REPEAT_MAX_MEMBERS)
+    base = [2.0, 1.8, 1.4, 1.4, 0.7]
+    w = base + [2.6] * (len(header) - len(base))
+    total = sum(w)
+    weights = [x * weights_total / total for x in w]
+    title = f"{group.name}: {group.kind_text}, {len(group.members)} samples"
+    left_out = "" if len(header) > len(base) else (
+        "The values of the individual samples are in the repeat-group CSV "
+        f"({', '.join(group.members)}).")
+    return title, header, [(k, c) for k, c, _p in rows], weights, left_out
 
 
 def _num_cell(v, spec=".2f"):
