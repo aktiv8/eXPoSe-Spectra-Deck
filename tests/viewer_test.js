@@ -727,6 +727,58 @@ function near(a, b, msg, tol) {
     check(bad, 'an image of the wrong size is an error');
   }
 
+  // ---- repeat groups: the same statistics, tables and CSV as repeats.py ----
+  if (fx.repeats) {
+    const rx = fx.repeats;
+    rx.stats.forEach((w, i) => {
+      const got = V.repStats([[10.921, 10.251, 10.525], [5.0], [1.0, 3.0], []][i]);
+      near(got.mean === null ? 0 : got.mean, w[0] === null ? 0 : w[0], 'stats mean ' + i);
+      eq(got.sd === null ? null : +got.sd.toFixed(9), w[1] === null ? null : +w[1].toFixed(9), 'stats sd ' + i);
+      eq(got.n, w[2], 'stats n ' + i);
+    });
+    rx.labels.forEach((c, i) => eq(V.repShortLabels(c[0]), c[1], 'short labels ' + i));
+    ['plain', 'ticked'].forEach((which) => {
+      const ex = rx[which];
+      const include = {};
+      ex.excluded.forEach((k) => { include[k] = false; });
+      const [g] = V.repCompute(ex.pages, rx.specs, include, false, null, '');
+      eq(g.members, ex.members, which + ': members');
+      eq(g.notes, ex.notes, which + ': notes');
+      eq(g.rows.length, ex.rows.length, which + ': row count');
+      g.rows.forEach((r, i) => {
+        const w = ex.rows[i];
+        eq([r.region, r.state, r.n, r.of], [w.region, w.state, w.n, w.of], which + ': row ' + i + ' identity');
+        near(r.mean, w.mean, which + ': mean ' + i);
+        if (w.sd === null) eq(r.sd, null, which + ': no sd ' + i); else near(r.sd, w.sd, which + ': sd ' + i);
+        eq(r.values.map((v) => v[0]), w.values.map((v) => v[0]), which + ': value labels ' + i);
+        r.values.forEach((v, k) => near(v[1], w.values[k][1], which + ': value ' + i + ',' + k));
+      });
+      // the tables (a column per member, or none) and the CSV
+      [['table6', 6], ['table2', 2]].forEach(([key, max]) => {
+        const t = V.repTable(g, max), w = ex[key];
+        eq(t.header, w[0], which + ': ' + key + ' header');
+        eq(t.rows.map((r) => [r.kind, r.cells, r.partial]), w[1], which + ': ' + key + ' rows');
+      });
+      eq(V.repCsv([g]), ex.csv, which + ': CSV');
+    });
+    // the tick changes the numbers: O 1s of spot 2 is out, so the Ti 2p share rises there
+    const a = V.repCompute(rx.plain.pages, rx.specs, {}, false, null, '')[0];
+    const b = V.repCompute(rx.ticked.pages, rx.specs, { 's1r0:1': false }, false, null, '')[0];
+    check(Math.abs(a.rows[0].mean - b.rows[0].mean) > 1e-6, 'unticking a region moves the group mean');
+    // a group with one member says it has no spread, and the page shows only groups of two or more
+    const one = V.repCompute(rx.plain.pages, [{ name: 'One', kind: 'locations', members: ['s0'] }], {}, false, null, '');
+    check(one[0].notes.some((n) => n.indexOf('Only one member') === 0), 'one member says so');
+    eq(V.repShown(one).length, 0, 'a one-member group is not shown');
+    eq(V.repShown([a]).length, 1, 'a group of three is shown');
+    // a sid the page does not have is a note, not an error
+    const gone = V.repCompute(rx.plain.pages, [{ name: 'G', kind: 'nonsense', members: ['s0', 'zz'] }], {}, false, null, '')[0];
+    eq(gone.kind, 'locations', 'an unknown kind reads as locations');
+    check(gone.notes.some((n) => n.indexOf('not among') >= 0), 'a missing sample is noted');
+    // Download everything carries the file, honouring the ticks
+    const bundle = V.bundleFiles({ samples: [], details: {}, files: [], repeat_groups: rx.specs, generated: '2026-01-01T00:00:00' }, [], { include: {} });
+    check(bundle.every((f) => f.name !== 'quantification_repeat_groups.csv'), 'no quantification, no repeat file');
+  }
+
   // ---- hostile text stays text: nothing in the pure half builds HTML ----
   const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer.js'), 'utf8');
   check(src.indexOf('innerHTML') < 0, 'viewer never uses innerHTML');

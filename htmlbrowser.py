@@ -596,7 +596,8 @@ def build_payload(docs, display=None, details=None, methods_text="",
                   calibration="", figures=(), calib=None, generated=None,
                   cameras=True, snapmaps=True, lines=None, casa_quant=None,
                   rsf_entries=None, prefer_csv=True, quant_overrides=None,
-                  ticked=None, fit_stats=None, panel_order=None):
+                  ticked=None, fit_stats=None, panel_order=None,
+                  repeat_groups=None):
     """The data of the browser as a JSON-able dict.
 
     ``figures`` is ``[{"name", "caption", "pages": [png bytes]}]``; ``calib``
@@ -644,6 +645,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
     n_regions = 0
     fit_budget, fit_dropped, fit_csv = [FIT_BUDGET], 0, 0
     hand, seen_keys = [], {}      # [(page region dict, fit row, tick)]
+    sample_ref = {}      # resultspages.Sample.key -> page sample dict (repeat groups)
     label_map = {}                       # (id(parser), original sample) -> label
     casa_names = set(casa_quant.samples) if casa_quant else set()
     cq_of, casa_notes, casa_tagged = {}, [], []
@@ -726,6 +728,9 @@ def build_payload(docs, display=None, details=None, methods_text="",
                    if getattr(d, "fit", None) else None)
             if fit:
                 reg["fit"] = fit
+                sample_ref.setdefault(
+                    f"{reportspec.doc_key(p)}/{r.sample}"
+                    + ("#survey" if r.is_survey else ""), entry)
                 if quant_overrides or any_ticked:
                     skey = (f"{reportspec.doc_key(p)}/{r.sample}"
                             + ("#survey" if r.is_survey else ""))
@@ -795,6 +800,14 @@ def build_payload(docs, display=None, details=None, methods_text="",
         for j, r in enumerate(s["regions"]):
             r["id"] = f"s{i}r{j}"
     quant_include = {f"{reg['id']}:{ri}": tick for reg, ri, tick in hand}
+    page_groups = []
+    for name, g in (repeat_groups or {}).items():
+        members = [sample_ref[k]["id"] + ("#survey" if k.endswith("#survey")
+                                          else "")
+                   for k in g.get("samples", []) if k in sample_ref]
+        if members:
+            page_groups.append({"name": name, "kind": g.get("kind"),
+                                "members": members})
 
     figs = []
     for f in figures:
@@ -827,6 +840,7 @@ def build_payload(docs, display=None, details=None, methods_text="",
         "palette": {"light": list(light["cycle"]), "dark": list(dark["cycle"]),
                     "bg": {"light": light["plot_bg"], "dark": dark["plot_bg"]}},
         **({"quant_include": quant_include} if quant_include else {}),
+        **({"repeat_groups": page_groups} if page_groups else {}),
         **({"fit_csv": {"default": bool(prefer_csv)}} if fit_csv else {}),
         # the app's choice of fit-quality figures (RMS, chi2, Residual StDev)
         # at export; absent = the first two, as before the choice existed

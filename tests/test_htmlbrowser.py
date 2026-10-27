@@ -763,7 +763,8 @@ class TestPage(unittest.TestCase):
         # +3_000: the plot order (V.orderGroups / V.moveKey, move buttons, drag)
         # +2_000: one line per element (V.siblings, the most-sensitive default)
         # +1_000: the energy term of an Avantage component (V.compTerm)
-        self.assertLess(len(page), 208_000 + raw)     # far below plain JSON
+        # +16_000: repeat groups (V.repCompute / repTable / repCsv, the tab's tables)
+        self.assertLess(len(page), 224_000 + raw)     # far below plain JSON
 
     def test_missing_viewer_file_is_a_clear_error(self):
         old = hb.VIEWER_DIR
@@ -826,6 +827,45 @@ class TestFits(unittest.TestCase):
             total = cur["bg"][k] + sum(x[k] for x in cur["comps"])
             self.assertAlmostEqual(total, cur["env"][k],
                                    delta=abs(cur["env"][k]) * 1e-4 + 1e-6)
+
+    def groups_payload(self, groups, names=("S", "S - 2", "S - 3")):
+        regs = []
+        for n in names:
+            r = fitted_region()
+            r.sample = n
+            regs.append(r)
+        d = doc("fit.vms", regs)
+        key = reportspec.doc_key(d)
+        spec = {name: {"kind": kind, "samples": [f"{key}/{s}" for s in ss]}
+                for name, (kind, ss) in groups.items()}
+        return hb.build_payload([d], repeat_groups=spec)
+
+    def test_repeat_groups_name_the_pages_samples(self):
+        p = self.groups_payload({"S": ("locations", ["S", "S - 2", "S - 3"])})
+        ids = [s["id"] for s in p["samples"]]
+        self.assertEqual(p["repeat_groups"], [
+            {"name": "S", "kind": "locations", "members": ids}])
+
+    def test_a_survey_member_keeps_its_suffix_and_unknown_keys_go(self):
+        d = doc("fit.vms", [fitted_region()])
+        key = reportspec.doc_key(d)
+        p = hb.build_payload([d], repeat_groups={
+            "G": {"kind": "repeats", "samples": [f"{key}/S", f"{key}/gone",
+                                                 f"{key}/S#survey"]}})
+        (g,) = p["repeat_groups"]
+        self.assertEqual(g["members"], ["s0"])     # the survey key is not here
+        self.assertNotIn("repeat_groups", hb.build_payload(
+            [d], repeat_groups={"G": {"kind": "repeats",
+                                      "samples": ["x/none"]}}))
+
+    def test_no_groups_no_key(self):
+        self.assertNotIn("repeat_groups", self.payload())
+
+    def test_the_page_has_the_repeat_group_code(self):
+        html = hb.build_html(self.groups_payload(
+            {"S": ("locations", ["S", "S - 2"])}))
+        self.assertIn("renderRepeatGroups", html)
+        self.assertIn("quantification_repeat_groups.csv", html)
 
     def test_curves_line_up_with_the_data(self):
         reg = self.payload()["samples"][0]["regions"][0]
@@ -1220,6 +1260,93 @@ class TestJavaScript(unittest.TestCase):
                 "merge_cases": merges,
                 "row_region": row_region}
 
+    def repeat_fixture(self):
+        """Repeat groups as the page works them out, against ``repeats.py``
+        on the same rows: three samples that repeat one another (one lacks
+        a chemical state), a depth profile that must be left out, with and
+        without a region unticked, and the tables and the CSV."""
+        import csv
+        import io
+        import quant
+        import repeats
+        import resultspages as rp
+        from test_results import row as qrow
+
+        def make(excluded=None):
+            samples, pages = [], []
+            plan = [("Film - spot 1", 100.0, [("Ti-C", 60.0), ("Ti-O", 40.0)]),
+                    ("Film - spot 2", 130.0, [("Ti-C", 50.0), ("Ti-O", 80.0)]),
+                    ("Film - spot 3", 90.0, [("Ti-O", 90.0)])]
+            for i, (label, ti, states) in enumerate(plan):
+                rows = [qrow("Ti 2p", 2.0, ti, states),
+                        qrow("O 1s", 1.0, 100.0 + 5 * i),
+                        qrow("C 1s", 0.25, 30.0 + i)]
+                s = rp.Sample(f"f/{label}", label)
+                lv = rp.Level(None)
+                lv.entries = [{"spectrum": r["region"], "row": r}
+                              for r in rows]
+                keys = [f"s{i}r0:{j}" for j in range(len(rows))]
+                lv.include = [not (excluded and keys[j] in excluded)
+                              for j in range(len(rows))]
+                lv.why = [""] * len(rows)
+                lv.res = quant.normalise(rows, lv.include)
+                s.levels = [lv]
+                samples.append(s)
+                pages.append({"sample": label, "sid": f"s{i}",
+                              "kind": "regions", "level": None,
+                              "entries": [{"key": k, "spectrum": r["region"],
+                                           "row": r}
+                                          for k, r in zip(keys, rows)]})
+            prof = rp.Sample("f/Film - profile", "Film - profile")
+            for lvn in range(2):
+                r = qrow("Ti 2p", 2.0, 100.0)
+                lv = rp.Level(lvn)
+                lv.entries = [{"spectrum": "Ti 2p", "row": r}]
+                lv.include, lv.why = [True], [""]
+                lv.res = quant.normalise([r], [True])
+                prof.levels.append(lv)
+                pages.append({"sample": "Film - profile", "sid": "s3",
+                              "kind": "regions", "level": lvn,
+                              "entries": [{"key": f"s3r{lvn}:0",
+                                           "spectrum": "Ti 2p", "row": r}]})
+            samples.append(prof)
+            return samples, pages
+
+        def expect(excluded):
+            samples, pages = make(excluded)
+            spec = {"Film": {"kind": "repeats",
+                             "samples": ["f/Film - spot 1", "f/Film - spot 2",
+                                         "f/Film - spot 3",
+                                         "f/Film - profile"]}}
+            (g,) = repeats.compute(samples, spec)
+            text = io.StringIO(newline="")
+            csv.writer(text, lineterminator="\r\n").writerows(
+                repeats.csv_rows([g]))
+            return {
+                "pages": pages, "excluded": sorted(excluded or ()),
+                "members": g.members, "notes": g.notes,
+                "rows": [{"region": r.region, "state": r.state,
+                          "mean": r.mean, "sd": r.sd, "n": r.n, "of": r.of,
+                          "values": [list(v) for v in r.values]}
+                         for r in g.rows],
+                "table6": [repeats.table(g, 6)[0],
+                           [[k, c, p] for k, c, p in repeats.table(g, 6)[1]]],
+                "table2": [repeats.table(g, 2)[0],
+                           [[k, c, p] for k, c, p in repeats.table(g, 2)[1]]],
+                "csv": text.getvalue()}
+
+        specs = [{"name": "Film", "kind": "repeats",
+                  "members": ["s0", "s1", "s2", "s3"]}]
+        labels = [["ATH PR035 - Spot sequence - 13 Sep 2026 03:34",
+                   "ATH PR035 - Spot sequence - location 1 - 13 Sep 2026 03:54",
+                   "ATH PR035 - Spot sequence - location 2 - 13 Sep 2026 04:17"],
+                  ["A", "B"], ["Same"], ["S x", "S"]]
+        return {"specs": specs, "plain": expect(None),
+                "ticked": expect({"s1r0:1"}),
+                "stats": [list(repeats.stats(v)) for v in
+                          ([10.921, 10.251, 10.525], [5.0], [1.0, 3.0], [])],
+                "labels": [[ls, repeats.short_labels(ls)] for ls in labels]}
+
     def iss_fixture(self):
         """An ion scattering spectrum as the page receives it, and what the
         desktop's own ``viewdata`` makes of the same region on each axis."""
@@ -1329,6 +1456,7 @@ class TestJavaScript(unittest.TestCase):
                     (3, "Fe 2p fits", ": "), (2, "Figures of merit", " – "),
                     (4, "", " – "), (4, "   ", " – "))]
             fx["iss"] = self.iss_fixture()
+            fx["repeats"] = self.repeat_fixture()
             fx["elements"] = self.element_fixture()
             fx["casaxps"] = self.casaxps_fixture()
             if HAVE_FIT:

@@ -4954,6 +4954,7 @@ class Workspace:
                 self.methods_text(), self.calibration_statement(), [], None,
                 cameras=False, snapmaps=False, casa_quant=self.casa_quant,
                 quant_overrides=dict(self.quant_panel.view.include),
+                repeat_groups=dict(self.ann.repeat_groups),
                 ticked=lambda r: id(r) in self.checked)
         except htmlbrowser.ViewerError:
             return None
@@ -5485,6 +5486,7 @@ class Workspace:
             self.methods_text(), self.calibration_statement(), figures,
             self.calib, casa_quant=self.casa_quant,
             quant_overrides=dict(self.quant_panel.view.include),
+            repeat_groups=dict(self.ann.repeat_groups),
             ticked=lambda r: id(r) in self.checked,
             fit_stats=self.fit_stats(), panel_order=self._html_panel_order())
 

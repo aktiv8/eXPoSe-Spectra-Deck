@@ -740,6 +740,128 @@
     }).join('\r\n') + '\r\n';
   };
 
+  /* ------------------------------------------------------- repeat groups */
+  /* mirrors repeats.py: the mean, sample sd (n - 1) and n of the atomic percent of each
+     region and chemical state over samples that repeat one another. A group is the app's
+     statement (payload.repeat_groups: {name, kind, members: [page sample ids]}); the values are
+     each member's own composition as this page counts it, so the ticks apply. */
+  V.REPEAT_KINDS = { locations: 'different locations on the sample',
+                     repeats: 'repeat measurements of one spot',
+                     samples: 'separate pieces of one material' };
+  V.REPEAT_HEADER = ['Group', 'Kind', 'Region', 'State', 'at % mean', 'at % sd (n-1)', 'n', 'Individual values'];
+  V.REPEAT_MAX_MEMBERS = 6;
+  V.repStats = function (values) {
+    var v = values.filter(function (x) { return x !== null && x !== undefined && isFinite(x); });
+    var n = v.length;
+    if (!n) return { mean: null, sd: null, n: 0 };
+    var mean = v.reduce(function (a, b) { return a + b; }, 0) / n;
+    if (n < 2) return { mean: mean, sd: null, n: n };
+    var ss = v.reduce(function (a, b) { return a + (b - mean) * (b - mean); }, 0);
+    return { mean: mean, sd: Math.sqrt(ss / (n - 1)), n: n };
+  };
+  /* column heads for the members: each label without the words every label has
+     (repeats.short_labels) */
+  V.repShortLabels = function (labels, limit) {
+    limit = limit || 26;
+    var words = labels.map(function (l) { return l.split(/\s+/).filter(function (w) { return w !== ''; }); });
+    var common = {};
+    if (words.length) words[0].forEach(function (w) { common[w] = true; });
+    words.slice(1).forEach(function (ws) {
+      var has = {}; ws.forEach(function (w) { has[w] = true; });
+      Object.keys(common).forEach(function (w) { if (!has[w]) delete common[w]; });
+    });
+    return labels.map(function (lab, i) {
+      var ws = words[i];
+      var kept = ws.filter(function (w) { return !common[w]; });
+      var t = labels.length > 1 ? kept.join(' ').replace(/^[ \-–—,]+|[ \-–—,]+$/g, '') : lab;
+      if (!t) t = ws.length ? ws[ws.length - 1] : lab;
+      return t.length <= limit ? t : t.slice(0, limit - 1) + '…';
+    });
+  };
+  /* [[region, state, at %], ...] of one one-level sample in table order: each region that
+     counts, then its states (repeats.member_values) */
+  V.repMemberValues = function (g, include, transmission, rsfTable, rsfLibrary) {
+    var res = V.quantNormalise(g.entries.map(function (e) { return e.row; }),
+      g.entries.map(function (e) { return !(include && include[e.key] === false); }), transmission, rsfTable, rsfLibrary);
+    var out = [], seen = {};
+    g.entries.forEach(function (e, i) {
+      var x = res[i], name = e.row.region;
+      if (x.at === null || x.at === undefined || seen[name]) return;
+      seen[name] = true;
+      out.push([name, '', x.at]);
+      V.quantStates(e.row, x.at).forEach(function (st) { out.push([name, st.name, st.at]); });
+    });
+    return out;
+  };
+  /* the groups of `specs` ([{name, kind, members}]) over the page's quantGroups(); a group
+     is {name, kind, kindText, members: [labels], rows: [{region, state, mean, sd, n, of,
+     values: [[label, at %]]}], notes} (repeats.compute) */
+  V.repCompute = function (all, specs, include, transmission, rsfTable, rsfLibrary) {
+    return (specs || []).map(function (sp) {
+      var grp = { name: sp.name, kind: V.REPEAT_KINDS[sp.kind] ? sp.kind : 'locations', members: [], rows: [], notes: [] };
+      grp.kindText = V.REPEAT_KINDS[grp.kind];
+      var cols = [];
+      (sp.members || []).forEach(function (sid) {
+        var gs = all.filter(function (g) { return g.sid === sid; });
+        if (!gs.length) { grp.notes.push('A sample of this group is not among the quantified samples.'); return; }
+        if (gs.length > 1) { grp.notes.push(gs[0].sample + ': a depth profile is not a repeat; left out.'); return; }
+        var vals = V.repMemberValues(gs[0], include, transmission, rsfTable, rsfLibrary);
+        if (vals.length) { cols.push([gs[0].sample, vals]); grp.members.push(gs[0].sample); }
+        else grp.notes.push(gs[0].sample + ': nothing quantified; left out.');
+      });
+      var order = [], per = {};
+      cols.forEach(function (c) {
+        c[1].forEach(function (v) {
+          var k = v[0] + '\u0000' + v[1];
+          if (!per[k]) { per[k] = { region: v[0], state: v[1], values: [] }; order.push(k); }
+          per[k].values.push([c[0], v[2]]);
+        });
+      });
+      var names = {};
+      order.forEach(function (k) {
+        var p = per[k];
+        if (p.state) { names[p.region] = names[p.region] || {}; names[p.region][p.state] = true; }
+      });
+      /* a region with one state in every member says it already: no rows */
+      order.filter(function (k) { return !per[k].state || Object.keys(names[per[k].region]).length > 1; }).forEach(function (k) {
+        var p = per[k], st = V.repStats(p.values.map(function (v) { return v[1]; }));
+        grp.rows.push({ region: p.region, state: p.state, mean: st.mean, sd: st.sd, n: st.n, of: cols.length, values: p.values });
+      });
+      if (cols.length > 0 && cols.length < 2) grp.notes.push('Only one member: there is no spread to report.');
+      return grp;
+    });
+  };
+  /* the groups a report shows: two or more members and something to say */
+  V.repShown = function (groups) {
+    return groups.filter(function (g) { return g.members.length >= 2 && g.rows.length; });
+  };
+  /* (header, rows) of one group for display (repeats.table): a column per member up to
+     maxMembers, none beyond; each row is {kind, cells, partial} */
+  V.repTable = function (group, maxMembers) {
+    var heads = V.repShortLabels(group.members), wide = group.members.length <= maxMembers;
+    var header = ['Region', 'State', 'Mean at %', 'SD (n-1)', 'n'].concat(wide ? heads : []);
+    var rows = group.rows.map(function (r) {
+      var by = {};
+      r.values.forEach(function (v) { by[v[0]] = v[1]; });
+      var cells = [(r.state ? '    ' : '') + r.region, r.state, r.mean.toFixed(2), r.sd === null ? '–' : r.sd.toFixed(2), String(r.n)];
+      if (wide) group.members.forEach(function (m) { cells.push(by[m] !== undefined ? by[m].toFixed(2) : '–'); });
+      return { kind: r.state ? 'state' : 'region', cells: cells, partial: r.n < r.of };
+    });
+    return { header: header, rows: rows };
+  };
+  /* XPSView's repeat-group CSV (repeats.csv_rows) */
+  V.repCsv = function (groups) {
+    var rows = [V.REPEAT_HEADER.slice()];
+    groups.forEach(function (g) {
+      g.rows.forEach(function (r) {
+        rows.push([g.name, g.kindText, r.region, r.state, r.mean === null ? '' : r.mean.toFixed(3),
+                   r.sd === null ? '' : r.sd.toFixed(3), String(r.n),
+                   r.values.map(function (v) { return v[0] + '=' + v[1].toFixed(3); }).join('; ')]);
+      });
+    });
+    return rows.map(function (r) { return r.map(V.csvField).join(','); }).join('\r\n') + '\r\n';
+  };
+
   /* CasaXPS's own exported quantification (Quant_survey.txt etc., see
      casaquant.py): a sample it names carries its own `casaxps` block,
      preferred over the fit-derived table above for that sample. The three
@@ -910,7 +1032,8 @@
   /* everything the page can hand over as files, ready for V.zip: a README, the text
      notes, one CSV per spectrum name of each sample (all its depth levels side by side)
      and the quantification table when there are fits */
-  V.bundleFiles = function (data, specs) {
+  V.bundleFiles = function (data, specs, opts) {
+    opts = opts || {};
     var files = [], used = {};
     var uniq = function (path) {
       var base = path.replace(/\.csv$/, ''), n = 1, p = path;
@@ -931,6 +1054,9 @@
     });
     var groups = V.quantGroups(specs);
     if (groups.length) files.push({ name: 'quantification.csv', data: '﻿' + V.quantCsv(groups, null, false) });
+    var repGroups = V.repShown(V.repCompute(groups, data.repeat_groups, opts.include, opts.transmission,
+                                            opts.rsfTable, opts.rsfLibrary));
+    if (repGroups.length) files.push({ name: 'quantification_repeat_groups.csv', data: '﻿' + V.repCsv(repGroups) });
     var casaxpsFiles = [];
     (data.samples || []).forEach(function (sm) {
       if (!sm.casaxps) return;
@@ -965,6 +1091,7 @@
     L.push('                       columns for every spectrum (every depth level side by side), plus the');
     L.push('                       fitted curves where a CasaXPS fit was read. The units are in each header.');
     if (hasQuant) L.push('  quantification.csv   atomic % from the fitted regions (area / RSF, CasaXPS numbers), per sample and level.');
+    if (others.indexOf('quantification_repeat_groups.csv') >= 0) L.push('  quantification_repeat_groups.csv   mean, standard deviation (n - 1) and n of the atomic % over each repeat group.');
     if (hasCasaxps) L.push('  casaxps/              CasaXPS\'s own exported quantification for the samples it covers (Quant_survey.txt etc.), not recomputed.');
     if (others.indexOf('methods.txt') >= 0) L.push('  methods.txt          the experimental methods text.');
     if (others.indexOf('calibration.txt') >= 0) L.push('  calibration.txt      how the binding-energy axis was calibrated.');
@@ -1868,7 +1995,8 @@
     cv.toBlob(function (blob) { document.body.removeChild(host); if (blob) saveBlob(name, blob); }, 'image/png');
   }
   function downloadEverything() {
-    var files = V.bundleFiles(S.data, S.specs), when = new Date(S.data.generated);
+    var files = V.bundleFiles(S.data, S.specs, { include: S.q.include, transmission: S.q.transmission,
+      rsfTable: S.q.rsfLibrary ? (S.data.rsf || []) : null, rsfLibrary: S.q.rsfLibrary }), when = new Date(S.data.generated);
     var bytes = V.zip(files, when);
     var title = V.safeName((S.data.details && S.data.details.title) || 'experiment');
     saveBlob(title + '.zip', new Blob([bytes], { type: 'application/zip' }));
@@ -2483,6 +2611,36 @@
       if (!q.rsfLibrary && res.some(function (x) { return x.why === 'no RSF'; })) {
         box.appendChild(h('p', { class: 'muted small', text: 'A region here has no recorded sensitivity factor and is left out of the total — try the RSF fallback dropdown above.' }));
       }
+    });
+    renderRepeatGroups(box, all, q, hasT, rsfTable);
+  }
+  /* the repeat groups the app saved (payload.repeat_groups), worked out from the ticks above */
+  function renderRepeatGroups(box, all, q, hasT, rsfTable) {
+    var groups = V.repShown(V.repCompute(all, S.data.repeat_groups, q.include, q.transmission && hasT, rsfTable, q.rsfLibrary));
+    if (!groups.length) return;
+    box.appendChild(h('h2', { text: 'Repeat groups' }));
+    var dl = h('button', { type: 'button', text: 'Download quantification_repeat_groups.csv' });
+    dl.addEventListener('click', function () { saveText('quantification_repeat_groups.csv', V.repCsv(groups)); });
+    box.appendChild(h('p', { class: 'muted small', text: 'The mean and standard deviation (n − 1) of the atomic % over the samples of each group, ' +
+      'each from that sample\'s own composition above, with the regions ticked there. n is the number of samples in which the region or ' +
+      'state was found; a mean over one sample has no standard deviation.' }));
+    box.appendChild(h('div', { class: 'controls' }, dl));
+    groups.forEach(function (g) {
+      box.appendChild(h('h3', { text: g.name + ': ' + g.kindText + ', ' + g.members.length + ' samples' }));
+      var t = V.repTable(g, V.REPEAT_MAX_MEMBERS);
+      var head = h('tr');
+      t.header.forEach(function (c, i) { head.appendChild(h('th', { class: i >= 2 ? 'num' : '', text: c })); });
+      var tb = h('tbody');
+      t.rows.forEach(function (r) {
+        var tr = h('tr', { class: (r.kind === 'state' ? 'state ' : '') + (r.partial ? 'partial' : '') });
+        r.cells.forEach(function (c, i) { tr.appendChild(h('td', { class: i >= 2 ? 'num' : '', text: i === 0 ? c.replace(/^ +/, r.kind === 'state' ? '↳ ' : '') : c })); });
+        tb.appendChild(tr);
+      });
+      box.appendChild(h('div', { class: 'scroll' }, h('table', { class: 'grid quant' }, h('thead', null, head), tb)));
+      if (g.members.length > V.REPEAT_MAX_MEMBERS) {
+        box.appendChild(h('p', { class: 'muted small', text: 'The values of the individual samples are in the CSV.' }));
+      }
+      g.notes.forEach(function (n) { box.appendChild(h('p', { class: 'muted small', text: n })); });
     });
   }
   function fmtPct(v) { return v === null || v === undefined ? '' : v.toFixed(2); }
