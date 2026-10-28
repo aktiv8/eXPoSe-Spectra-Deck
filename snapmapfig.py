@@ -378,12 +378,14 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
             spectra = []
         e = cube.energy
         shown = [(k, sp) for k, sp in enumerate(spectra) if sp is not None]
+        method = s["smooth"]["method"]
+        tag = f", {method}" if method != "None" and mos is None else ""
         ax_spec.plot(e, whole, color=pal["muted"] if shown else pal["accent"],
-                     lw=1.4, label="whole map")
+                     lw=1.4, label="whole map" + (f" ({method})" if tag else ""))
         for k, sp in shown:
             ax_spec.plot(e, sp, color=roi_colour(k), lw=1.6,
                          label=f"{s['rois'][k]['label']}, "
-                               f"{int(masks[k].sum())} px")
+                               f"{int(masks[k].sum())} px{tag}")
         if shown:
             ax_spec.legend(fontsize=8, frameon=False, labelcolor=pal["plot_fg"])
         binding = "inding" in (region.energy_label or "")
@@ -415,7 +417,9 @@ def _outline_roi(ax, cube, roi, mask, colour):
     """Draw one area on the map: its rectangle (or ellipse) snapped to the
     pixels it holds, and its label."""
     import numpy as np
+    import matplotlib.patheffects as pe
     from matplotlib.patches import Ellipse, Rectangle
+    halo = [pe.withStroke(linewidth=4.0, foreground="black", alpha=0.6)]
     rows, cols = np.flatnonzero(mask.any(axis=1)), np.flatnonzero(
         mask.any(axis=0))
     x0, x1 = cube.x_of(cols[0]) - cube.dx / 2, cube.x_of(cols[-1]) + cube.dx / 2
@@ -423,10 +427,10 @@ def _outline_roi(ax, cube, roi, mask, colour):
     if roi.get("shape") == "ellipse":
         ax.add_patch(Ellipse(((x0 + x1) / 2, (y0 + y1) / 2), abs(x1 - x0),
                              abs(y1 - y0), fill=False, lw=1.8, ls="--",
-                             ec=colour, zorder=5))
+                             ec=colour, zorder=5, path_effects=halo))
     else:
         ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, lw=1.8,
-                               ls="--", ec=colour, zorder=5))
+                               ls="--", ec=colour, zorder=5, path_effects=halo))
     ax.text(min(x0, x1), min(y0, y1), " " + roi.get("label", ""), color=colour,
             fontsize=8, va="bottom", ha="left", zorder=6,
             path_effects=_outline())

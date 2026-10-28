@@ -116,6 +116,26 @@ class TestDrawing(unittest.TestCase):
         colours = {l.get_color() for l in ax_spec.lines[1:3]}
         self.assertEqual(len(colours), 2)
 
+    def test_a_smoothed_spectrum_is_never_drawn_unlabelled(self):
+        import smoothing
+        method = next(m for m in smoothing.METHODS if m != "None")
+        cube = map_cube()
+        roi = snapmapfig.new_roi(snapmapfig.roi_rect_of_pixel(cube, 1, 1))
+        _f, (_m, ax_spec), _ = self.draw(
+            {"rois": [roi], "smooth": {"method": method, "strength": 0.5}}, cube)
+        names = [t.get_text() for t in ax_spec.get_legend().get_texts()]
+        self.assertEqual(names[0], f"whole map ({method})")
+        self.assertTrue(names[1].endswith(f"px, {method}"), names)
+        _f, (_m, ax_spec), _ = self.draw({"rois": [roi]}, cube)
+        self.assertEqual(ax_spec.get_legend().get_texts()[0].get_text(),
+                         "whole map")
+
+    def test_area_outlines_have_a_dark_halo_for_contrast(self):
+        cube = map_cube()
+        roi = snapmapfig.new_roi(snapmapfig.roi_rect_of_pixel(cube, 1, 1))
+        _f, (ax_map, _s), _ = self.draw({"rois": [roi]}, cube)
+        self.assertTrue(ax_map.patches[0].get_path_effects())
+
     def test_an_ellipse_holds_fewer_pixels_than_its_rectangle(self):
         cube = map_cube(nx=12, ny=12)
         rect = [cube.x_of(0), cube.y_of(0), cube.x_of(11), cube.y_of(11)]
@@ -743,6 +763,43 @@ class TestModesInTheApp(unittest.TestCase):
         self.assertEqual(dlg.effective_mode(), "grid")
         dlg.choose_tiles([(self.parser, self.regions[1])])
         self.assertEqual(dlg.effective_mode(), "single")
+
+
+@unittest.skipUnless(HAVE_PLOT and os.environ.get("XPS_SNAPMAP_CORPUS"),
+                     "set XPS_SNAPMAP_CORPUS to the Vishay experiment folder")
+class TestRealOverlappingMaps(unittest.TestCase):
+    """Points 002a and 002b of the Vishay experiment are 1.446 mm apart on the
+    stage and their 2 mm maps overlap by about 0.55 mm: the stage-position
+    placement must line the overlap up (checked by correlating it)."""
+
+    def test_the_stage_placement_lines_the_overlap_up(self):
+        import numpy as np
+        import snapmap
+        from readers import load_file
+        parser = load_file(os.environ["XPS_SNAPMAP_CORPUS"])
+
+        def region(sample, name):
+            return next(r for r in parser.regions
+                        if r.sample.startswith(sample) and r.name == name
+                        and r.extra.get("cube") is not None)
+
+        def ncc(x, y):
+            x, y = x - x.mean(), y - y.mean()
+            return float((x * y).sum() / np.sqrt((x * x).sum() * (y * y).sum()))
+
+        for name in ("Al 2p", "O 1s", "F 1s"):
+            ca = region("Point 002a", name).extra["cube"]
+            cb = region("Point 002b", name).extra["cube"]
+            win = snapmap.default_window(ca)
+            a, b = ca.image(*win), cb.image(*win)
+            _ox, oy = snapmapfig.tile_offset(cb, ca)
+            s = int(round(oy / abs(ca.dy)))                  # 72 px
+            here = ncc(a[s:], b[:ca.ny - s])
+            flipped = ncc(a[:ca.ny - s], b[s:])              # the opposite sign
+            self.assertGreater(here, 0.5, name)
+            self.assertLess(abs(flipped), 0.2, name)
+            best = max((ncc(a[k:], b[:ca.ny - k]), k) for k in range(60, 85))
+            self.assertLessEqual(abs(best[1] - oy / abs(ca.dy)), 1.5, name)
 
 
 if __name__ == "__main__":

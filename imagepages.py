@@ -375,12 +375,14 @@ def draw_snap_mosaic(fig, rect, cluster, cmap=None):
         return
     n = len(mosaics)
     ext = mosaics[0][2].extent
-    wide = abs(ext[1] - ext[0]) > 1.5 * abs(ext[2] - ext[3])
-    cols = 1 if wide else min(2, n)        # a wide mosaic gets the page's width
+    aspect = abs(ext[1] - ext[0]) / max(abs(ext[2] - ext[3]), 1e-9)
+    # a wide mosaic gets the page's width, a tall one is one of several columns
+    cols = 1 if aspect > 1.5 else min(n, 4) if aspect < 0.7 else min(2, n)
     rows = -(-n // cols)
     gs = fig.add_gridspec(rows, cols, left=left + 0.05, right=right - 0.06,
                           top=top - 0.03, bottom=bottom + 0.03, wspace=0.35,
                           hspace=0.45)
+    tags = _site_tags([m[0].title for m in mosaics[0][3]])
     for i, (name, window, mos, members) in enumerate(mosaics):
         ax = fig.add_subplot(gs[i // cols, i % cols])
         vmin, vmax = snap_range(mos.image)
@@ -392,7 +394,8 @@ def draw_snap_mosaic(fig, rect, cluster, cmap=None):
             from matplotlib.patches import Rectangle
             ax.add_patch(Rectangle((fl, ft), fw, fh, fill=False, lw=0.6,
                                    ls=":", ec="#444444"))
-            ax.text(fl + fw * 0.02, ft + fh * 0.03, site.title, fontsize=5,
+            ax.text(fl + fw * 0.02, ft + fh * 0.03,
+                    tags.get(site.title, site.title), fontsize=5.5,
                     color="white", va="top", ha="left",
                     bbox=dict(boxstyle="square,pad=0.1", fc="#00000088",
                               ec="none"))
@@ -408,6 +411,21 @@ def draw_snap_mosaic(fig, rect, cluster, cmap=None):
         cax = make_axes_locatable(ax).append_axes("right", size="3%", pad=0.08)
         cb = fig.colorbar(im, cax=cax)
         cb.ax.tick_params(labelsize=5.5, length=2, pad=1)
+
+
+def _site_tags(titles):
+    """Short labels for the tiles: the part of each title that differs from
+    the others (``a`` / ``b`` for "Point 002a ..." and "Point 002b ..."), the
+    whole title when they do not share a start and an end."""
+    titles = list(dict.fromkeys(titles))
+    if len(titles) < 2:
+        return {t: t for t in titles}
+    pre = os.path.commonprefix(titles)
+    suf = os.path.commonprefix([t[::-1] for t in titles])[::-1]
+    tags = {t: t[len(pre):len(t) - len(suf)].strip() for t in titles}
+    if any(not v for v in tags.values()) or len(set(tags.values())) < len(tags):
+        return {t: t for t in titles}
+    return tags
 
 
 def snap_range(image):
