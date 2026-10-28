@@ -101,7 +101,7 @@ class SnapMapDialog(tk.Toplevel):
         ttk.Label(bar2, text="View").pack(side="left")
         self.mode_cb = ttk.Combobox(
             bar2, state="readonly", width=14,
-            values=[snapmapfig.MODE_NAMES[m] for m in snapmapfig.MODES])
+            values=[snapmapfig.MODE_NAMES[m] for m in snapmapfig.MODES if m != "fit"])
         self.mode_cb.set(snapmapfig.MODE_NAMES[self.mode.get()])
         self.mode_cb.pack(side="left", padx=(4, 14))
         self.mode_cb.bind("<<ComboboxSelected>>", lambda e: self.set_mode(

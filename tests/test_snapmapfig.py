@@ -651,6 +651,171 @@ class TestFigureInTheApp(unittest.TestCase):
         self.assertIn("group_by", fig["state"])
 
 
+def si_view(**over):
+    """A fit-components view of the two-state Si 2p test map."""
+    from test_snapfit import two_state_map
+    cube, truth = two_state_map()
+    region = cube_region(cube, "Si 2p", "S1")
+    region.energy = list(truth["be"])
+    fit = {"spec": truth["spec"]}
+    fit.update(over.pop("fit", {}))
+    return region, dict({"mode": "fit", "fit": fit}, **over), truth
+
+
+@unittest.skipUnless(HAVE_PLOT, "numpy / matplotlib not available")
+class TestFitView(unittest.TestCase):
+    def draw(self, spec, region):
+        from matplotlib.figure import Figure
+        fig = Figure(figsize=(12, 5))
+        axes = snapmapfig.draw_view(
+            fig, None, spec, region, themes.PRINT,
+            themes.scale_colourmap("Viridis", False, themes.PRINT))
+        return fig, axes
+
+    def test_the_fit_part_is_sanitised_and_survives_json(self):
+        s = snapmapfig.sanitise({"mode": "fit", "fit": {
+            "spec": {"components": [{"name": "Si", "be": 99.4},
+                                    {"name": "SiO2", "be": 103.4}]},
+            "show": ["fraction", "junk", "spectrum"], "on": -2}})
+        f = s["fit"]
+        self.assertEqual(s["mode"], "fit")
+        self.assertEqual(f["show"], ["fraction", "spectrum"])
+        self.assertEqual(f["numerator"], ["SiO2"])      # the last of two or more
+        self.assertIsNone(f["on"])
+        self.assertEqual(snapmapfig.sanitise(json.loads(json.dumps(s))), s)
+        one = snapmapfig.sanitise({"fit": {"spec": {"components": [
+            {"be": 100.0}]}}})["fit"]
+        self.assertEqual(one["numerator"], [])
+        self.assertEqual(snapmapfig.sanitise({"fit": {"spec": {"components": [
+            {"name": "A", "be": 1.0}, {"name": "B", "be": 2.0}]},
+            "numerator": ["B", "zzz"]}})["fit"]["numerator"], ["B"])
+        self.assertIn("fit of Si, SiO2", snapmapfig.describe(
+            {"mode": "fit", "fit": {"spec": {"components": [
+                {"name": "Si", "be": 99.4}, {"name": "SiO2", "be": 103.4}]}}}))
+
+    def test_component_fraction_residual_maps_and_the_spectrum(self):
+        region, spec, truth = si_view()
+        fig, (ax, ax_spec) = self.draw(spec, region)
+        titles = [title_of(a) for a in fig.axes if title_of(a)]
+        self.assertIn("Si", titles)
+        self.assertIn("SiO2", titles)
+        self.assertIn("SiO2 fraction", titles)
+        self.assertTrue(any("\u03c7" in t for t in titles))   # residual map
+        legend = [t.get_text() for t in ax_spec.get_legend().get_texts()]
+        self.assertEqual(legend[0], "data")
+        self.assertTrue(legend[1].startswith("Si  99.40 eV"))
+        self.assertTrue(legend[2].startswith("SiO2  103.40 eV"))
+        self.assertEqual(legend[-1], "fit")
+        # the fraction map is the oxide share, drawn from 0 to 1
+        import numpy as np
+        frac_ax = next(a for a in fig.axes if title_of(a) == "SiO2 fraction")
+        img = frac_ax.images[0]
+        self.assertEqual(img.get_clim(), (0.0, 1.0))
+        got = np.asarray(img.get_array(), dtype=float)
+        self.assertGreater(np.nanmean(got[:, -5:]), np.nanmean(got[:, :5]) + 0.4)
+
+    def test_the_percentages_in_the_legend_add_up_to_100(self):
+        region, spec, _t = si_view()
+        _fig, (_ax, ax_spec) = self.draw(spec, region)
+        legend = [t.get_text() for t in ax_spec.get_legend().get_texts()]
+        pcts = [int(x.split()[-2]) for x in legend[1:3]]
+        self.assertEqual(sum(pcts), 100)
+
+    def test_panels_can_be_chosen(self):
+        region, spec, _t = si_view(fit={"show": ["fraction"]})
+        fig, (ax, ax_spec) = self.draw(spec, region)
+        self.assertIsNone(ax_spec)
+        self.assertEqual([title_of(a) for a in fig.axes if title_of(a)],
+                         ["SiO2 fraction"])
+        region, spec, _t = si_view(fit={"show": ["spectrum"]})
+        fig, (ax, ax_spec) = self.draw(spec, region)
+        self.assertIsNotNone(ax_spec)
+        self.assertEqual(len(fig.axes), 1)
+
+    def test_the_spectrum_can_be_that_of_an_area(self):
+        region, spec, _t = si_view()
+        cube = region.extra["cube"]
+        spec["rois"] = [snapmapfig.new_roi(
+            [cube.x_of(0), cube.y_of(0), cube.x_of(5), cube.y_of(29)],
+            label="left edge")]
+        spec["fit"]["on"] = 0
+        fig, (ax, ax_spec) = self.draw(spec, region)
+        self.assertIn("left edge", title_of(ax_spec))
+        # the area is outlined on the maps too
+        self.assertTrue(any(a.patches for a in fig.axes if title_of(a) == "Si"))
+
+    def test_without_a_binding_axis_or_components_it_says_so(self):
+        region, spec, _t = si_view()
+        region.energy_label = "Kinetic Energy"
+        fig, _ = self.draw(spec, region)
+        self.assertTrue(any("binding-energy" in t.get_text()
+                            for a in fig.axes for t in a.texts))
+        region, spec, _t = si_view(fit={"spec": {"components": []}})
+        fig, _ = self.draw(spec, region)
+        self.assertTrue(any("No components" in t.get_text()
+                            for a in fig.axes for t in a.texts))
+
+    def test_the_energy_shift_of_the_shown_region_is_followed(self):
+        # the user shifted the spectrum by +0.7 eV: the fit looks there
+        import numpy as np
+        region, spec, truth = si_view()
+        region.energy = [e + 0.7 for e in region.energy]
+        fig, (ax, ax_spec) = self.draw(spec, region)
+        x = np.asarray(ax_spec.lines[0].get_xdata())    # the data, on the shown axis
+        self.assertAlmostEqual(float(x.min()), 95.7, delta=0.05)
+        self.assertLess(float(x.max()), 110.0)          # still cut to the window
+
+    def test_drawing_does_not_touch_the_cube(self):
+        region, spec, _t = si_view()
+        before = bytes(region.extra["cube"].data)
+        self.draw(spec, region)
+        self.assertEqual(bytes(region.extra["cube"].data), before)
+
+
+@unittest.skipUnless(HAVE_MPL, "matplotlib / Tk not available")
+class TestFitFigureInTheApp(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.root = tk.Tk()
+        except tk.TclError:
+            raise unittest.SkipTest("no display")
+        cls.root.withdraw()
+        cls.rc = dict(ee.matplotlib.rcParams)
+        cls.region, cls.spec, cls.truth = si_view()
+        cls.parser = doc("si.vms", [cls.region])
+        cls._load = ee.load_file
+        ee.load_file = lambda p: cls.parser
+        cls.ws = ee.Workspace(cls.root)
+        cls.ws._add_file("si.vms", file_id="si", refresh=False)
+        cls.ws._finish_adding()
+
+    @classmethod
+    def tearDownClass(cls):
+        ee.load_file = cls._load
+        ee.matplotlib.rcParams.update(cls.rc)
+        cls.root.destroy()
+
+    def test_a_fit_view_is_a_picture_and_a_report_figure(self):
+        import snapmap_ui
+        dlg = snapmap_ui.SnapMapDialog(self.root, self.ws, self.parser,
+                                       self.region)
+        self.addCleanup(dlg.destroy)
+        view = dict(dlg.view_spec(), mode="fit",
+                    fit=snapmapfig.sanitise_fit(self.spec["fit"]))
+        path = os.path.join(tempfile.gettempdir(), "snapmap_fit.png")
+        self.assertTrue(self.ws.snapmap_picture(view, path, size=(12, 5)))
+        self.addCleanup(os.remove, path)
+        self.assertGreater(os.path.getsize(path), 5000)
+        fig = self.ws.add_figure("Si fit", state=view)
+        self.ws.figures.append(fig) if fig not in self.ws.figures else None
+        self.assertEqual(len(self.ws._figure_pngs(fig, dpi=50)), 1)
+        self.assertEqual(len(self.ws._deck_images(1, fig)), 1)
+        import pptx_export
+        self.assertIn("fit of Si, SiO2", pptx_export.look_notes(fig["state"]))
+        self.ws.figures.remove(fig)
+
+
 @unittest.skipUnless(HAVE_MPL, "matplotlib / Tk not available")
 class TestModesInTheApp(unittest.TestCase):
     @classmethod

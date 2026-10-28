@@ -37,10 +37,15 @@ DEFAULTS = {
     "scale": "Viridis", "overlay": {"on": False, "alpha": 0.65}, "rois": [],
     "smooth": {"method": "None", "strength": 0.5}, "show_spectrum": True,
     "scalebar": True, "tiles": [], "mode": "single", "layers": [],
+    "fit": None,
 }
-MODES = ("single", "grid", "composite", "ratio")
+MODES = ("single", "grid", "composite", "ratio", "fit")
 MODE_NAMES = {"single": "Single map", "grid": "Element grid",
-              "composite": "RGB composite", "ratio": "Ratio map"}
+              "composite": "RGB composite", "ratio": "Ratio map",
+              "fit": "Fit components"}
+FIT_SHOW = ("components", "fraction", "residual", "spectrum")
+COMPONENT_COLOURS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00",
+                     "#56B4E9")
 MAX_LAYERS = 12
 RATIO_FLOOR = 0.05      # a denominator under this share of its 99th percentile is blank
 
@@ -77,10 +82,35 @@ def sanitise(spec) -> dict:
     out["scalebar"] = bool(spec.get("scalebar", True))
     out["mode"] = spec.get("mode") if spec.get("mode") in MODES else "single"
     out["layers"] = sanitise_layers(spec.get("layers"))
+    out["fit"] = sanitise_fit(spec.get("fit"))
     tl = spec.get("tiles")
     out["tiles"] = ([dict(t) for t in tl if isinstance(t, dict)]
                     if isinstance(tl, (list, tuple)) else [])
     return out
+
+
+def sanitise_fit(f) -> dict:
+    """The fit part of a view: ``{"spec": snapfit spec (with the fitted
+    positions and widths), "show": [panels], "numerator": [component names of
+    the fraction map], "on": None (whole map) | index of the area whose
+    spectrum is drawn}``. The numerator defaults to the last component of a
+    fit of two or more (the oxide, in Si 2p)."""
+    import snapfit
+    f = f if isinstance(f, dict) else {}
+    spec = snapfit.sanitise(f.get("spec"))
+    show = f.get("show")
+    show = [k for k in FIT_SHOW if k in show] if isinstance(
+        show, (list, tuple)) else list(FIT_SHOW)
+    names = [c["name"] for c in spec["components"]]
+    num = f.get("numerator")
+    if isinstance(num, (list, tuple)):
+        num = [n for n in num if n in names]
+    else:
+        num = names[-1:] if len(names) >= 2 else []
+    on = f.get("on")
+    return {"spec": spec, "show": show, "numerator": num,
+            "on": on if isinstance(on, int) and not isinstance(on, bool)
+            and on >= 0 else None}
 
 
 def sanitise_layers(layers) -> list:
@@ -259,7 +289,10 @@ def describe(spec, region=None) -> str:
     if s["background"]:
         parts.append("background removed")
     parts.append(f"{s['scale']} colours")
-    if s["mode"] != "single" and s["layers"]:
+    if s["mode"] == "fit" and s["fit"]["spec"]["components"]:
+        parts.append("fit of " + ", ".join(
+            c["name"] for c in s["fit"]["spec"]["components"]))
+    elif s["mode"] != "single" and s["layers"]:
         parts.append(f"{MODE_NAMES[s['mode']].lower()} of "
                      f"{len(s['layers'])} elements")
     if s["rois"]:
@@ -289,6 +322,8 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
     s = sanitise(spec)
     cube = region.extra["cube"]
     window = tuple(s["window"]) if s["window"] else snapmap.default_window(cube)
+    if s["mode"] == "fit" and not tiles:
+        return draw_fit_view(fig, rect, s, region, pal, cmap, unit_mark)
     if s["mode"] != "single" and layers and not tiles:
         out = draw_layers(fig, rect, s, region, layers, pal, cmap, unit_mark)
         if out is not None:
@@ -712,3 +747,169 @@ def draw_layers(fig, rect, s, region, layers, pal, cmap, unit_mark=None):
     if s["scalebar"]:
         _scalebar(ax, abs(right - left), unit_mark)
     return ax, None
+
+
+# -- component maps from a fit -----------------------------------------------------------------
+def _fit_axis(region):
+    """``(be, hv, note)``: the cube's energy axis as shown (the region's
+    shift applied) and the photon energy, or a note saying why there is no
+    binding-energy axis to fit on."""
+    import numpy as np
+    cube = region.extra["cube"]
+    if "inding" not in (region.energy_label or ""):
+        return None, None, "Fitting needs a binding-energy axis"
+    shift = (region.energy[0] - cube.energy[0]) if region.energy else 0.0
+    return (np.asarray(cube.energy, dtype=float) + shift,
+            region.photon_energy or 1486.6, "")
+
+
+def fit_result(region, fit):
+    """``(FitMaps, (be, hv, mean spectrum), note)`` for a view's fit: the
+    per-pixel partition with the frozen shapes, the energy axis as shown, the
+    photon energy and the whole map's mean spectrum (the Shirley step is taken
+    from it); ``(None, None, why)`` when the region has no binding-energy
+    axis."""
+    import numpy as np
+    import snapfit
+    cube = region.extra["cube"]
+    be, hv, note = _fit_axis(region)
+    if be is None:
+        return None, None, note
+    spec = fit["spec"]
+    data = cube.array3d()
+    mean = data.reshape(-1, data.shape[2]).mean(axis=0)
+    maps = snapfit.fit_maps(cube, be, hv, spec, y_mean=mean)
+    return maps, (be, hv, mean), ""
+
+
+def draw_fit_view(fig, rect, s, region, pal, cmap, unit_mark=None):
+    """The fit-components view: a map per component (counts summed over the
+    component's channels), the fraction map of ``fit["numerator"]`` over all
+    components, the reduced chi-square map, and the model drawn on the
+    spectrum of the whole map or of an area; returns ``(first axes, spectrum
+    axes or None)``."""
+    import numpy as np
+    import snapfit
+    cube = region.extra["cube"]
+    fit = s["fit"]
+    spec = fit["spec"]
+    l, b, r, t = rect if rect else (0.0, 0.0, 1.0, 1.0)
+    w, h = r - l, t - b
+
+    def say(text):
+        ax = _map_axes(fig, [l + 0.1 * w, b + 0.1 * h, 0.8 * w, 0.8 * h], pal)
+        ax.set_axis_off()
+        ax.text(0.5, 0.5, text, ha="center", va="center",
+                color=pal["plot_fg"], transform=ax.transAxes, fontsize=10)
+        return ax, None
+
+    if not spec["components"]:
+        return say("No components to fit: add some in the Fit panel")
+    maps, spectrum, note = fit_result(region, fit)
+    if maps is None:
+        return say(note)
+    be, hv, mean = spectrum
+    show = fit["show"]
+    panels = []
+    if "components" in show:
+        panels += [("c", k) for k in range(len(maps.names))]
+    if "fraction" in show and len(maps.names) >= 2:
+        panels.append(("f", None))
+    if "residual" in show:
+        panels.append(("r", None))
+    ext = cube.extent()
+    left, right, bottom, top = ext
+    rois = s["rois"]
+    first = None
+    map_right = (0.62 if "spectrum" in show else 0.97)
+    if panels:
+        n = len(panels)
+        cols = 1 if n == 1 else 2 if n <= 4 else 3
+        rows = -(-n // cols)
+        x0, x1 = l + 0.045 * w, l + map_right * w
+        cw, ch = (x1 - x0) / cols, 0.9 * h / rows
+        for i, (kind, k) in enumerate(panels):
+            cx, cy = i % cols, i // cols
+            ax = _map_axes(fig, [x0 + cx * cw + 0.02 * cw,
+                                 b + 0.95 * h - (cy + 1) * ch + 0.14 * ch,
+                                 cw * 0.66, ch * 0.66], pal)
+            if kind == "c":
+                img = maps.areas[k]
+                title = maps.names[k]
+                vmin, vmax = snapmap.colour_range(img)
+                use = cmap
+            elif kind == "f":
+                img = snapfit.fraction(maps, fit["numerator"])
+                title = (" + ".join(fit["numerator"]) or "fraction") + " fraction"
+                vmin, vmax = 0.0, 1.0
+                try:
+                    use = cmap.with_extremes(bad=pal["plot_bg"])
+                except Exception:                     # noqa: BLE001
+                    use = cmap
+            else:
+                img = maps.chi2
+                title = "reduced \u03c7\u00b2"
+                vmin, vmax = 0.0, max(2.0, float(np.percentile(maps.chi2, 99)))
+                use = cmap
+            im = ax.imshow(img, extent=ext, origin="upper", cmap=use,
+                           interpolation="nearest", vmin=vmin, vmax=vmax)
+            ax.set_xlim(left, right)
+            ax.set_ylim(bottom, top)
+            ax.set_title(title, fontsize=8, color=pal["plot_fg"])
+            ax.tick_params(labelsize=6)
+            from mpl_toolkits.axes_grid1 import make_axes_locatable
+            cax = make_axes_locatable(ax).append_axes("right", size="4%",
+                                                      pad=0.06)
+            cb = fig.colorbar(im, cax=cax)
+            cb.ax.tick_params(colors=pal["muted"], labelsize=6)
+            _rois_on(ax, cube, rois)
+            if i == 0 and s["scalebar"]:
+                _scalebar(ax, abs(right - left), unit_mark)
+            first = first or ax
+    ax_spec = None
+    if "spectrum" in show:
+        box = ([l + 0.68 * w, b + 0.14 * h, 0.29 * w, 0.72 * h]
+               if panels else [l + 0.1 * w, b + 0.14 * h, 0.85 * w, 0.72 * h])
+        ax_spec = _map_axes(fig, box, pal)
+        masks = roi_masks(cube, rois)
+        on = fit["on"]
+        if on is not None and on < len(masks) and masks[on] is not None:
+            data = cube.array3d()
+            y = data[masks[on]].mean(axis=0)
+            npx = int(masks[on].sum())
+            what = rois[on]["label"]
+        else:
+            y, npx, what = mean, cube.nx * cube.ny, "whole map"
+        try:
+            res = snapfit.evaluate(be, y, hv, spec, n_pix=npx)
+        except ValueError as e:
+            ax_spec.set_axis_off()
+            ax_spec.text(0.5, 0.5, str(e), ha="center", va="center",
+                         transform=ax_spec.transAxes, color=pal["plot_fg"],
+                         fontsize=9)
+            return first or ax_spec, ax_spec
+        ax_spec.plot(res.be, res.y, ".", ms=2.5, color=pal["muted"],
+                     label="data")
+        total = float(res.amplitudes.sum()) or 1.0
+        for k, (c, curve) in enumerate(zip(spec["components"],
+                                           res.components)):
+            col = COMPONENT_COLOURS[k % len(COMPONENT_COLOURS)]
+            ax_spec.fill_between(res.be, res.bg, res.bg + curve, color=col,
+                                 alpha=0.35, lw=0)
+            ax_spec.plot(res.be, res.bg + curve, color=col, lw=1.0,
+                         label=f"{c['name']}  {c['be']:.2f} eV  "
+                               f"{100 * res.amplitudes[k] / total:.0f} %")
+        ax_spec.plot(res.be, res.bg, "--", color=pal["muted"], lw=0.9)
+        ax_spec.plot(res.be, res.envelope, color=pal["plot_fg"], lw=1.2,
+                     label="fit")
+        ax_spec.set_xlim(max(res.be), min(res.be))
+        ax_spec.set_xlabel(f"{region.energy_label} ({region.energy_units})",
+                           color=pal["plot_fg"], fontsize=9)
+        ax_spec.set_ylabel("Counts per pixel" if what == "whole map"
+                           else "Counts per pixel (area)",
+                           color=pal["plot_fg"], fontsize=9)
+        ax_spec.set_title(f"{region.name}, {what}   \u03c7\u00b2 "
+                          f"{res.chi2red:.2f}", fontsize=9,
+                          color=pal["plot_fg"])
+        ax_spec.legend(fontsize=7, frameon=False, labelcolor=pal["plot_fg"])
+    return first or ax_spec, ax_spec

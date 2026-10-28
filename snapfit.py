@@ -671,3 +671,31 @@ def fraction(maps, names, floor=FRACTION_FLOOR):
         ok &= tot >= floor * float(np.percentile(tot[ok], 99))
     out[ok] = num[ok] / tot[ok]
     return out
+
+
+def evaluate(be, y, hv, spec, window=None, n_pix=1) -> Result:
+    """The model of ``spec`` as it stands (no refinement) on one spectrum:
+    amplitudes and background solved by NNLS for the frozen shapes. What the
+    overlay draws for an area of a map; the same fields as :func:`fit_mean`."""
+    np = _np()
+    spec = sanitise(spec)
+    if not spec["components"]:
+        raise ValueError("no components to fit")
+    be = np.asarray(be, dtype=float)
+    y = np.asarray(y, dtype=float)
+    win = window or spec["window"]
+    if win:
+        sel = (be >= min(win)) & (be <= max(win))
+        be, y = be[sel], y[sel]
+    if len(be) < 3 * len(spec["components"]) + 4:
+        raise ValueError("too few channels in the fit window")
+    w = float(max(1, n_pix)) / np.maximum(y, 1.0)
+    A, x = _model(be, hv, spec, None, y, w)
+    k = len(spec["components"])
+    comps = (A[:, :k] * x[:k]).T
+    bg = A[:, k:] @ x[k:]
+    r = (y - A @ x) * np.sqrt(w)
+    ndf = max(1, len(be) - A.shape[1])
+    return Result(spec=spec, amplitudes=x[:k], levels=x[k:], be=be, y=y,
+                  components=comps, bg=bg, envelope=comps.sum(axis=0) + bg,
+                  chi2red=float(r @ r) / ndf, errors={}, notes=[])
