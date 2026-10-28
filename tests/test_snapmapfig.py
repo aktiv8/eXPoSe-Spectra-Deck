@@ -42,7 +42,7 @@ class TestSpec(unittest.TestCase):
                                  "roi": [1, 2, 3], "smooth": 5, "junk": 1})
         self.assertEqual(s["kind"], "snapmap")
         self.assertIsNone(s["window"])
-        self.assertIsNone(s["roi"])
+        self.assertEqual(s["rois"], [])
         self.assertEqual(s["overlay"]["alpha"], 1.0)
         self.assertEqual(s["smooth"]["method"], "None")
         self.assertNotIn("junk", s)
@@ -92,12 +92,68 @@ class TestDrawing(unittest.TestCase):
         cube = map_cube()
         roi = [cube.x_of(0) - 1, cube.y_of(0) - 1, cube.x_of(1) + 1,
                cube.y_of(1) + 1]
-        _fig, (ax_map, ax_spec), _ = self.draw({"roi": roi}, cube)
+        _fig, (ax_map, ax_spec), _ = self.draw({"roi": roi}, cube)   # legacy key
         self.assertEqual(len(ax_map.patches), 1)
         labels = [t.get_text() for t in ax_spec.get_legend().get_texts()]
-        self.assertIn("area, 4 px", labels)
+        self.assertIn("Area 1, 4 px", labels)
         mask = snapmapfig.roi_mask(cube, roi)
         self.assertEqual(int(mask.sum()), 4)
+
+    def test_several_areas_each_get_a_colour_outline_and_spectrum(self):
+        cube = map_cube()
+        rois = [snapmapfig.new_roi(snapmapfig.roi_rect_of_pixel(cube, 0, 0)),
+                snapmapfig.new_roi([cube.x_of(2) - 1, cube.y_of(1) - 1,
+                                    cube.x_of(4) + 1, cube.y_of(3) + 1],
+                                   "ellipse", "Bright side")]
+        _fig, (ax_map, ax_spec), _ = self.draw({"rois": rois}, cube)
+        self.assertEqual(len(ax_map.patches), 2)
+        names = [t.get_text() for t in ax_spec.get_legend().get_texts()]
+        self.assertEqual(names[0], "whole map")
+        self.assertTrue(names[1].startswith("Area 1"))
+        self.assertTrue(names[2].startswith("Bright side"))
+        from matplotlib.patches import Ellipse
+        self.assertTrue(any(isinstance(p, Ellipse) for p in ax_map.patches))
+        colours = {l.get_color() for l in ax_spec.lines[1:3]}
+        self.assertEqual(len(colours), 2)
+
+    def test_an_ellipse_holds_fewer_pixels_than_its_rectangle(self):
+        cube = map_cube(nx=12, ny=12)
+        rect = [cube.x_of(0), cube.y_of(0), cube.x_of(11), cube.y_of(11)]
+        r = int(snapmapfig.roi_mask(cube, snapmapfig.new_roi(rect)).sum())
+        e = int(snapmapfig.roi_mask(cube,
+                                    snapmapfig.new_roi(rect, "ellipse")).sum())
+        self.assertEqual(r, 144)
+        self.assertLess(e, r)
+        self.assertGreater(e, 0.6 * r)                 # about pi/4 of it
+        tiny = snapmapfig.new_roi(snapmapfig.roi_rect_of_pixel(cube, 3, 3),
+                                  "ellipse")
+        self.assertEqual(int(snapmapfig.roi_mask(cube, tiny).sum()), 1)
+
+    def test_area_numbers_are_those_of_the_map_on_show(self):
+        cube = map_cube()
+        roi = snapmapfig.new_roi([cube.x_of(0) - 1, cube.y_of(0) - 1,
+                                  cube.x_of(1) + 1, cube.y_of(1) + 1],
+                                 label="corner")
+        row, = snapmapfig.roi_stats(cube, (284.0, 296.0), False, [roi])
+        img = cube.image(284.0, 296.0)
+        want = img[:2, :2]
+        self.assertEqual(row["px"], 4)
+        self.assertAlmostEqual(row["area_um2"], 4 * 10.0 * 10.0)
+        self.assertAlmostEqual(row["mean"], float(want.mean()))
+        self.assertAlmostEqual(row["sum"], float(want.sum()))
+        self.assertAlmostEqual(row["sd"], float(want.std(ddof=1)))
+        self.assertAlmostEqual(row["ratio"], float(want.mean() / img.mean()))
+        self.assertEqual(row["label"], "corner")
+
+    def test_areas_are_capped_labelled_and_survive_json(self):
+        many = [{"rect": [0, 0, i + 1, 1]} for i in range(10)]
+        s = snapmapfig.sanitise({"rois": many + [{"rect": "bad"}]})
+        self.assertEqual(len(s["rois"]), snapmapfig.MAX_ROIS)
+        self.assertEqual(s["rois"][2]["label"], "Area 3")
+        self.assertEqual(snapmapfig.sanitise(json.loads(json.dumps(s))), s)
+        legacy = snapmapfig.sanitise({"roi": [1, 2, 3, 4]})
+        self.assertEqual(legacy["rois"][0]["rect"], [1.0, 2.0, 3.0, 4.0])
+        self.assertNotIn("roi", legacy)
 
     def test_one_clicked_pixel_makes_a_one_pixel_area(self):
         cube = map_cube()
@@ -120,10 +176,10 @@ class TestDrawing(unittest.TestCase):
 
     def test_describe_says_what_the_view_shows(self):
         text = snapmapfig.describe({"window": [284, 290], "background": True,
-                                    "roi": [0, 0, 1, 1]})
+                                    "rois": [{"rect": [0, 0, 1, 1]}, {"rect": [1, 1, 2, 2]}]})
         self.assertIn("284.0-290.0", text)
         self.assertIn("background removed", text)
-        self.assertIn("area of interest", text)
+        self.assertIn("2 areas of interest", text)
         import pptx_export
         self.assertEqual(
             pptx_export.look_notes({"kind": "snapmap", "window": [1, 2]}),
@@ -307,15 +363,15 @@ class TestFigureInTheApp(unittest.TestCase):
         dlg = self.dialog()
         dlg.window = (285.0, 289.0)
         cube = self.region.extra["cube"]
-        dlg.roi = snapmapfig.roi_rect_of_pixel(cube, 1, 1)
-        dlg.mask = snapmapfig.roi_mask(cube, dlg.roi)
+        dlg.add_roi(snapmapfig.roi_rect_of_pixel(cube, 1, 1))
         dlg.scale.set("Magma")
         dlg.save_as_figure("again")
         saved = self.ws.figures[0]["state"]
         again = self.dialog(view=saved, figure=0)
         self.assertEqual(again.window, (285.0, 289.0))
         self.assertEqual(again.scale.get(), "Magma")
-        self.assertEqual(int(again.mask.sum()), 1)
+        self.assertEqual(len(again.rois), 1)
+        self.assertEqual(int(again.masks()[0].sum()), 1)
         again.window = (286.0, 288.0)
         self.assertTrue(again.update_figure())
         self.assertEqual(self.ws.figures[0]["state"]["window"], [286.0, 288.0])
@@ -371,6 +427,68 @@ class TestFigureInTheApp(unittest.TestCase):
         self.assertEqual(len(again.tiles), 1)
         dlg.choose_tiles([])
         self.assertEqual(dlg.view_spec()["tiles"], [])
+
+    def test_the_window_is_resizable_with_a_toolbar_and_an_area_panel(self):
+        dlg = self.dialog()
+        dlg.update_idletasks()
+        self.assertEqual(dlg.resizable(), (True, True))
+        self.assertTrue(hasattr(dlg, "toolbar"))
+        # a zoom tool on: the selectors stand aside; off: they act again
+        dlg.toolbar.mode = "zoom rect"
+        dlg._sync_tools()
+        self.assertFalse(dlg.rect.active)
+        self.assertFalse(dlg.span.active)
+        dlg.toolbar.mode = ""
+        dlg._sync_tools()
+        self.assertTrue(dlg.rect.active)
+
+    def test_areas_are_added_listed_kept_through_a_zoom_and_removed(self):
+        dlg = self.dialog()
+        cube = self.region.extra["cube"]
+        dlg.ax_map.set_xlim(-10, 10)                   # zoomed in
+        a = dlg.add_roi(snapmapfig.roi_rect_of_pixel(cube, 0, 0))
+        b = dlg.add_roi([cube.x_of(2), cube.y_of(1), cube.x_of(4), cube.y_of(3)],
+                        "ellipse", "Edge")
+        self.assertEqual((a, b), (0, 1))
+        self.assertEqual(dlg.ax_map.get_xlim(), (-10, 10))   # zoom kept
+        self.assertEqual(len(dlg.area_tree.get_children()), 2)
+        self.assertEqual(dlg.area_tree.item("1", "values")[0], "Edge")
+        rows = dlg.stats()
+        self.assertEqual([r["label"] for r in rows], ["Area 1", "Edge"])
+        csv_text = dlg.stats_csv()
+        self.assertIn('"Edge",ellipse', csv_text)
+        self.assertEqual(len(csv_text.strip().splitlines()), 4)
+        head, srows = dlg.spectra_csv_rows()
+        self.assertEqual(len(head), 4)                 # energy, map, two areas
+        self.assertEqual(len(srows), len(cube.energy))
+        dlg.rename_roi(0, "Spot")
+        self.assertEqual(dlg.view_spec()["rois"][0]["label"], "Spot")
+        dlg.remove_roi(0)
+        self.assertEqual([r["label"] for r in dlg.rois], ["Edge"])
+        self.assertEqual(len(dlg.area_tree.get_children()), 1)
+        self.assertIsNone(dlg.add_roi([1e6, 1e6, 1e6 + 1, 1e6 + 1]))   # off the map
+
+    def test_changing_the_window_updates_the_numbers(self):
+        dlg = self.dialog()
+        cube = self.region.extra["cube"]
+        dlg.add_roi(snapmapfig.roi_rect_of_pixel(cube, 1, 1))
+        before = dlg.stats()[0]["mean"]
+        dlg.window = (300.0, 301.0)
+        dlg._update_map()
+        shown = float(dlg.area_tree.item("0", "values")[3])
+        self.assertNotAlmostEqual(before, dlg.stats()[0]["mean"])
+        self.assertAlmostEqual(shown, dlg.stats()[0]["mean"], delta=abs(shown) * 1e-3)
+
+    def test_a_saved_figure_keeps_all_its_areas(self):
+        dlg = self.dialog()
+        cube = self.region.extra["cube"]
+        dlg.add_roi(snapmapfig.roi_rect_of_pixel(cube, 0, 0))
+        dlg.add_roi(snapmapfig.roi_rect_of_pixel(cube, 2, 2), "ellipse", "B")
+        fig = dlg.save_as_figure("areas")
+        self.assertEqual(len(fig["state"]["rois"]), 2)
+        self.assertEqual(len(self.ws._figure_pngs(fig, dpi=50)), 1)
+        again = self.dialog(view=fig["state"])
+        self.assertEqual([r["label"] for r in again.rois], ["Area 1", "B"])
 
     def test_spectrum_figures_are_untouched(self):
         fig = self.ws.add_figure("plain")

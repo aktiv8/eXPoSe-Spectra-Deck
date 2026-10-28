@@ -8,7 +8,8 @@ HTML page with the same result::
     {"kind": "snapmap", "ref": <workbook.region_ref of the map's region>,
      "window": [lo, hi], "background": bool, "scale": "Viridis",
      "overlay": {"on": bool, "alpha": 0.65},
-     "roi": [x0, y0, x1, y1] | None,          # µm, the map's own frame
+     "rois": [{"shape": "rect" | "ellipse", "rect": [x0, y0, x1, y1],
+               "label": str}, ...],           # µm, the map's own frame
      "smooth": {"method": "None", "strength": 0.5},
      "show_spectrum": bool, "scalebar": bool}
 
@@ -27,7 +28,7 @@ KIND = "snapmap"
 
 DEFAULTS = {
     "kind": KIND, "ref": None, "window": None, "background": False,
-    "scale": "Viridis", "overlay": {"on": False, "alpha": 0.65}, "roi": None,
+    "scale": "Viridis", "overlay": {"on": False, "alpha": 0.65}, "rois": [],
     "smooth": {"method": "None", "strength": 0.5}, "show_spectrum": True,
     "scalebar": True, "tiles": [],
 }
@@ -55,10 +56,7 @@ def sanitise(spec) -> dict:
     a = ov.get("alpha", 0.65)
     out["overlay"] = {"on": bool(ov.get("on", False)),
                       "alpha": float(min(1.0, max(0.1, a))) if _num(a) else 0.65}
-    roi = spec.get("roi")
-    out["roi"] = ([float(v) for v in roi]
-                  if isinstance(roi, (list, tuple)) and len(roi) == 4
-                  and all(_num(v) for v in roi) else None)
+    out["rois"] = sanitise_rois(spec.get("rois"), spec.get("roi"))
     sm = spec.get("smooth") if isinstance(spec.get("smooth"), dict) else {}
     s = sm.get("strength", 0.5)
     out["smooth"] = {"method": sm.get("method") if isinstance(
@@ -69,6 +67,43 @@ def sanitise(spec) -> dict:
     tl = spec.get("tiles")
     out["tiles"] = ([dict(t) for t in tl if isinstance(t, dict)]
                     if isinstance(tl, (list, tuple)) else [])
+    return out
+
+
+MAX_ROIS = 6
+ROI_COLOURS = ("#E69F00", "#56B4E9", "#009E73", "#D55E00", "#CC79A7",
+               "#0072B2")
+SHAPES = ("rect", "ellipse")
+
+
+def roi_colour(i: int) -> str:
+    return ROI_COLOURS[i % len(ROI_COLOURS)]
+
+
+def new_roi(rect, shape="rect", label="") -> dict:
+    return {"shape": shape if shape in SHAPES else "rect",
+            "rect": [float(v) for v in rect], "label": label}
+
+
+def sanitise_rois(rois, legacy=None) -> list:
+    """A valid list of areas: each ``{"shape", "rect", "label"}``; a
+    ``legacy`` single rectangle (earlier views stored ``roi``) becomes the
+    first one. At most ``MAX_ROIS``; labels default to "Area N"."""
+    items = list(rois) if isinstance(rois, (list, tuple)) else []
+    if not items and isinstance(legacy, (list, tuple)):
+        items = [{"rect": legacy}]
+    out = []
+    for it in items:
+        rect = it.get("rect") if isinstance(it, dict) else None
+        if not (isinstance(rect, (list, tuple)) and len(rect) == 4
+                and all(_num(v) for v in rect)):
+            continue
+        label = it.get("label")
+        out.append(new_roi(rect, it.get("shape"),
+                           label.strip() if isinstance(label, str)
+                           and label.strip() else f"Area {len(out) + 1}"))
+        if len(out) == MAX_ROIS:
+            break
     return out
 
 
@@ -85,11 +120,59 @@ def roi_rect_of_pixel(cube, ix, iy):
 
 
 def roi_mask(cube, roi):
-    """Boolean ``(ny, nx)`` mask of a view's ROI, or None."""
+    """Boolean ``(ny, nx)`` mask of one area (a ``new_roi`` dict, or a bare
+    rectangle), or None when it holds no pixel. An ellipse is the one inscribed
+    in its rectangle, taken by pixel centres."""
     if not roi:
         return None
-    m = cube.rect_mask(*roi)
+    if not isinstance(roi, dict):
+        roi = new_roi(roi)
+    x0, y0, x1, y1 = roi["rect"]
+    m = cube.rect_mask(x0, y0, x1, y1)
+    if roi.get("shape") == "ellipse" and m.any():
+        import numpy as np
+        xs = cube.x0 + np.arange(cube.nx) * cube.dx
+        ys = cube.y0 + np.arange(cube.ny) * cube.dy
+        cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+        rx, ry = abs(x1 - x0) / 2, abs(y1 - y0) / 2
+        if rx > 0 and ry > 0:
+            inside = (((xs[None, :] - cx) / rx) ** 2
+                      + ((ys[:, None] - cy) / ry) ** 2) <= 1.0
+            m = m & inside
+        # a very small ellipse must still hold the pixel it was clicked on
+        if not m.any():
+            m = cube.rect_mask(cx - abs(cube.dx) / 2, cy - abs(cube.dy) / 2,
+                               cx + abs(cube.dx) / 2, cy + abs(cube.dy) / 2)
     return m if m.any() else None
+
+
+def roi_masks(cube, rois):
+    """``[mask or None]`` for each area."""
+    return [roi_mask(cube, r) for r in rois]
+
+
+def roi_stats(cube, window, background, rois) -> list:
+    """One row per area, from the map as shown (the counts summed over the
+    window): ``label, shape, px, area_um2, mean, sum, sd`` and ``ratio``, the
+    area's mean over the whole map's. An area with no pixel is left out."""
+    import numpy as np
+    image = cube.image(window[0], window[1], background=background)
+    whole = float(np.mean(image)) if image.size else 0.0
+    rows = []
+    for r in rois:
+        m = roi_mask(cube, r)
+        if m is None:
+            continue
+        v = image[m]
+        mean = float(v.mean())
+        rows.append({
+            "label": r.get("label", ""), "shape": r.get("shape", "rect"),
+            "px": int(m.sum()),
+            "area_um2": float(m.sum() * abs(cube.dx * cube.dy)),
+            "mean": mean, "sum": float(v.sum()),
+            "sd": float(v.std(ddof=1)) if v.size > 1 else 0.0,
+            "ratio": mean / whole if whole else float("nan")})
+    return rows
 
 
 def nice_length(width_um: float) -> float:
@@ -105,23 +188,27 @@ def nice_length(width_um: float) -> float:
     return float(mag)
 
 
-def mean_spectra(cube, mask, smooth):
-    """``(whole, roi)`` mean spectra per pixel, smoothed for display when a
-    method is chosen."""
+def mean_spectra(cube, masks, smooth):
+    """``(whole, [spectrum or None per mask])``: the mean spectra per pixel of
+    the whole map and of each area, smoothed for display when a method is
+    chosen."""
     n_all = cube.nx * cube.ny
     whole = [v / n_all for v in cube.total()]
-    roi = None
-    if mask is not None and mask.any():
-        n = int(mask.sum())
-        roi = [v / n for v in cube.roi_spectrum(mask)]
+    rois = []
+    for mask in masks:
+        if mask is not None and mask.any():
+            n = int(mask.sum())
+            rois.append([v / n for v in cube.roi_spectrum(mask)])
+        else:
+            rois.append(None)
     method = (smooth or {}).get("method", "None")
     if method != "None":
         import smoothing
         strength = (smooth or {}).get("strength", 0.5)
         whole = smoothing.smooth(whole, method, strength).tolist()
-        if roi is not None:
-            roi = smoothing.smooth(roi, method, strength).tolist()
-    return whole, roi
+        rois = [None if r is None else
+                smoothing.smooth(r, method, strength).tolist() for r in rois]
+    return whole, rois
 
 
 def describe(spec, region=None) -> str:
@@ -135,8 +222,10 @@ def describe(spec, region=None) -> str:
     if s["background"]:
         parts.append("background removed")
     parts.append(f"{s['scale']} colours")
-    if s["roi"]:
-        parts.append("area of interest marked")
+    if s["rois"]:
+        n = len(s["rois"])
+        parts.append("1 area of interest marked" if n == 1
+                     else f"{n} areas of interest marked")
     if s["overlay"]["on"]:
         parts.append("over the camera image")
     return "; ".join(parts) + "."
@@ -221,20 +310,19 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
     cb.ax.tick_params(colors=pal["muted"], labelsize=8)
     cb.set_label(cube.label or "Counts", color=pal["plot_fg"], fontsize=8)
 
-    mask = roi_mask(cube, s["roi"]) if mos is None else None
+    masks = []
     if mos is not None:
-        for i, fl, ft, fw, fh in mosaic_footprints(
+        for _i, fl, ft, fw, fh in mosaic_footprints(
                 [cube] + [t.extra["cube"] for t in tiles]):
             ax_map.add_patch(Rectangle((fl, ft), fw, fh, fill=False, lw=0.8,
                                        ls=":", ec=pal["muted"], zorder=4))
-    if mask is not None:
-        import numpy as np
-        rows = np.flatnonzero(mask.any(axis=1))
-        cols = np.flatnonzero(mask.any(axis=0))
-        x0, x1 = cube.x_of(cols[0]) - cube.dx / 2, cube.x_of(cols[-1]) + cube.dx / 2
-        y0, y1 = cube.y_of(rows[0]) - cube.dy / 2, cube.y_of(rows[-1]) + cube.dy / 2
-        ax_map.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False,
-                                   lw=1.6, ls="--", ec=pal["accent"], zorder=5))
+    else:
+        rois = s["rois"]
+        masks = roi_masks(cube, rois)
+        for k, (roi, m) in enumerate(zip(rois, masks)):
+            if m is None:
+                continue
+            _outline_roi(ax_map, cube, roi, m, roi_colour(k))
     if s["scalebar"]:
         length = nice_length(abs(right - left))
         # the bar sits near the bottom edge of the map
@@ -251,16 +339,19 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
                     zorder=6, path_effects=_outline())
 
     if ax_spec is not None:
-        whole, roi = mean_spectra(cube, mask, s["smooth"])
+        whole, spectra = mean_spectra(cube, masks, s["smooth"])
         if mos is not None:
             whole, _n = mean_spectrum_of(mos.used)
-            roi = None
+            spectra = []
         e = cube.energy
-        ax_spec.plot(e, whole, color=pal["muted"] if roi else pal["accent"],
+        shown = [(k, sp) for k, sp in enumerate(spectra) if sp is not None]
+        ax_spec.plot(e, whole, color=pal["muted"] if shown else pal["accent"],
                      lw=1.4, label="whole map")
-        if roi:
-            ax_spec.plot(e, roi, color=pal["accent"], lw=1.6,
-                         label=f"area, {int(mask.sum())} px")
+        for k, sp in shown:
+            ax_spec.plot(e, sp, color=roi_colour(k), lw=1.6,
+                         label=f"{s['rois'][k]['label']}, "
+                               f"{int(masks[k].sum())} px")
+        if shown:
             ax_spec.legend(fontsize=8, frameon=False, labelcolor=pal["plot_fg"])
         binding = "inding" in (region.energy_label or "")
         ax_spec.set_xlim((max(e), min(e)) if binding else (min(e), max(e)))
@@ -270,6 +361,27 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
         ax_spec.set_ylabel("Counts per pixel", color=pal["plot_fg"], fontsize=9)
         ax_spec.set_title(region.name, fontsize=9, color=pal["plot_fg"])
     return ax_map, ax_spec
+
+
+def _outline_roi(ax, cube, roi, mask, colour):
+    """Draw one area on the map: its rectangle (or ellipse) snapped to the
+    pixels it holds, and its label."""
+    import numpy as np
+    from matplotlib.patches import Ellipse, Rectangle
+    rows, cols = np.flatnonzero(mask.any(axis=1)), np.flatnonzero(
+        mask.any(axis=0))
+    x0, x1 = cube.x_of(cols[0]) - cube.dx / 2, cube.x_of(cols[-1]) + cube.dx / 2
+    y0, y1 = cube.y_of(rows[0]) - cube.dy / 2, cube.y_of(rows[-1]) + cube.dy / 2
+    if roi.get("shape") == "ellipse":
+        ax.add_patch(Ellipse(((x0 + x1) / 2, (y0 + y1) / 2), abs(x1 - x0),
+                             abs(y1 - y0), fill=False, lw=1.8, ls="--",
+                             ec=colour, zorder=5))
+    else:
+        ax.add_patch(Rectangle((x0, y0), x1 - x0, y1 - y0, fill=False, lw=1.8,
+                               ls="--", ec=colour, zorder=5))
+    ax.text(min(x0, x1), min(y0, y1), " " + roi.get("label", ""), color=colour,
+            fontsize=8, va="bottom", ha="left", zorder=6,
+            path_effects=_outline())
 
 
 def _outline():

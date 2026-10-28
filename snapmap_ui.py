@@ -31,7 +31,8 @@ class SnapMapDialog(tk.Toplevel):
         """``view`` (a ``snapmapfig`` dict) restores a saved look; ``figure``
         is the index in ``app.figures`` it came from."""
         super().__init__(master)
-        from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+        from matplotlib.backends.backend_tkagg import (FigureCanvasTkAgg,
+                                                        NavigationToolbar2Tk)
         from matplotlib.figure import Figure
         self.app, self.parser = app, parser
         self.entries = [r for r in parser.regions
@@ -39,7 +40,7 @@ class SnapMapDialog(tk.Toplevel):
                         and r.sample == region.sample] or [region]
         self.region = region
         self.cube = region.extra["cube"]
-        self.mask = None                     # boolean (ny, nx), None = whole map
+        self.rois = []                       # [snapmapfig.new_roi dicts], µm
         self.window = snapmap.default_window(self.cube)
         cfg = app.cfg.get("snapmap", {})
         self.scale = tk.StringVar(value=cfg.get("scale", "Viridis")
@@ -53,7 +54,7 @@ class SnapMapDialog(tk.Toplevel):
             if cfg.get("smooth_method") in smoothing.METHODS else "None")
         self.smooth_strength = tk.DoubleVar(
             value=float(cfg.get("smooth_strength", 0.5)))
-        self.roi = None                      # [x0, y0, x1, y1] µm, None = whole map
+        self.roi_shape = tk.StringVar(value="rect")
         self.tiles = []                      # [(parser, region)] laid beside this map
         self.figure = figure
         self.title(f"SnapMap — {region.sample}")
@@ -103,14 +104,31 @@ class SnapMapDialog(tk.Toplevel):
                   length=110, command=self._smoothing_changed).pack(
             side="left", padx=(4, 0))
 
-        self.fig = Figure(figsize=(10.4, 4.9), dpi=100)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=body)
-        self.canvas.get_tk_widget().pack(fill="both", expand=True, pady=(6, 4))
         row = ttk.Frame(body)
-        row.pack(fill="x")
+        row.pack(side="bottom", fill="x")
+        panes = ttk.PanedWindow(body, orient="horizontal")
+        panes.pack(fill="both", expand=True, pady=(6, 4))
+        left = ttk.Frame(panes)
+        panes.add(left, weight=5)
+        self.fig = Figure(figsize=(10.4, 4.9), dpi=100)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=left)
+        tb = ttk.Frame(left)
+        tb.pack(side="top", fill="x")
+        self.toolbar = NavigationToolbar2Tk(self.canvas, tb, pack_toolbar=False)
+        self.toolbar.pack(side="left")
+        for name in ("zoom", "pan"):         # a zoom / pan tool owns the mouse
+            orig = getattr(self.toolbar, name)
+
+            def wrapped(*a, _orig=orig, **k):
+                r = _orig(*a, **k)
+                self._sync_tools()
+                return r
+            setattr(self.toolbar, name, wrapped)
+        self.canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
+        panes.add(self._side_panel(panes), weight=1)
         self.hint = ttk.Label(row, style="Muted.TLabel", text="", anchor="w")
         self.hint.pack(side="left", fill="x", expand=True)
-        ttk.Button(row, text="Whole map", command=self._whole_map).pack(
+        ttk.Button(row, text="Clear areas", command=self._whole_map).pack(
             side="right")
         ttk.Button(row, text="Mosaic…", command=self._mosaic_dialog).pack(
             side="right", padx=6)
@@ -118,7 +136,8 @@ class SnapMapDialog(tk.Toplevel):
             side="right", padx=6)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.bind("<Escape>", lambda e: self.destroy())
-        _finish(self, app, 1080, 640)
+        _finish(self, app, 1380, 860)
+        self.minsize(900, 560)
         self._rebuild()
         keep_in_front(self, master)
 
@@ -131,7 +150,7 @@ class SnapMapDialog(tk.Toplevel):
             "background": self.background.get(),
             "scale": self.scale.get(),
             "overlay": {"on": self.overlay.get(), "alpha": self.alpha.get()},
-            "roi": self.roi,
+            "rois": [dict(r) for r in self.rois],
             "smooth": {"method": self.smooth_method.get(),
                        "strength": self.smooth_strength.get()},
             "show_spectrum": show_spectrum,
@@ -156,10 +175,8 @@ class SnapMapDialog(tk.Toplevel):
             hit = self.app.snapmap_target({"ref": ref})
             if hit is not None and hit[1] is not self.region:
                 self.tiles.append(hit)
-        self.roi = None if self.tiles else v["roi"]
-        self.mask = snapmapfig.roi_mask(self.cube, self.roi)
-        if self.mask is None:
-            self.roi = None
+        self.rois = [] if self.tiles else [
+            r for r in v["rois"] if snapmapfig.roi_mask(self.cube, r) is not None]
 
     # -- what is on show -------------------------------------------------------------
     @staticmethod
@@ -233,20 +250,24 @@ class SnapMapDialog(tk.Toplevel):
             state="normal" if self.photo is not None else "disabled")
         if self.photo is None:
             self.overlay.set(False)
-        if self.mask is not None and self.mask.shape != (self.cube.ny,
-                                                          self.cube.nx):
-            self.mask = self.roi = None
+        self.rois = [r for r in self.rois
+                     if snapmapfig.roi_mask(self.cube, r) is not None]
         self._rebuild()
 
     # -- drawing ---------------------------------------------------------------------
-    def _rebuild(self):
-        """Draw everything from scratch (element, overlay or ROI changed)."""
+    def _rebuild(self, keep_view=False):
+        """Draw everything from scratch (element, overlay or areas changed);
+        ``keep_view`` leaves a zoomed map as it was."""
         from matplotlib.widgets import RectangleSelector, SpanSelector
         pal = self.app.palette
         fig = self.fig
+        kept = None
+        if keep_view and getattr(self, "ax_map", None) is not None:
+            kept = (self.ax_map.get_xlim(), self.ax_map.get_ylim(),
+                    self._view_sig)
         fig.clf()
         fig.set_facecolor(pal["plot_bg"])
-        gs = fig.add_gridspec(1, 2, width_ratios=[1.0, 1.15], wspace=0.28,
+        gs = fig.add_gridspec(1, 2, width_ratios=[1.25, 1.0], wspace=0.28,
                               left=0.07, right=0.98, top=0.93, bottom=0.13)
         self.ax_map = fig.add_subplot(gs[0])
         self.ax_spec = fig.add_subplot(gs[1])
@@ -288,10 +309,16 @@ class SnapMapDialog(tk.Toplevel):
         self.cbar = fig.colorbar(self.im, ax=self.ax_map, fraction=0.046,
                                  pad=0.02)
         self.cbar.ax.tick_params(colors=pal["muted"], labelsize=8)
+        self._view_sig = (id(self.cube), len(self.tiles),
+                          self.overlay.get() and self.photo is not None)
+        if kept and kept[2] == self._view_sig:
+            self.ax_map.set_xlim(kept[0])
+            self.ax_map.set_ylim(kept[1])
         self._draw_roi_outline()
         self._draw_tile_outlines()
         self._draw_spectrum()
         self._update_titles()
+        self._refresh_areas()
 
         self.rect = RectangleSelector(
             self.ax_map, self._on_roi, useblit=False, button=[1],
@@ -304,8 +331,22 @@ class SnapMapDialog(tk.Toplevel):
         self.cid = self.canvas.mpl_connect("motion_notify_event", self._hover)
         self.hint.configure(
             text="Drag across the spectrum to choose the energy window; drag a "
-                 "box (or click a pixel) on the map for that area's spectrum.")
+                 "box (or click a pixel) on the map to add an area. The "
+                 "toolbar zooms and pans.")
+        self._sync_tools()
+        try:
+            self.toolbar.update()            # the zoom history belongs to the old axes
+        except Exception:
+            pass
         self.canvas.draw_idle()
+
+    def _sync_tools(self):
+        """The zoom / pan tool and the area / window selectors must not both
+        take the mouse."""
+        busy = bool(getattr(self.toolbar, "mode", ""))
+        for sel in (getattr(self, "rect", None), getattr(self, "span", None)):
+            if sel is not None:
+                sel.set_active(not busy)
 
     def _draw_tile_outlines(self):
         if not self.tiles:
@@ -322,7 +363,7 @@ class SnapMapDialog(tk.Toplevel):
         back to the single map). Uses one energy window and colour range."""
         self.tiles = [(p, r) for p, r in tiles if r is not self.region]
         if self.tiles:
-            self.mask = self.roi = None
+            self.rois = []
             self.overlay.set(False)
         self._rebuild()
         mos = self._mosaic()
@@ -363,39 +404,25 @@ class SnapMapDialog(tk.Toplevel):
             side="right", padx=6)
         _finish(win, self.app, 420, 120 + 26 * len(cands))
 
+    def masks(self):
+        """One boolean mask (or None) per area, in order."""
+        return snapmapfig.roi_masks(self.cube, self.rois)
+
     def _draw_roi_outline(self):
-        """The chosen area's bounding box on the map (the selector's own box
-        is gone after a redraw)."""
-        if self.mask is None or not self.mask.any():
-            return
-        import numpy as np
-        from matplotlib.patches import Rectangle
-        rows, cols = np.flatnonzero(self.mask.any(axis=1)), np.flatnonzero(
-            self.mask.any(axis=0))
-        c = self.cube
-        x0, x1 = c.x_of(cols[0]) - c.dx / 2, c.x_of(cols[-1]) + c.dx / 2
-        y0, y1 = c.y_of(rows[0]) - c.dy / 2, c.y_of(rows[-1]) + c.dy / 2
-        self.ax_map.add_patch(Rectangle(
-            (x0, y0), x1 - x0, y1 - y0, fill=False, lw=1.6, ls="--",
-            ec=self.app.palette["accent"], zorder=5))
+        """Each area on the map, in its own colour (the selector's own box is
+        gone after a redraw)."""
+        for k, (roi, m) in enumerate(zip(self.rois, self.masks())):
+            if m is not None:
+                snapmapfig._outline_roi(self.ax_map, self.cube, roi, m,
+                                        snapmapfig.roi_colour(k))
 
     def _mean_spectra(self):
-        """The whole-map and (if any) ROI spectra, smoothed for display when
+        """The whole-map and each area's spectrum, smoothed for display when
         a smoothing method is chosen. Never touches ``cube.data`` itself."""
-        cube = self.cube
-        n_all = cube.nx * cube.ny
-        whole = [v / n_all for v in cube.total()]
-        roi = None
-        if self.mask is not None and self.mask.any():
-            n = int(self.mask.sum())
-            roi = [v / n for v in cube.roi_spectrum(self.mask)]
-        method = self.smooth_method.get()
-        if method != "None":
-            strength = self.smooth_strength.get()
-            whole = smoothing.smooth(whole, method, strength).tolist()
-            if roi is not None:
-                roi = smoothing.smooth(roi, method, strength).tolist()
-        return whole, roi
+        return snapmapfig.mean_spectra(
+            self.cube, self.masks(),
+            {"method": self.smooth_method.get(),
+             "strength": self.smooth_strength.get()})
 
     def _draw_spectrum(self):
         pal = self.app.palette
@@ -403,14 +430,17 @@ class SnapMapDialog(tk.Toplevel):
         ax.clear()
         ax.set_facecolor(pal["plot_bg"])
         ax.tick_params(colors=pal["muted"], labelsize=8)
-        whole, roi = self._mean_spectra()
+        whole, spectra = self._mean_spectra()
+        masks = self.masks()
         e = self.cube.energy
-        ax.plot(e, whole, color=pal["muted"] if roi else pal["accent"], lw=1.4,
+        shown = [(k, sp) for k, sp in enumerate(spectra) if sp is not None]
+        ax.plot(e, whole, color=pal["muted"] if shown else pal["accent"], lw=1.4,
                 label=self._label_with_smoothing("whole map"))
-        if roi:
-            ax.plot(e, roi, color=pal["accent"], lw=1.6,
+        for k, sp in shown:
+            ax.plot(e, sp, color=snapmapfig.roi_colour(k), lw=1.6,
                     label=self._label_with_smoothing(
-                        "area", f"{int(self.mask.sum())} px"))
+                        self.rois[k]["label"], f"{int(masks[k].sum())} px"))
+        if shown:
             ax.legend(fontsize=8, frameon=False, labelcolor=pal["plot_fg"])
         r = self.region
         binding = "inding" in (r.energy_label or "")
@@ -449,6 +479,7 @@ class SnapMapDialog(tk.Toplevel):
         lo, hi = self.window
         self.win_patch = self.ax_spec.axvspan(
             lo, hi, color=self.app.palette["accent"], alpha=0.14, lw=0)
+        self._refresh_areas()
         self.canvas.draw_idle()
 
     def _update_spectrum(self):
@@ -476,26 +507,151 @@ class SnapMapDialog(tk.Toplevel):
             hit = cube.pixel_at(x0, y0)              # a click: one pixel
             if hit is None:
                 return
-            mask = self._blank_mask()
-            mask[hit[1], hit[0]] = True
-            roi = snapmapfig.roi_rect_of_pixel(cube, *hit)
+            rect = snapmapfig.roi_rect_of_pixel(cube, *hit)
         else:
-            mask = cube.rect_mask(x0, y0, x1, y1)
-            roi = [x0, y0, x1, y1]
-        if not mask.any():
-            return
-        self.mask, self.roi = mask, roi
-        self._draw_spectrum()
-        self.span.extents = self.window
-        self.canvas.draw_idle()
+            rect = [x0, y0, x1, y1]
+        self.add_roi(rect, self.roi_shape.get())
+
+    def add_roi(self, rect, shape="rect", label=""):
+        """Add an area (µm rectangle, rectangle or ellipse); returns its
+        index, or None when it holds no pixel or the limit is reached."""
+        if len(self.rois) >= snapmapfig.MAX_ROIS:
+            self.hint.configure(
+                text=f"At most {snapmapfig.MAX_ROIS} areas: delete one first.")
+            return None
+        roi = snapmapfig.new_roi(rect, shape,
+                                 label or f"Area {len(self.rois) + 1}")
+        if snapmapfig.roi_mask(self.cube, roi) is None:
+            return None
+        self.rois.append(roi)
+        self._rebuild(keep_view=True)
+        return len(self.rois) - 1
+
+    def remove_roi(self, i):
+        if 0 <= i < len(self.rois):
+            del self.rois[i]
+            self._rebuild(keep_view=True)
+
+    def rename_roi(self, i, label):
+        if 0 <= i < len(self.rois) and label.strip():
+            self.rois[i]["label"] = label.strip()
+            self._rebuild(keep_view=True)
 
     def _blank_mask(self):
         import numpy as np
         return np.zeros((self.cube.ny, self.cube.nx), dtype=bool)
 
     def _whole_map(self):
-        self.mask = self.roi = None
-        self._rebuild()
+        self.rois = []
+        self._rebuild(keep_view=True)
+
+    # -- the areas' panel and numbers ---------------------------------------------------
+    def _side_panel(self, parent):
+        side = ttk.Frame(parent, padding=(8, 0, 0, 0))
+        ttk.Label(side, text="Areas", style="Muted.TLabel").pack(anchor="w")
+        cols = ("area", "px", "um2", "mean", "ratio")
+        self.area_tree = ttk.Treeview(side, columns=cols, show="headings",
+                                      height=6, selectmode="browse")
+        for c, text, w in (("area", "Area", 80), ("px", "Pixels", 50),
+                           ("um2", "µm²", 70), ("mean", "Mean", 70),
+                           ("ratio", "vs map", 50)):
+            self.area_tree.heading(c, text=text)
+            self.area_tree.column(c, width=w, anchor="w" if c == "area" else "e")
+        self.area_tree.pack(fill="x", pady=(2, 4))
+        for k in range(snapmapfig.MAX_ROIS):
+            self.area_tree.tag_configure(f"a{k}",
+                                         foreground=snapmapfig.roi_colour(k))
+        row = ttk.Frame(side)
+        row.pack(fill="x")
+        ttk.Label(row, text="New area").pack(side="left")
+        ttk.Combobox(row, state="readonly", width=9, textvariable=self.roi_shape,
+                     values=snapmapfig.SHAPES).pack(side="left", padx=4)
+        row2 = ttk.Frame(side)
+        row2.pack(fill="x", pady=(4, 0))
+        ttk.Button(row2, text="Rename…", command=self._rename_selected).pack(
+            side="left")
+        ttk.Button(row2, text="Delete", command=self._delete_selected).pack(
+            side="left", padx=4)
+        ttk.Button(side, text="Save the numbers (CSV)…",
+                   command=self._save_stats).pack(anchor="w", pady=(8, 0))
+        self.area_note = ttk.Label(side, style="Muted.TLabel", wraplength=230,
+                                   justify="left", text="")
+        self.area_note.pack(anchor="w", pady=(8, 0))
+        return side
+
+    def stats(self):
+        """The areas' numbers over the energy window on show (see
+        ``snapmapfig.roi_stats``); empty in a mosaic."""
+        if self.tiles:
+            return []
+        return snapmapfig.roi_stats(self.cube, self.window,
+                                    self.background.get(), self.rois)
+
+    def _refresh_areas(self):
+        tree = getattr(self, "area_tree", None)
+        if tree is None:
+            return
+        tree.delete(*tree.get_children())
+        for k, roi in enumerate(self.rois):
+            got = ([] if self.tiles else snapmapfig.roi_stats(
+                self.cube, self.window, self.background.get(), [roi]))
+            if not got:
+                continue
+            r = got[0]
+            tree.insert("", "end", iid=str(k), tags=(f"a{k}",), values=(
+                r["label"], r["px"], f"{r['area_um2']:.0f}", f"{r['mean']:.4g}",
+                f"{r['ratio']:.2f}"))
+        lo, hi = self.window
+        self.area_note.configure(
+            text=("An area belongs to one map, so there are none in a mosaic."
+                  if self.tiles else
+                  f"Counts summed over {min(lo, hi):.1f}-{max(lo, hi):.1f} "
+                  f"{self.region.energy_units}"
+                  f"{', background removed' if self.background.get() else ''}; "
+                  "Mean is per pixel, vs map its ratio to the whole map's mean."))
+
+    def _selected_area(self):
+        sel = self.area_tree.selection()
+        return int(sel[0]) if sel else None
+
+    def _rename_selected(self):
+        k = self._selected_area()
+        if k is None:
+            return
+        from tkinter import simpledialog
+        name = simpledialog.askstring("Rename area", "Name:", parent=self,
+                                      initialvalue=self.rois[k]["label"])
+        if name:
+            self.rename_roi(k, name)
+
+    def _delete_selected(self):
+        k = self._selected_area()
+        if k is not None:
+            self.remove_roi(k)
+
+    def stats_csv(self):
+        """The areas' numbers as CSV text."""
+        lo, hi = self.window
+        out = [f"# {self.region.sample} {self.region.name}: counts summed over "
+               f"{min(lo, hi):.3f}-{max(lo, hi):.3f} {self.region.energy_units}"
+               f"{', background removed' if self.background.get() else ''}",
+               "Area,Shape,Pixels,Area (um2),Mean per pixel,Sum,SD,Mean vs whole map"]
+        for r in self.stats():
+            out.append(",".join([
+                '"' + r["label"].replace('"', '""') + '"', r["shape"],
+                str(r["px"]), f"{r['area_um2']:.6g}", f"{r['mean']:.7g}",
+                f"{r['sum']:.7g}", f"{r['sd']:.7g}", f"{r['ratio']:.5g}"]))
+        return "\n".join(out) + "\n"
+
+    def _save_stats(self):
+        if not self.rois or self.tiles:
+            self.hint.configure(text="Draw an area on the map first.")
+            return
+        path = self._ask(".csv", "CSV")
+        if path:
+            with open(path, "w", encoding="utf-8-sig", newline="") as fh:
+                fh.write(self.stats_csv())
+            self.app.status.config(text=f"Saved {os.path.basename(path)}")
 
     def _hover(self, event):
         cube = self.cube
@@ -607,21 +763,31 @@ class SnapMapDialog(tk.Toplevel):
         method = self.smooth_method.get()
         return f", {method}" if method != "None" else ""
 
+    def spectra_csv_rows(self):
+        """Header and rows of the spectra export: energy, whole map, then one
+        column per area."""
+        whole, spectra = self._mean_spectra()
+        masks = self.masks()
+        suffix = self._csv_smooth_suffix()
+        head = [f"{self.region.energy_label} ({self.region.energy_units})",
+                f"Whole map (counts per pixel{suffix})"]
+        cols = []
+        for k, sp in enumerate(spectra):
+            if sp is not None:
+                head.append(f"{self.rois[k]['label']}, {int(masks[k].sum())} px "
+                            f"(counts per pixel{suffix})")
+                cols.append(sp)
+        rows = [[f"{e:.4f}", f"{whole[i]:.6g}"] + [f"{c[i]:.6g}" for c in cols]
+                for i, e in enumerate(self.cube.energy)]
+        return head, rows
+
     def _save_spectra(self):
         path = self._ask(".csv", "CSV")
         if not path:
             return
-        whole, roi = self._mean_spectra()
-        suffix = self._csv_smooth_suffix()
+        head, rows = self.spectra_csv_rows()
         with open(path, "w", encoding="utf-8", newline="") as fh:
             w = csv.writer(fh)
-            head = [f"{self.region.energy_label} ({self.region.energy_units})",
-                    f"Whole map (counts per pixel{suffix})"]
-            if roi:
-                head.append(
-                    f"Area, {int(self.mask.sum())} px (counts per pixel{suffix})")
             w.writerow(head)
-            for i, e in enumerate(self.cube.energy):
-                w.writerow([f"{e:.4f}", f"{whole[i]:.6g}"]
-                           + ([f"{roi[i]:.6g}"] if roi else []))
+            w.writerows(rows)
         self.app.status.config(text=f"Saved {os.path.basename(path)}")
