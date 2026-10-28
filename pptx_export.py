@@ -119,6 +119,9 @@ def chunk_paragraphs(paras, max_lines=11, chars_per_line=92):
 def look_notes(state):
     """Speaker-notes text describing a saved look."""
     st = state or {}
+    if st.get("kind") == "snapmap":
+        import snapmapfig
+        return snapmapfig.describe(st)
     parts = [f"View: {st.get('view_mode', 'Stack')}",
              f"grouped by {st.get('group_by', 'element name').lower()}",
              f"{st.get('energy_scale', 'Binding').lower()} energy axis"]

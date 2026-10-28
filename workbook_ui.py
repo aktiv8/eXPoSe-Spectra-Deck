@@ -257,6 +257,9 @@ class FiguresDialog(tk.Toplevel):
     def _fill(self, select=None):
         self.list.delete(0, "end")
         for i, f in enumerate(self.app.figures, 1):
+            if f.get("state", {}).get("kind") == "snapmap":
+                self.list.insert("end", f"{i}.  {f['name']}   (SnapMap)")
+                continue
             own = len(panelview.sanitise_all(
                 f.get("state", {}).get("panel_views")))
             self.list.insert("end", f"{i}.  {f['name']}"
@@ -316,7 +319,15 @@ class FiguresDialog(tk.Toplevel):
         i = self._current()
         if i is None:
             return
-        missing = self.app.apply_state(self.app.figures[i]["state"])
+        state = self.app.figures[i]["state"]
+        if state.get("kind") == "snapmap":
+            if not self.app.open_snapmap_view(state, figure=i):
+                messagebox.showwarning(
+                    "Figure recalled",
+                    "The map of this figure is no longer in the loaded "
+                    "files.", parent=self)
+            return
+        missing = self.app.apply_state(state)
         if missing:
             messagebox.showwarning(
                 "Figure recalled",
@@ -328,6 +339,12 @@ class FiguresDialog(tk.Toplevel):
         if i is None:
             return
         name = self.app.figures[i]["name"]
+        if self.app.figures[i]["state"].get("kind") == "snapmap":
+            messagebox.showinfo(
+                "Update figure",
+                "Open this figure (Recall), change it in the SnapMap window "
+                "and use Save ▸ Update figure there.", parent=self)
+            return
         if messagebox.askyesno("Update figure",
                                f"Replace the saved look of '{name}' with the "
                                f"current view?", parent=self):

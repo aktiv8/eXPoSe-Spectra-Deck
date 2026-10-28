@@ -20,13 +20,16 @@ from tkinter import filedialog, ttk
 
 import smoothing
 import snapmap
+import snapmapfig
 import snapshot
 import themes
 from workbook_ui import _finish, keep_in_front
 
 
 class SnapMapDialog(tk.Toplevel):
-    def __init__(self, master, app, parser, region):
+    def __init__(self, master, app, parser, region, view=None, figure=None):
+        """``view`` (a ``snapmapfig`` dict) restores a saved look; ``figure``
+        is the index in ``app.figures`` it came from."""
         super().__init__(master)
         from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
         from matplotlib.figure import Figure
@@ -50,7 +53,11 @@ class SnapMapDialog(tk.Toplevel):
             if cfg.get("smooth_method") in smoothing.METHODS else "None")
         self.smooth_strength = tk.DoubleVar(
             value=float(cfg.get("smooth_strength", 0.5)))
+        self.roi = None                      # [x0, y0, x1, y1] µm, None = whole map
+        self.figure = figure
         self.title(f"SnapMap — {region.sample}")
+        if view:
+            self._apply_view(view)
 
         body = ttk.Frame(self, padding=8)
         body.pack(fill="both", expand=True)
@@ -76,6 +83,8 @@ class SnapMapDialog(tk.Toplevel):
             command=self._rebuild,
             state="normal" if self.photo is not None else "disabled")
         self.overlay_cb.pack(side="left", padx=(12, 0))
+        if getattr(self, "_want_overlay", False) and self.photo is not None:
+            self.overlay.set(True)
         ttk.Scale(bar, from_=0.15, to=1.0, variable=self.alpha, length=70,
                   command=lambda v: self._settings_changed(quiet=True)).pack(
             side="left", padx=(6, 0))
@@ -109,6 +118,40 @@ class SnapMapDialog(tk.Toplevel):
         _finish(self, app, 1080, 640)
         self._rebuild()
         keep_in_front(self, master)
+
+    # -- the view as data (saved figures, picture files) -------------------------------
+    def view_spec(self, show_spectrum=True):
+        """What is on show, as a ``snapmapfig`` view."""
+        return snapmapfig.sanitise({
+            "ref": self.app.snapmap_ref(self.parser, self.region),
+            "window": list(self.window),
+            "background": self.background.get(),
+            "scale": self.scale.get(),
+            "overlay": {"on": self.overlay.get(), "alpha": self.alpha.get()},
+            "roi": self.roi,
+            "smooth": {"method": self.smooth_method.get(),
+                       "strength": self.smooth_strength.get()},
+            "show_spectrum": show_spectrum,
+        })
+
+    def _apply_view(self, view):
+        """Set the controls from a saved view (before the widgets exist, so
+        only variables and fields are touched)."""
+        v = snapmapfig.sanitise(view)
+        if v["window"]:
+            self.window = tuple(v["window"])
+        self.background.set(v["background"])
+        if v["scale"] in themes.SCALE_NAMES:
+            self.scale.set(v["scale"])
+        self.alpha.set(v["overlay"]["alpha"])
+        self._want_overlay = v["overlay"]["on"]
+        if v["smooth"]["method"] in smoothing.METHODS:
+            self.smooth_method.set(v["smooth"]["method"])
+        self.smooth_strength.set(v["smooth"]["strength"])
+        self.roi = v["roi"]
+        self.mask = snapmapfig.roi_mask(self.cube, self.roi)
+        if self.mask is None:
+            self.roi = None
 
     # -- what is on show -------------------------------------------------------------
     @staticmethod
@@ -169,7 +212,7 @@ class SnapMapDialog(tk.Toplevel):
             self.overlay.set(False)
         if self.mask is not None and self.mask.shape != (self.cube.ny,
                                                           self.cube.nx):
-            self.mask = None
+            self.mask = self.roi = None
         self._rebuild()
 
     # -- drawing ---------------------------------------------------------------------
@@ -352,11 +395,13 @@ class SnapMapDialog(tk.Toplevel):
                 return
             mask = self._blank_mask()
             mask[hit[1], hit[0]] = True
+            roi = snapmapfig.roi_rect_of_pixel(cube, *hit)
         else:
             mask = cube.rect_mask(x0, y0, x1, y1)
+            roi = [x0, y0, x1, y1]
         if not mask.any():
             return
-        self.mask = mask
+        self.mask, self.roi = mask, roi
         self._draw_spectrum()
         self.span.extents = self.window
         self.canvas.draw_idle()
@@ -366,7 +411,7 @@ class SnapMapDialog(tk.Toplevel):
         return np.zeros((self.cube.ny, self.cube.nx), dtype=bool)
 
     def _whole_map(self):
-        self.mask = None
+        self.mask = self.roi = None
         self._rebuild()
 
     def _hover(self, event):
@@ -387,7 +432,18 @@ class SnapMapDialog(tk.Toplevel):
     def _save_menu(self):
         m = tk.Menu(self, tearoff=0)
         self.app.themes.register_menu(m)
-        m.add_command(label="Picture (PNG)…", command=self._save_png)
+        m.add_command(label="Picture, map and spectrum (PNG, PDF, SVG)…",
+                      command=self._save_png)
+        m.add_command(label="Picture, map only (PNG, PDF, SVG)…",
+                      command=lambda: self._save_png(spectrum=False))
+        m.add_separator()
+        m.add_command(label="Save as a figure for the report…",
+                      command=self._ask_figure)
+        if self.figure is not None and self.figure < len(self.app.figures):
+            m.add_command(
+                label=f"Update figure “{self.app.figures[self.figure]['name']}”",
+                command=self.update_figure)
+        m.add_separator()
         m.add_command(label="Map values (CSV)…", command=self._save_map)
         m.add_command(label="Spectra (CSV)…", command=self._save_spectra)
         w = self.winfo_pointerxy()
@@ -404,11 +460,49 @@ class SnapMapDialog(tk.Toplevel):
             parent=self, defaultextension=ext, initialfile=self._stem() + ext,
             filetypes=[(kind, "*" + ext)])
 
-    def _save_png(self):
-        path = self._ask(".png", "PNG image")
-        if path:
-            self.fig.savefig(path, dpi=200, facecolor=self.fig.get_facecolor())
+    def save_picture(self, path, spectrum=True):
+        """Write the view as a picture (format from the extension), drawn
+        for paper: the same drawing a report figure gets."""
+        size = (10.4, 4.9) if spectrum else (6.4, 5.2)
+        ok = self.app.snapmap_picture(self.view_spec(spectrum), path,
+                                      size=size)
+        if ok:
             self.app.status.config(text=f"Saved {os.path.basename(path)}")
+        return ok
+
+    def _save_png(self, spectrum=True):
+        path = filedialog.asksaveasfilename(
+            parent=self, defaultextension=".png", initialfile=self._stem() + ".png",
+            filetypes=[("PNG image", "*.png"), ("PDF", "*.pdf"),
+                       ("SVG", "*.svg")])
+        if path:
+            self.save_picture(path, spectrum)
+
+    def save_as_figure(self, name):
+        """Add the view to the workbook's figures (it appears in the report's
+        Figures); returns the figure."""
+        fig = self.app.add_figure(name.strip(), state=self.view_spec())
+        self.figure = self.app.figures.index(fig)
+        self.app.status.config(text=f"Saved figure “{fig['name']}” — caption "
+                                    f"it under Workbook ▸ Figures")
+        return fig
+
+    def _ask_figure(self):
+        from tkinter import simpledialog
+        name = simpledialog.askstring(
+            "Save as a figure", "Name of the figure:", parent=self,
+            initialvalue=f"{self.region.sample} {self.region.name}")
+        if name and name.strip():
+            self.save_as_figure(name)
+
+    def update_figure(self):
+        """Replace the look of the figure this window was opened from."""
+        if self.figure is None or self.figure >= len(self.app.figures):
+            return False
+        self.app.figures[self.figure]["state"] = self.view_spec()
+        self.app.wb_touch()
+        self.app.status.config(text="Figure updated")
+        return True
 
     def _save_map(self):
         path = self._ask(".csv", "CSV")

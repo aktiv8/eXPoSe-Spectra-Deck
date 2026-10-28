@@ -133,6 +133,7 @@ import plotstyle_ui
 import sputter_ui
 import instrument_ui
 import snapmap_ui
+import snapmapfig
 import imaging_ui
 from themes import (ThemeManager, THEME_NAMES, PRINT, mpl_rc, SwatchCache,
                     ramp)
@@ -3038,6 +3039,18 @@ class Workspace:
         else:
             snapmap_ui.SnapMapDialog(self.root, self, parser, region)
 
+    def open_snapmap_view(self, spec, figure=None):
+        """Reopen the SnapMap viewer on a saved view (a figure's state);
+        ``figure`` is the index of the figure it came from, so the viewer can
+        update it. False when that map is not among the loaded files."""
+        hit = self.snapmap_target(spec) if HAVE_MPL else None
+        if hit is None:
+            return False
+        parser, region = hit
+        snapmap_ui.SnapMapDialog(self.root, self, parser, region,
+                                 view=snapmapfig.sanitise(spec), figure=figure)
+        return True
+
     def import_kfit_peak_library(self):
         """Bring in one or more standalone KherveFitting Peaks Library
         ``.json`` files (github.com/KherveFitting/KherveFitting) as fit-only
@@ -4402,14 +4415,94 @@ class Workspace:
         st["zoom"] = self.current_zoom()
         return st
 
-    def add_figure(self, name):
-        """Append the current view to the workbook's figures; returns it."""
+    def add_figure(self, name, state=None):
+        """Append the current view (or the given ``state``, e.g. a SnapMap
+        view) to the workbook's figures; returns it."""
         fig = {"id": wbk.new_id([f["id"] for f in self.figures], "g"),
                "name": name, "caption": "",
-               "state": self.current_figure_state()}
+               "state": (state if state is not None
+                         else self.current_figure_state())}
         self.figures.append(fig)
         self.wb_touch()
         return fig
+
+    # -- SnapMap views as figures and pictures ------------------------------------
+    def snapmap_ref(self, parser, region):
+        """The stable reference a SnapMap view stores for its region."""
+        fid = self.file_ids.get(id(parser))
+        return wbk.region_ref(fid, parser.regions.index(region), region)
+
+    def snapmap_target(self, spec):
+        """``(parser, region)`` a saved SnapMap view points at, or None when
+        that map is no longer among the loaded files."""
+        ref = (spec or {}).get("ref")
+        if not isinstance(ref, dict):
+            return None
+        by_file = {self.file_ids.get(id(p)): p.regions for p in self.docs}
+        regs, _missing = wbk.resolve_refs([ref], by_file)
+        if not regs or regs[0].extra.get("cube") is None:
+            return None
+        for p in self.docs:
+            if self.file_ids.get(id(p)) == ref.get("file"):
+                return p, regs[0]
+        return None
+
+    def draw_snapmap_view(self, fig, rect, spec, pal, cmap=None):
+        """Draw a SnapMap view onto ``fig``; False when its map is gone."""
+        hit = self.snapmap_target(spec)
+        if hit is None:
+            return False
+        parser, region = hit
+        s = snapmapfig.sanitise(spec)
+        cube = region.extra["cube"]
+        photo = None
+        if s["overlay"]["on"] and cube.stage_x_mm is not None:
+            blob = snapshot.nearest_image(
+                [b for p in self.docs for b in p.images],
+                cube.stage_x_mm, cube.stage_y_mm)
+            img = self._photo_image(parser, blob) if blob is not None else None
+            if img is not None:
+                photo = (img, blob.calib)
+        if cmap is None:
+            name = s["scale"] if s["scale"] in themes.SCALE_NAMES else "Viridis"
+            cmap = themes.scale_colourmap(name, False, pal)
+        snapmapfig.draw_view(fig, rect, s, region, pal, cmap, photo=photo)
+        return True
+
+    def snapmap_picture(self, spec, path, dpi=200, size=(10.4, 4.9)):
+        """Write a SnapMap view as a picture file (PNG, PDF or SVG by the
+        extension) in the print style: dark text on white, as in a report."""
+        paper = self._plot_palette(PRINT, paper=True)[0]
+        fig = Figure(figsize=size, dpi=dpi)
+        fig.set_facecolor(PRINT["plot_bg"])
+        with matplotlib.rc_context(self._rc(paper)):
+            ok = self.draw_snapmap_view(fig, None, spec, PRINT)
+            if ok:
+                fig.savefig(path, dpi=dpi, facecolor=fig.get_facecolor())
+        return ok
+
+    def _render_snapmap_pages(self, fig, consume, size, rect, decorate,
+                              number, dpi):
+        """The one page of a saved SnapMap figure, as ``_render_figure_pages``
+        makes the pages of a spectrum figure."""
+        out = []
+        paper = self._plot_palette(PRINT, paper=True)[0]
+        caption = textwrap.fill((fig.get("caption") or "").strip(), 150,
+                                replace_whitespace=False)
+        with matplotlib.rc_context(self._rc(paper)):
+            page = Figure(figsize=size, dpi=dpi)
+            page.set_facecolor(PRINT["plot_bg"])
+            if self.draw_snapmap_view(page, rect, fig["state"], PRINT):
+                if decorate:
+                    page.text(0.03, 0.975,
+                              reportspec.figure_title(number, fig.get("name")),
+                              fontsize=12, fontweight="bold", va="top")
+                    if caption:
+                        page.text(0.03, 0.145, caption, fontsize=9, va="top",
+                                  linespacing=1.4)
+                out.append(consume(page))
+        self._report_tick(fig.get("name") or "Figure")
+        return out
 
     def save_view_as_figure(self):
         """The right-click / Workbook-menu route to a figure: ask a name, save
@@ -5171,6 +5264,9 @@ class Workspace:
         ``consume(page)``. Returns the list of its results. With
         ``decorate`` the heading and caption are drawn onto the page."""
         out = []
+        if snapmapfig.is_view(fig.get("state")):
+            return self._render_snapmap_pages(fig, consume, size, rect,
+                                              decorate, number, dpi)
         with self._temp_state(fig["state"]):
             groups = self._groups()
             if not groups:
