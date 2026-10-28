@@ -522,6 +522,14 @@ class TestMaps(unittest.TestCase):
                                1.0, delta=0.03)
         self.assertTrue(any("binned" in n for n in binned.notes))
 
+    def test_a_window_with_no_data_is_refused_not_a_crash(self):
+        spec = dict(self.spec, window=[60.0, 70.0])           # the cube is 95-110
+        with self.assertRaises(ValueError):
+            snapfit.fit_maps(self.cube, self.be, 1486.6, spec)
+        spec = dict(self.spec, window=[100.0, 100.4])         # a few channels
+        with self.assertRaises(ValueError):
+            snapfit.fit_maps(self.cube, self.be, 1486.6, spec)
+
     def test_the_cube_is_not_touched(self):
         before = bytes(self.cube.data)
         snapfit.fit_maps(self.cube, self.be, 1486.6, dict(self.spec, bin=2))

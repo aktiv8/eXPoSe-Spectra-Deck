@@ -1221,6 +1221,67 @@ class TestFitInTheDialog(unittest.TestCase):
             self.assertEqual(d._level_name(), want)
         self.region.name = "Si 2p"
 
+    def add_aluminium(self):
+        """A second element of the same map file: Al 2p on its own energy range."""
+        from test_snapfit import level_map
+        cube, _truth, _spec = level_map((72.7,), (1.1,), (lambda x: 300.0,),
+                                        68.0, 80.0)
+        al = cube_region(cube, "Al 2p", "S1")
+        al.energy = list(cube.energy)
+        self.parser.regions.append(al)
+        self.dlg.destroy()
+        import snapmap_ui
+        self.dlg = snapmap_ui.SnapMapDialog(self.root, self.ws, self.parser,
+                                            self.region)
+        self.addCleanup(self.dlg.destroy)
+        return al
+
+    def test_switching_to_another_element_in_the_fit_view_starts_its_own_fit(self):
+        al = self.add_aluminium()
+        d = self.fit_mode()
+        d.fit_spectrum()
+        errors = []
+        d.report_callback_exception = lambda *a: errors.append(a)
+        names = [r.name for r in d.entries]
+        d.el_cb.current(names.index("Al 2p"))
+        d.el_cb.event_generate("<<ComboboxSelected>>")
+        d.update()
+        self.assertEqual(errors, [])
+        comps = d.fit_spec["components"]
+        self.assertEqual([c["name"] for c in comps], ["Al"])
+        self.assertAlmostEqual(comps[0]["be"], 72.7, delta=0.4)
+        self.assertIsNotNone(comps[0]["doublet"])                # the line table's
+        lo, hi = d.fit_view()["spec"]["window"]
+        self.assertTrue(68.0 <= lo < hi <= 80.0)                 # inside Al's range
+        self.assertEqual(d.effective_mode(), "fit")
+        self.assertIn("Al", {title_of(a) for a in d.fig.axes})
+        self.assertIsNotNone(d.fit_spectrum())
+        # and back to Si: its own components again
+        d.el_cb.current(names.index("Si 2p"))
+        d._element()
+        self.assertEqual([c["name"] for c in d.fit_spec["components"]],
+                         ["Si", "SiO2"])
+        self.assertEqual(errors, [])
+
+    def test_the_fit_view_after_switching_element_in_another_view(self):
+        al = self.add_aluminium()
+        d = self.dlg
+        d.fit_seed()                               # Si components exist ...
+        names = [r.name for r in d.entries]
+        d.el_cb.current(names.index("Al 2p"))      # ... then the element changes
+        d._element()
+        d.set_mode("fit")                          # ... and only then the fit view
+        self.assertEqual([c["name"] for c in d.fit_spec["components"]], ["Al"])
+
+    def test_a_window_outside_the_data_draws_a_message_not_a_traceback(self):
+        d = self.fit_mode()
+        d.v_fwin_lo.set("60"); d.v_fwin_hi.set("70")
+        d._fit_window_applied = [60.0, 70.0]
+        d._fit_changed()
+        texts = [t.get_text() for a in d.fig.axes for t in a.texts]
+        self.assertTrue(any("too few channels" in t for t in texts), texts)
+        self.assertIsNone(d.fit_maps())
+
     def test_without_a_binding_axis_the_tab_says_so(self):
         self.region.energy_label = "Kinetic Energy"
         d = self.fit_mode()

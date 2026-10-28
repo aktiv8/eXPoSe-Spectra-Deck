@@ -25,6 +25,7 @@ class FitMixin:
         """Variables of the Fit tab (before any widget exists)."""
         self.fit_spec = snapfit.sanitise({})
         self.fit_start = []                # the components a refinement starts from
+        self._fit_level = None             # the core level the components are for
         self.fit_numer = None              # None = the default (last of two or more)
         self.fit_on = None                 # None = whole map, else an area index
         self.fit_result = None             # the last snapfit.Result of a refinement
@@ -58,6 +59,7 @@ class FitMixin:
         f = snapmapfig.sanitise_fit(fit)
         self.fit_spec = f["spec"]
         self.fit_start = [dict(c) for c in f["spec"]["components"]]
+        self._fit_level = self._level_name()
         w = f["spec"]["window"]
         self.v_fwin_lo.set(f"{w[0]:.2f}" if w else "")
         self.v_fwin_hi.set(f"{w[1]:.2f}" if w else "")
@@ -211,6 +213,7 @@ class FitMixin:
                                      f"{self.region.name}: add some with Add.")
         self.fit_spec = snapfit.sanitise({"components": comps})
         self.fit_start = [dict(c) for c in self.fit_spec["components"]]
+        self._fit_level = self._level_name()
         if comps:
             w = snapfit.suggest_window(be, self.fit_spec["components"])
             self.v_fwin_lo.set(f"{w[0]:.2f}")
@@ -219,6 +222,17 @@ class FitMixin:
         self.fit_result = None
         self._fit_changed()
         return bool(comps)
+
+    def fit_level_changed(self):
+        """The components are for another core level than the one shown (the
+        element was switched, or a view of another level was opened): start the
+        fit again for this one: its own components, window and areas."""
+        self.fit_on = None
+        self.fit_numer = None
+        self.fit_result = None
+        self.v_fon.set("Whole map")
+        self.fit_spec = snapfit.sanitise({})
+        return self.fit_seed()
 
     def fit_add_library(self, name):
         """Add a state of this level from the chemical-state table."""

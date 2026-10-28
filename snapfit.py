@@ -748,6 +748,8 @@ def fit_maps(cube, be, hv, spec, y_mean=None, window=None,
     if win:
         sel = (be >= min(win)) & (be <= max(win))
     be_w = be[sel]
+    if len(be_w) < 3 * len(spec["components"]) + 4:
+        raise ValueError("too few channels in the fit window")
     Y = np.asarray(data[:, :, sel], dtype=float)
     if spec["bin"] > 1:
         Y = _boxcar(Y, spec["bin"])

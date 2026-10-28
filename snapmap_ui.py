@@ -285,8 +285,9 @@ class SnapMapDialog(FitMixin, tk.Toplevel):
             self.tiles = []
             self.overlay.set(False)
             self._prefill_rows()
-        if mode == "fit" and not self.fit_spec["components"]:
-            self.fit_seed()
+        if mode == "fit" and (not self.fit_spec["components"]
+                              or self._fit_level != self._level_name()):
+            self.fit_level_changed()
         if hasattr(self, "mode_cb"):
             self.mode_cb.set(snapmapfig.MODE_NAMES[mode])
         self._show_rows()
@@ -433,6 +434,8 @@ class SnapMapDialog(FitMixin, tk.Toplevel):
             self.overlay.set(False)
         self.rois = [r for r in self.rois
                      if snapmapfig.roi_mask(self.cube, r) is not None]
+        if self.mode.get() == "fit" and self._fit_level != self._level_name():
+            self.fit_level_changed()
         self._rebuild()
 
     # -- drawing ---------------------------------------------------------------------

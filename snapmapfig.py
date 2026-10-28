@@ -783,12 +783,21 @@ def fit_result(region, fit, rois=None):
     spec = fit["spec"]
     data = cube.array3d()
     mean = data.reshape(-1, data.shape[2]).mean(axis=0)
+    shown = (f"{min(be):.1f}\u2013{max(be):.1f}")
     on = fit.get("on")
     if on is not None and rois and on < len(rois):
         mask = roi_mask(cube, rois[on])
         if mask is not None:
             mean = data[mask].mean(axis=0)
-    maps = snapfit.fit_maps(cube, be, hv, spec, y_mean=mean)
+    try:
+        maps = snapfit.fit_maps(cube, be, hv, spec, y_mean=mean)
+    except ValueError:
+        w = spec.get("window")
+        return None, None, (
+            "The fit window "
+            + (f"({w[0]:.1f}\u2013{w[1]:.1f} eV) " if w else "")
+            + f"holds too few channels of this spectrum ({shown} eV): "
+              "set the window (Fit tab: Reset)")
     return maps, (be, hv, mean), ""
 
 
