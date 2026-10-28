@@ -5,7 +5,7 @@ Tk-free, numpy only (scipy is not installed). A *fit spec* is a plain dict::
     {"components": [{"name": "Si", "be": 99.4, "fwhm": 0.9, "shape": "GL(30)",
                      "doublet": {"split": 0.61, "ratio": 0.5} | None,
                      "free_be": True, "free_fwhm": True,
-                     "be_range": 0.6, "fwhm_range": [0.4, 2.5]}, ...],
+                     "be_range": 0.5, "fwhm_range": [0.4, 2.5]}, ...],
      "window": [lo, hi],              # binding energies the fit uses
      "background": "shirley" | "linear",
      "bin": 1,                        # pixels averaged for the per-pixel step
@@ -38,6 +38,8 @@ DEFAULT_HV = 1486.6          # only matters for asymmetric shapes
 FRACTION_FLOOR = 0.05        # a total under this share of its 99th percentile is blank
 MAX_COMPONENTS = 6
 MIN_FWHM, MAX_FWHM = 0.2, 6.0
+DEFAULT_BE_RANGE = 0.5       # eV a position may move from its seed (charging, chemistry)
+MAX_SEEDED_STATES = 3        # a level with more table states is seeded by its main line
 
 
 def _np():
@@ -52,7 +54,7 @@ def _num(v):
 
 # -- the spec ------------------------------------------------------------------------
 def new_component(name, be, fwhm=1.0, shape=DEFAULT_SHAPE, doublet=None,
-                  free_be=True, free_fwhm=True, be_range=0.6,
+                  free_be=True, free_fwhm=True, be_range=DEFAULT_BE_RANGE,
                   fwhm_range=(0.4, 2.5)) -> dict:
     return sanitise_component({
         "name": name, "be": be, "fwhm": fwhm, "shape": shape,
@@ -101,7 +103,7 @@ def sanitise_component(c) -> dict | None:
             "doublet": doublet,
             "free_be": bool(c.get("free_be", True)),
             "free_fwhm": bool(c.get("free_fwhm", True)),
-            "be_range": float(r) if _num(r) and r > 0 else 0.6,
+            "be_range": float(r) if _num(r) and r > 0 else DEFAULT_BE_RANGE,
             "fwhm_range": [float(max(MIN_FWHM, fr[0])),
                            float(min(MAX_FWHM, fr[1]))]}
 
@@ -162,27 +164,104 @@ def doublet_of_level(core_level, lines=None):
     return doublet_for(shell, split)
 
 
-def seed_components(core_level, states=None, lines=None):
-    """Starting components for a core level from the chemical-state table
-    (``chemstates``): one per distinct state, named by the part of the state
-    after the line (``Si2p3/2 SiO2`` -> ``SiO2``), at that state's binding
-    energy and width, as a spin-orbit doublet when the line table has both
-    lines. These are starting values for :func:`fit_mean`, not results."""
+def library_states(core_level, states=None):
+    """The chemical states the table lists for a core level, one entry per
+    state name (several worked examples are averaged by their median), sorted
+    by binding energy: ``[{"name", "be", "fwhm", "source"}]`` (for a picker;
+    ``Si2p3/2 SiO2`` -> ``SiO2``)."""
     import chemstates
     from readers.base import canon_region_name
     want = canon_region_name(core_level)
     rows = states if states is not None else chemstates.load_states()
-    doublet = doublet_of_level(want, lines)
-    out, seen = [], set()
+    groups = {}
     for r in rows:
-        if canon_region_name(r["core_level"]) != want or r["state"] in seen:
-            continue
-        seen.add(r["state"])
-        label = r["state"].split(None, 1)
-        name = label[1] if len(label) > 1 else r["state"]
-        out.append(new_component(name, r["be"], r.get("fwhm") or 1.0,
-                                 doublet=doublet))
-    return out[:MAX_COMPONENTS]
+        if canon_region_name(r["core_level"]) == want:
+            groups.setdefault(r["state"], []).append(r)
+    out = []
+    for state, rs in groups.items():
+        label = state.split(None, 1)
+        bes = sorted(float(r["be"]) for r in rs)
+        fw = sorted(float(r["fwhm"]) for r in rs if _num(r.get("fwhm")))
+        out.append({"name": label[1] if len(label) > 1 else state,
+                    "be": bes[len(bes) // 2],
+                    "fwhm": fw[len(fw) // 2] if fw else 1.0,
+                    "source": rs[0].get("source", "")})
+    return sorted(out, key=lambda e: e["be"])
+
+
+def main_line(core_level, lines=None):
+    """``(label, be)`` of a core level's principal line in the app's line
+    table (``Si 2p`` -> ``2p3/2`` 99.4; ``F 1s`` -> 686.0), or None."""
+    import xpslines
+    from readers.base import canon_region_name
+    parts = canon_region_name(core_level).split()
+    if len(parts) != 2:
+        return None
+    el, shell = parts[0], parts[1].split("/")[0]
+    shell = shell[:2] if len(shell) > 2 and shell[2].isdigit() else shell
+    lines = lines if lines is not None else xpslines.load_lines()
+    cands = [e for e in lines if e.get("el") == el
+             and (e.get("line") == shell or str(e.get("line", "")).startswith(
+                 shell) and e.get("be") is not None)]
+    if not cands:
+        return None
+    best = min(cands, key=lambda e: (e.get("rank", 9), e.get("be")))
+    return best["line"], float(xpslines.line_be(best))
+
+
+def peak_position(be, y, near, span=3.0):
+    """The binding energy of the highest smoothed point of ``y`` within
+    ``span`` eV of ``near`` (``near`` itself when there is no data there or
+    the maximum lies at the edge of that window, i.e. the peak is elsewhere)."""
+    np = _np()
+    be = np.asarray(be, dtype=float)
+    y = np.asarray(y, dtype=float)
+    sel = np.abs(be - near) <= span
+    if sel.sum() < 3:
+        return float(near)
+    ys = np.convolve(y[sel], np.ones(3) / 3.0, mode="same")
+    k = int(np.argmax(ys[1:-1])) + 1
+    if k <= 2 or k >= len(ys) - 3:         # the highest point is the window's
+        return float(near)                 # edge: a slope, not a peak nearby
+    return float(be[sel][k])
+
+
+def seed_components(core_level, states=None, lines=None, be=None, y=None):
+    """Starting components for any core level, to be refined by
+    :func:`fit_mean` (positions may move ``DEFAULT_BE_RANGE`` eV).
+
+    A level with a few states in the chemical-state table (Si 2p: Si and
+    SiO2) is seeded with all of them. Any other level (C 1s has many states,
+    Al 2p and F 1s none) gets **one** component at the principal line of the
+    app's line table, moved to the measured maximum of the spectrum (``be``,
+    ``y``) when one is given and lies within 3 eV; more are added by hand or
+    from :func:`library_states`. A doublet follows from the line table (2p, 3d,
+    4f). Elements the tables do not know give []."""
+    doublet = doublet_of_level(core_level, lines)
+    lib = library_states(core_level, states)
+    if 0 < len(lib) <= MAX_SEEDED_STATES:
+        return [new_component(e["name"], e["be"], e["fwhm"], doublet=doublet)
+                for e in lib]
+    line = main_line(core_level, lines)
+    if line is None:
+        return []
+    pos = line[1]
+    if be is not None and y is not None:
+        pos = peak_position(be, y, pos)
+    label = str(core_level).strip()
+    return [new_component(label.split()[0] if label.split() else label, pos,
+                          1.0, doublet=doublet)]
+
+
+def suggest_window(be, comps, pad=3.5):
+    """A fit window round the components (``pad`` eV beyond the outermost,
+    widened by their allowed movement and doublets), cut to the data."""
+    import numpy as np
+    be = np.asarray(be, dtype=float)
+    lo = min(c["be"] - c["be_range"] for c in comps) - pad
+    hi = max(c["be"] + c["be_range"] + (c["doublet"]["split"] if c.get("doublet")
+                                       else 0.0) for c in comps) + pad
+    return [float(max(lo, be.min())), float(min(hi, be.max()))]
 
 
 # -- solvers ------------------------------------------------------------------------------

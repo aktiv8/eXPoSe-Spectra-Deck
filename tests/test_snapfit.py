@@ -61,6 +61,54 @@ class TestSeeds(unittest.TestCase):
         self.assertAlmostEqual(d["ratio"], 0.5)
         self.assertEqual(snapfit.seed_components("Si2p")[0]["name"], "Si")
 
+    def test_other_levels_are_seeded_by_their_main_line(self):
+        c = snapfit.seed_components("C 1s")            # many table states: one start
+        self.assertEqual([(x["name"], x["be"], x["doublet"]) for x in c],
+                         [("C", 284.8, None)])
+        al = snapfit.seed_components("Al 2p")           # no table states at all
+        self.assertEqual((al[0]["name"], al[0]["be"]), ("Al", 72.7))
+        self.assertAlmostEqual(al[0]["doublet"]["split"], 0.44, places=6)
+        f = snapfit.seed_components("F 1s")
+        self.assertEqual(f[0]["be"], 686.0)
+        self.assertEqual(snapfit.seed_components("Xx 9z"), [])
+
+    def test_the_seed_moves_to_the_measured_peak_but_only_nearby(self):
+        be = np.linspace(292.0, 280.0, 241)
+        y = 20 + 500 * np.exp(-0.5 * ((be - 285.5) / 0.7) ** 2)
+        c = snapfit.seed_components("C 1s", be=be, y=y)
+        self.assertAlmostEqual(c[0]["be"], 285.5, delta=0.1)
+        far = 20 + 500 * np.exp(-0.5 * ((be - 290.9) / 0.4) ** 2)  # 6 eV away
+        self.assertEqual(snapfit.seed_components("C 1s", be=be, y=far)[0]["be"],
+                         284.8)
+        # a window with no peak in it (only the slope of one) is not a position
+        self.assertEqual(snapfit.peak_position(be, y, 284.8, span=0.5), 284.8)
+
+    def test_the_library_lists_each_state_once_by_binding_energy(self):
+        lib = snapfit.library_states("C 1s")
+        names = [e["name"] for e in lib]
+        self.assertEqual(len(names), len(set(names)))
+        self.assertEqual([e["be"] for e in lib], sorted(e["be"] for e in lib))
+        self.assertIn("C-C", names)
+        self.assertEqual([e["name"] for e in snapfit.library_states("Si 2p")],
+                         ["Si", "SiO2"])
+
+    def test_a_window_surrounds_the_components_and_stays_in_the_data(self):
+        be = np.linspace(110.0, 95.0, 301)
+        comps = snapfit.seed_components("Si 2p")
+        lo, hi = snapfit.suggest_window(be, comps)
+        self.assertLess(lo, 99.4 - 0.5)
+        self.assertGreater(hi, 103.4 + 0.5 + 0.63)
+        self.assertLessEqual(hi, 110.0)
+        narrow = snapfit.suggest_window(np.linspace(105, 98, 50), comps)
+        self.assertEqual((narrow[0], narrow[1]), (98.0, 105.0))
+
+    def test_positions_may_move_half_an_electronvolt_by_default(self):
+        for c in snapfit.seed_components("Si 2p"):
+            self.assertEqual(c["be_range"], 0.5)
+        self.assertEqual(snapfit.new_component("X", 100.0)["be_range"], 0.5)
+        self.assertEqual(snapfit.sanitise({"components": [
+            {"be": 100.0, "be_range": -1}]})["components"][0]["be_range"], 0.5)
+
     def test_a_level_without_states_or_lines_is_just_empty_or_singlet(self):
         self.assertEqual(snapfit.seed_components("Xx 9z"), [])
         s_only = snapfit.seed_components("Si 2s", states=[
@@ -234,6 +282,23 @@ class TestMeanFit(unittest.TestCase):
         w = {c["fwhm"] for c in res.spec["components"]}
         self.assertEqual(len(w), 1)
 
+    def test_a_charging_shift_within_half_an_ev_is_followed(self):
+        # the peaks are 0.45 eV from the library values: inside the room
+        s = self.start(free_fwhm=True)
+        for c, shift in zip(s["components"], (0.0, 0.0)):
+            c["be"] = c["be"] - 0.3 - 0.15                 # seed 0.45 eV low
+        res = snapfit.fit_mean(self.be, self.mean, 1486.6, s, n_pix=1200)
+        for c, c0 in zip(res.spec["components"], self.truth["spec"]["components"]):
+            self.assertAlmostEqual(c["be"], c0["be"], delta=0.06)
+        self.assertFalse(any("limit" in n for n in res.notes))
+
+    def test_a_shift_beyond_half_an_ev_stops_at_the_limit_and_says_so(self):
+        s = self.start()
+        for c in s["components"]:
+            c["be"] = c["be"] - 0.3 - 0.45                 # seed 0.75 eV low
+        res = snapfit.fit_mean(self.be, self.mean, 1486.6, s, n_pix=1200)
+        self.assertTrue(any("limit" in n for n in res.notes))
+
     def test_a_position_that_hits_its_limit_is_reported(self):
         s = self.start()
         s["components"][1]["be"] = 105.5        # 2 eV off, limit is 0.6
@@ -324,6 +389,90 @@ class TestMaps(unittest.TestCase):
         f = snapfit.fraction(maps, ["SiO2"])
         self.assertGreater(float(np.nanmean(f[:, -5:])),
                            float(np.nanmean(f[:, :5])) + 0.4)
+
+
+def level_map(centres, widths, patterns, lo, hi, n=161, nx=30, ny=24, seed=3,
+              bg=8.0, hv=1486.6):
+    """A map of one core level with singlet states at ``centres`` whose
+    spatial amplitude maps are ``patterns`` (functions of x in 0..1)."""
+    be = np.linspace(hi, lo, n)
+    spec = snapfit.sanitise({"components": [
+        snapfit.new_component(f"S{i}", c, w) for i, (c, w) in
+        enumerate(zip(centres, widths))], "window": [lo, hi]})
+    step = abs(be[1] - be[0])
+    prof = [snapfit.component_profile(be, hv, c) * step
+            for c in spec["components"]]
+    xs = np.linspace(0, 1, nx)
+    rng = np.random.RandomState(seed)
+    base = snapfit.background_columns(
+        "shirley", be, sum(p * 300 for p in prof) + 5.0) @ np.array([bg, bg * 1.8])
+    blocks, truth = [], np.zeros((len(centres), ny, nx))
+    for iy in range(ny):
+        for ix in range(nx):
+            amps = [f(xs[ix]) for f in patterns]
+            truth[:, iy, ix] = amps
+            m = sum(a * p for a, p in zip(amps, prof)) + base
+            blocks.append(((ix, iy), rng.poisson(m).astype(float)))
+    return snapmap.build(list(be), nx, ny, 0.0, 10.0, 0.0, 10.0, blocks), truth, spec
+
+
+@unittest.skipUnless(HAVE, "numpy not available")
+class TestOtherLevels(unittest.TestCase):
+    """Nothing in the method is Si-specific: any core level, one to several
+    states, seeded from the line table or by hand."""
+
+    def test_c_1s_three_states_from_one_seed_and_two_added(self):
+        cube, truth, spec = level_map(
+            (284.8, 286.4, 288.5), (1.1, 1.2, 1.2),
+            (lambda x: 500 * (1 - 0.7 * x), lambda x: 150 + 200 * x,
+             lambda x: 60 + 120 * x ** 2), 281.0, 292.0)
+        be = np.array(cube.energy)
+        mean = cube.array3d().reshape(-1, len(be)).mean(axis=0)
+        seed = snapfit.seed_components("C 1s", be=be, y=mean)      # C-C only
+        self.assertEqual(len(seed), 1)
+        comps = seed + [snapfit.new_component("C-O", 286.2, 1.2),
+                        snapfit.new_component("C=O", 288.3, 1.2)]
+        start = {"components": comps, "window": [281.0, 292.0]}
+        res = snapfit.fit_mean(be, mean, 1486.6, start, n_pix=720)
+        got = [c["be"] for c in res.spec["components"]]
+        for g, want in zip(got, (284.8, 286.4, 288.5)):
+            self.assertAlmostEqual(g, want, delta=0.12)
+        maps = snapfit.fit_maps(cube, be, 1486.6, res.spec, y_mean=mean)
+        for k, floor in enumerate((0.9, 0.9, 0.7)):     # the weak state is noisier
+            r = np.corrcoef(truth[k].ravel(), maps.areas[k].ravel())[0, 1]
+            self.assertGreater(r, floor, k)
+        f = snapfit.fraction(maps, [res.spec["components"][2]["name"]])
+        self.assertGreater(float(np.nanmean(f[:, -5:])),
+                           float(np.nanmean(f[:, :5])))
+
+    def test_a_single_state_level_gives_one_amplitude_map(self):
+        cube, truth, spec = level_map((686.0,), (1.8,),
+                                      (lambda x: 100 + 400 * x,), 680.0, 692.0)
+        be = np.array(cube.energy)
+        mean = cube.array3d().reshape(-1, len(be)).mean(axis=0)
+        seed = snapfit.seed_components("F 1s", be=be, y=mean)
+        self.assertAlmostEqual(seed[0]["be"], 686.0, delta=0.2)  # the measured peak
+        res = snapfit.fit_mean(be, mean, 1486.6,
+                               {"components": seed, "window": [680.0, 692.0]},
+                               n_pix=720)
+        maps = snapfit.fit_maps(cube, be, 1486.6, res.spec, y_mean=mean)
+        self.assertEqual(maps.areas.shape[0], 1)
+        self.assertGreater(np.corrcoef(truth[0].ravel(),
+                                       maps.areas[0].ravel())[0, 1], 0.95)
+        # one state is its own fraction wherever there is signal
+        f = snapfit.fraction(maps, [maps.names[0]])
+        self.assertTrue(np.allclose(f[np.isfinite(f)], 1.0))
+
+    def test_an_al_2p_metal_and_oxide_pair_with_the_line_tables_doublet(self):
+        seed = snapfit.seed_components("Al 2p")
+        self.assertEqual(seed[0]["be"], 72.7)
+        oxide = snapfit.new_component("Al2O3", 74.5, 1.3,
+                                      doublet=seed[0]["doublet"])
+        self.assertAlmostEqual(oxide["doublet"]["split"], 0.44, places=6)
+        spec = snapfit.sanitise({"components": seed + [oxide],
+                                 "window": [68.0, 80.0]})
+        self.assertEqual([c["name"] for c in spec["components"]],
+                         ["Al", "Al2O3"])
 
 
 if __name__ == "__main__":
