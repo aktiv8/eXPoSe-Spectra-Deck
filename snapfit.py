@@ -8,6 +8,7 @@ Tk-free, numpy only (scipy is not installed). A *fit spec* is a plain dict::
                      "be_range": 0.5, "fwhm_range": [0.4, 2.5]}, ...],
      "window": [lo, hi],              # binding energies the fit uses
      "background": "shirley" | "linear",
+     "avg": 3,                        # channels averaged at each end of the window
      "bin": 1,                        # pixels averaged for the per-pixel step
      "shared_fwhm": False}
 
@@ -33,6 +34,8 @@ from __future__ import annotations
 import math
 
 DEFAULT_SHAPE = "GL(30)"
+DEFAULT_AVG = 3              # end-point averaging of the Shirley step (CasaXPS "Avg Width")
+MAX_AVG = 10
 DOUBLET_RATIO = {"p": 0.5, "d": 2.0 / 3.0, "f": 3.0 / 4.0}   # 2nd line / 1st
 DEFAULT_HV = 1486.6          # only matters for asymmetric shapes
 FRACTION_FLOOR = 0.05        # a total under this share of its 99th percentile is blank
@@ -127,12 +130,16 @@ def sanitise(spec) -> dict:
         names.append(c["name"])
     w = spec.get("window")
     b = spec.get("bin")
+    av = spec.get("avg")
     return {"components": comps,
             "window": ([float(min(w)), float(max(w))]
                        if isinstance(w, (list, tuple)) and len(w) == 2
                        and all(_num(v) for v in w) and w[0] != w[1] else None),
             "background": spec.get("background")
             if spec.get("background") in ("shirley", "linear") else "shirley",
+            "avg": (int(av) if isinstance(av, (int, float))
+                    and not isinstance(av, bool) and 1 <= av <= MAX_AVG
+                    else DEFAULT_AVG),
             "bin": int(b) if b in (1, 2, 3) else 1,
             "shared_fwhm": bool(spec.get("shared_fwhm", False))}
 
@@ -398,7 +405,7 @@ def shirley_step(be, y, avg=3, iters=100):
     return out
 
 
-def background_columns(kind, be, y_mean):
+def background_columns(kind, be, y_mean, avg=DEFAULT_AVG):
     """Two non-negative columns of the background, with their coefficients.
 
     **Shirley:** ``[1, step]``: a base level (the background at the low-binding
@@ -407,12 +414,15 @@ def background_columns(kind, be, y_mean):
     high binding energy (what inelastic scattering does), so it cannot sink
     below a peak on the low-BE side and take its intensity (a low-BE end level
     free to exceed the data there did exactly that to a small elemental-Si
-    peak). **Linear:** ``[1 - ramp, ramp]``: the levels at the two ends, either
-    of which may be the higher."""
+    peak). ``avg`` channels at each end of the window set the end levels the
+    Shirley step is iterated between (as CasaXPS's average width); it shapes
+    the step only. **Linear:** ``[1 - ramp, ramp]``: the levels at the two
+    ends, either of which may be the higher (solved with the peaks, so ``avg``
+    does not enter)."""
     np = _np()
     be = np.asarray(be, dtype=float)
     if kind == "shirley":
-        s = shirley_step(be, y_mean)
+        s = shirley_step(be, y_mean, avg=avg)
         return np.stack([np.ones(len(be)), s], axis=1)
     span = float(be.max() - be.min()) or 1.0
     s = (be - be.min()) / span
@@ -431,7 +441,8 @@ def design(be, hv, spec, params=None, y_mean=None):
         cols.append(component_profile(be, hv, c, be0, fw) * step)
     cols = np.stack(cols, axis=1) if cols else np.zeros((len(be), 0))
     bg = background_columns(spec["background"], be,
-                            y_mean if y_mean is not None else np.zeros(len(be)))
+                            y_mean if y_mean is not None else np.zeros(len(be)),
+                            spec.get("avg", DEFAULT_AVG))
     return np.concatenate([cols, bg], axis=1)
 
 

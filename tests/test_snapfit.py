@@ -193,6 +193,33 @@ class TestModel(unittest.TestCase):
         ref = lineshapes.shirley(y[order], avg=3)
         self.assertTrue(np.allclose(mine[order], ref, atol=1e-6 * y.max()))
 
+    def test_the_end_averaging_is_a_validated_setting_that_shapes_the_step(self):
+        self.assertEqual(snapfit.sanitise({})["avg"], 3)
+        for bad in (0, 11, "x", True, None, -2):
+            self.assertEqual(snapfit.sanitise({"avg": bad})["avg"], 3, bad)
+        self.assertEqual(snapfit.sanitise({"avg": 7})["avg"], 7)
+        s = snapfit.sanitise({"avg": 5, "components": [{"be": 100.0}]})
+        self.assertEqual(snapfit.sanitise(json.loads(json.dumps(s)))["avg"], 5)
+        # a noisy end moves the Shirley step with the number of channels averaged
+        rng = np.random.RandomState(4)
+        be = np.linspace(110.0, 95.0, 301)
+        y = 30 + 400 * np.exp(-0.5 * ((be - 102.0) / 0.8) ** 2)
+        y = y + rng.normal(0, 25, y.size)
+        a1 = snapfit.background_columns("shirley", be, y, avg=1)[:, 1]
+        a3 = snapfit.background_columns("shirley", be, y, avg=3)[:, 1]
+        a9 = snapfit.background_columns("shirley", be, y, avg=9)[:, 1]
+        self.assertFalse(np.allclose(a1, a9))
+        self.assertTrue(np.allclose(
+            a3, snapfit.background_columns("shirley", be, y)[:, 1]))   # 3 is the default
+        # and it reaches the design through the spec
+        comps = [snapfit.new_component("S", 102.0, 1.0)]
+        d3 = snapfit.design(be, 1486.6, snapfit.sanitise({"components": comps}),
+                            None, y)
+        d9 = snapfit.design(be, 1486.6, snapfit.sanitise(
+            {"components": comps, "avg": 9}), None, y)
+        self.assertTrue(np.allclose(d3[:, :2], d9[:, :2]))
+        self.assertFalse(np.allclose(d3[:, 2:], d9[:, 2:]))
+
     def test_a_linear_background_joins_the_end_levels(self):
         be = np.linspace(110.0, 95.0, 11)
         cols = snapfit.background_columns("linear", be, np.zeros(11))
