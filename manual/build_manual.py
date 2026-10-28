@@ -315,7 +315,12 @@ FORMATS_ROWS = [
     ("Kratos Vision", ".kal",
      "Includes the transmission function. Files that do not record the X-ray "
      "source stay on a kinetic-energy axis (a warning says so)."),
-    ("Kratos ESCApe", ".experiment", "Undocumented binary container; best-effort reverse engineering."),
+    ("Kratos ESCApe", ".experiment",
+     "Undocumented binary container, read by reverse engineering and checked against "
+     "HarwellXPS's export of the same files. The dwell is stored summed over the "
+     "sweeps and is handled as such; each spectrum gets its own stage position, "
+     "neutraliser and emission settings; a file is split by the runs it holds "
+     "(sequences, depth profiles, angle-resolved runs: see Chapter 4)."),
     ("NeXus", ".nxs",
      "Needs the optional h5py. Analyser spectra in NXxps / NXmpes layout (one per entry; "
      "checked on files this application wrote, not on an instrument's own; fits are not read "
@@ -326,6 +331,13 @@ FORMATS_ROWS = [
      "ring current of its scan (its unit is not recorded, so it is not divided by). VAMAS "
      "export writes technique AES dir with the photon energy in the kinetic-energy field, as "
      "HarwellXPS does, and reads it back; NeXus export leaves these scans out."),
+    ("XPSView / HarwellXPS session", ".xpsv",
+     "A gzip-JSON session (schemas 1 and 2); only the experiment inside is read, "
+     "read-only. The charge shift CasaXPS baked into the stored energies is undone "
+     "and kept as a calibration, a hand-edited photon energy is corrected from the "
+     "other spectra of the same source (a warning names it), CasaXPS fits are read "
+     "from the stored lines, and repeated sample names get a suffix. Where XPSView "
+     "keeps one sweep count for all levels of a depth profile a warning says so."),
     ("KherveFitting project", ".kfit",
      "HDF5 project file (needs the optional h5py). Loads the spectra with the fits, "
      "backgrounds and sensitivity factors KherveFitting stored. A standalone Peaks "
@@ -518,6 +530,50 @@ def build_chapters(doc):
         "Show the … button has the same)."
     )
     add_figure(doc, "The file tree with several spectra ticked and their colour swatches.")
+    h2(doc, "What kind of run a spectrum belongs to")
+    para(doc,
+        "Details shows a Block type row where the instrument file says what "
+        "kind of measurement a spectrum belongs to. It is only what the file "
+        "records, never a guess about purpose, and it changes nothing about "
+        "how the spectrum is named or grouped. A Kratos ESCApe file writes "
+        "each run behind a class name, so its spectra are labelled "
+        "acquisition sequence, depth profile, angle-resolved, etch or repeat-sequence run. For "
+        "Thermo Avantage the levels of one file are a depth profile when they "
+        "have etch times, an angle-resolved series when they are stage tilts, "
+        "and otherwise an iteration series (the same scan repeated in "
+        "succession); a file of several analysis points is a multi-point scan."
+    )
+    para(doc,
+        "A Kratos .experiment is split by these runs. Each run gets its own "
+        "sample, read from the run’s own analysis-location record; "
+        "depth-profile levels are numbered within their run and the etch times "
+        "come from the run’s own duration record, not an assumed step; a "
+        "sample measured in several runs becomes one sample per run "
+        "(“<sample> – Depth profile 2”, “– Sequence 1”), so plots, "
+        "levels and quantification do not pool them. Notes, shifts and markers "
+        "you entered before the split are carried over to the new samples. "
+        "Spectra written before a file’s first run marker stay unlabelled, "
+        "and a .kal or .dset has no run structure and is not split."
+    )
+    h2(doc, "XPSView and HarwellXPS sessions (.xpsv)")
+    para(doc,
+        "A .xpsv session opens like any other file: its samples, spectra, "
+        "pictures and CasaXPS fits appear in the tree, and everything the "
+        "application does with spectra works on them. Only the experiment "
+        "inside the session is read (report sections, figures and workflow are "
+        "not), and nothing is written back. What the reader corrects, because "
+        "the file does it differently: a charge correction CasaXPS had applied "
+        "is undone on the stored axis and kept as the spectrum’s calibration, "
+        "so fit positions stay where CasaXPS had them; a photon energy that "
+        "was edited by hand is replaced by the value the other spectra of the "
+        "same source store, with a warning; the stored per-sweep and summed "
+        "dwell times are told apart; and sample names that repeat (a spot "
+        "sequence, its locations and a depth profile of one sample) are made "
+        "unique. A spectrum acquired with an ion beam (ISS, REELS) is kept on a "
+        "kinetic-energy axis with no photon energy. XPSView keeps one sweep "
+        "count for all levels of a depth profile, so each level is given that "
+        "count and one warning says the true figure needs the instrument file."
+    )
 
     # 5. Plotting spectra ----------------------------------------------------
     add_page_break(doc)
@@ -682,6 +738,37 @@ def build_chapters(doc):
         "Details: a setting that is the same for all of them, such as photon "
         "energy or lens mode, is stated once; settings that differ are grouped by "
         "value. The metadata PDF (Chapter 14) does the same for each sample."
+    )
+    h2(doc, "Repeat groups")
+    para(doc,
+        "Samples that repeat one another (several locations on one sample, "
+        "or a spot measured again) can be put in a repeat group. The "
+        "Quantification tab then shows, after the samples, "
+        "“Group: <name> (n samples)” with the mean, the sample standard "
+        "deviation (n − 1) and n of the atomic percent of each region and of "
+        "each chemical state, next to the individual values. Nothing is "
+        "requantified: each member is read as its own finished composition, so "
+        "a region counted once, your ticks and CasaXPS’s own numbers all "
+        "apply. A state a member lacks is left out of that member and shown in "
+        "bold; a depth profile and a member with nothing quantified are left "
+        "out with a note. A group is your statement: Groups… opens the "
+        "editor (new, rename, kind = locations, repeats or samples, a member "
+        "checklist, and Suggest from names, which proposes groups from sample "
+        "labels and never overwrites yours; a survey and its high-resolution "
+        "regions are grouped apart, as they are quantified apart). Renaming a "
+        "sample takes it out of its group. Export CSV in that view writes every "
+        "group in the layout of XPSView’s quantification_repeat_groups.csv."
+    )
+    para(doc,
+        "Groups are saved in the workbook and appear in the PDF, slides and "
+        "Word report (a “Repeat groups” section, one table each, with a "
+        "column per member up to four, else the individual values are left to "
+        "the CSV), in the interactive data browser (read-only: groups are made "
+        "in the application, not on the page, and the page’s own ticks "
+        "apply) and in the hand-over ZIP, whose Quantification section "
+        "writes quantification.csv (one row per fitted region and per "
+        "chemical state, each sample and level its own total) and "
+        "quantification_repeat_groups.csv."
     )
     h2(doc, "Holder photo calibration")
     para(doc,
@@ -1036,7 +1123,16 @@ def build_chapters(doc):
         "note on the page says how many overlaps were matched. Camera pictures "
         "appear six to a report page (three to a slide), each with the analysis "
         "points that fall in it and a scale bar; one page or slide is added per "
-        "SnapMap site, showing the camera picture beside a grid of element maps."
+        "SnapMap site, showing the camera picture beside a grid of element maps. "
+        "With the Report generator’s mosaic option on, SnapMap sites of one "
+        "file that lie side by side (their footprints overlap or are within 5 % "
+        "of a map’s width of each other) also get a “SnapMap mosaic” page: "
+        "one mosaic per core level found in at least two of those sites, laid "
+        "out by their stage positions with one energy window and one colour "
+        "range, the tiles outlined and named. A site left out in the "
+        "generator is left out of its mosaic. Kratos imaging maps get image-map "
+        "pages: up to twelve images of a stage position to a page, each on its "
+        "own colour range with a scale bar marked approximate."
     )
     h2(doc, "Methods text")
     para(doc,
@@ -1066,7 +1162,12 @@ def build_chapters(doc):
         "saved figure as a PNG, optionally the interactive data "
         "browser and the workbook itself, a README.txt listing everything "
         "included, and SHA256SUMS.txt (checked with sha256sum -c "
-        "SHA256SUMS.txt). Tick what you want to include in the dialog."
+        "SHA256SUMS.txt). Tick what you want to include in the dialog. A "
+        "Quantification section adds quantification/quantification.csv (the "
+        "table of the Quantification tab: one row per fitted region and per "
+        "chemical state, each sample and depth level its own total, UTF-8 with a "
+        "BOM) and, where repeat groups exist, quantification_repeat_groups.csv; "
+        "CasaXPS’s own Quant_*.txt files stay under metadata/."
     )
 
     # 16. HTML browser ---------------------------------------------------------
@@ -1226,6 +1327,29 @@ def build_chapters(doc):
     add_figure(doc, "A Fit stack of three depth levels. Left: every peak, coloured by its INDEX. "
                     "Right: Merge INDEX groups draws the two O-C=O peaks (one INDEX) as one outline.",
               image_path=os.path.join(FIGDIR, "fig_fitstack.png"))
+    h2(doc, "Peak shapes and backgrounds")
+    para(doc,
+        "CasaXPS’s own line shapes are drawn from the tables the program "
+        "itself builds, not approximations: GL and SGL (with the T(k) tail), "
+        "LA, LF, DS, H, F, E, A, TLA, LS, LSF, QF, QSF, QA, QS and DS with a "
+        "cut-off, with the PHI / SL tails and the GL(m,n) kernel. Each was "
+        "compared with CasaXPS’s exported component curves (0.02–1.3 % of the "
+        "peak height, using the stated area as it is), and the fit of a real "
+        "file is drawn within about 1–2 % of its data range. A component's "
+        "Position is the shape’s centre, as in CasaXPS. A shape this "
+        "application cannot reproduce keeps its real name and is flagged as "
+        "approximate rather than drawn as something else, and a component "
+        "with impossible parameters is left out of the envelope with a note."
+    )
+    para(doc,
+        "Backgrounds: Linear, Shirley (with the start and end offsets of the "
+        "region), the Tougaard family (U 2 and U 4 Tougaard, the preset U Poly, "
+        "U Si, U SiO2, U Ge and U Al, U 3 Tougaard with its own C, D and "
+        "T0, W Tougaard, and the plain Tougaard whose scale CasaXPS sets from "
+        "the data) and Smart. Min Limits, Step Down, Poly Regression and "
+        "Spline Shirley are not reproduced: such a fit shows its components "
+        "but no envelope."
+    )
     h2(doc, "Goodness of fit")
     para(doc,
         "Three boxes in the Fit row choose which fit statistics are shown, each "
@@ -1426,6 +1550,22 @@ def build_chapters(doc):
     )
     add_figure(doc, "The SnapMap viewer: the element map and the selected area's spectrum.")
 
+    h2(doc, "Kratos imaging maps")
+    para(doc,
+        "Stigmatic images from a Kratos .kal or .dset (one single-energy image "
+        "per object) are rows marked “(Map)” in the tree, with the binding "
+        "energy and the image size. They have no spectrum and so no tick box. "
+        "Double-click one (or press Enter) to open the image viewer: it steps "
+        "through the maps of the same stage position (a focus series) or the "
+        "same energy, with a slider and filters, colour choices, a shared "
+        "colour range and smoothing (for the picture only), an area, and a "
+        "plot of the mean counts or the sharpness against stage height, time "
+        "or frame number. Saving writes the picture, the pixel values or the "
+        "table. The field of view is not stored in the file: a measured "
+        "value is used and every scale bar says approx. The images also have "
+        "their own tab in the HTML data browser and their own pages in the "
+        "reports."
+    )
     h2(doc, "Avantage projects (.vgp)")
     para(doc,
         "An Avantage project holds a session’s peak fits. Open the .vgp file, "
