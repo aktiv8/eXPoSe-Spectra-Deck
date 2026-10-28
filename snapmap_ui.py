@@ -21,12 +21,13 @@ from tkinter import filedialog, ttk
 import smoothing
 import snapmap
 import snapmapfig
+from snapmap_fit_ui import FitMixin
 import snapshot
 import themes
 from workbook_ui import _finish, keep_in_front
 
 
-class SnapMapDialog(tk.Toplevel):
+class SnapMapDialog(FitMixin, tk.Toplevel):
     def __init__(self, master, app, parser, region, view=None, figure=None):
         """``view`` (a ``snapmapfig`` dict) restores a saved look; ``figure``
         is the index in ``app.figures`` it came from."""
@@ -60,6 +61,8 @@ class SnapMapDialog(tk.Toplevel):
         self.layer_rows = [(tk.StringVar(value=""), tk.StringVar(value=""),
                             tk.StringVar(value="")) for _ in range(3)]
         self.ax_spec = self.span = self.im = None
+        self.rects = []
+        self._fit_init()
         self.tiles = []                      # [(parser, region)] laid beside this map
         self.figure = figure
         self.title(f"SnapMap — {region.sample}")
@@ -101,7 +104,7 @@ class SnapMapDialog(tk.Toplevel):
         ttk.Label(bar2, text="View").pack(side="left")
         self.mode_cb = ttk.Combobox(
             bar2, state="readonly", width=14,
-            values=[snapmapfig.MODE_NAMES[m] for m in snapmapfig.MODES if m != "fit"])
+            values=[snapmapfig.MODE_NAMES[m] for m in snapmapfig.MODES])
         self.mode_cb.set(snapmapfig.MODE_NAMES[self.mode.get()])
         self.mode_cb.pack(side="left", padx=(4, 14))
         self.mode_cb.bind("<<ComboboxSelected>>", lambda e: self.set_mode(
@@ -172,6 +175,7 @@ class SnapMapDialog(tk.Toplevel):
             "tiles": [self.app.snapmap_ref(p, r) for p, r in self.tiles],
             "mode": self.mode.get(),
             "layers": self.layers_spec(),
+            "fit": self.fit_view(),
         })
 
     def _apply_view(self, view):
@@ -192,6 +196,7 @@ class SnapMapDialog(tk.Toplevel):
             hit = self.app.snapmap_target({"ref": ref})
             if hit is not None and hit[1] is not self.region:
                 self.tiles.append(hit)
+        self._apply_fit(v["fit"])
         if v["mode"] != "single" and not self.tiles:
             self.mode.set(v["mode"])
             rows = {"composite": 3, "ratio": 2}.get(v["mode"], 0)
@@ -263,7 +268,11 @@ class SnapMapDialog(tk.Toplevel):
     def effective_mode(self):
         """The mode actually drawn: a multi-element mode needs two usable
         elements and no mosaic."""
-        if self.tiles or len(self._layers()) < 2:
+        if self.tiles:
+            return "single"
+        if self.mode.get() == "fit":
+            return "fit"
+        if len(self._layers()) < 2:
             return "single"
         return self.mode.get()
 
@@ -276,6 +285,8 @@ class SnapMapDialog(tk.Toplevel):
             self.tiles = []
             self.overlay.set(False)
             self._prefill_rows()
+        if mode == "fit" and not self.fit_spec["components"]:
+            self.fit_seed()
         if hasattr(self, "mode_cb"):
             self.mode_cb.set(snapmapfig.MODE_NAMES[mode])
         self._show_rows()
@@ -310,7 +321,20 @@ class SnapMapDialog(tk.Toplevel):
                 self.layer_rows[row][2].set(f"{b:.2f}")
         self._rebuild(keep_view=True)
 
+    def _show_fit_tab(self):
+        """The Fit tab is there in the fit view only."""
+        nb = getattr(self, "side_nb", None)
+        if nb is None:
+            return
+        if self.mode.get() == "fit":
+            nb.tab(self.fit_tab, state="normal")
+            nb.select(self.fit_tab)
+        else:
+            nb.tab(self.fit_tab, state="hidden")
+            nb.select(self.areas_tab)
+
     def _show_rows(self):
+        self._show_fit_tab()
         if not hasattr(self, "layer_frame"):
             return
         names = {"composite": ("Red", "Green", "Blue"),
@@ -351,6 +375,10 @@ class SnapMapDialog(tk.Toplevel):
 
     def _image(self):
         lo, hi = self.window
+        if self.effective_mode() == "fit":
+            frac = self.fit_fraction()
+            if frac is not None:
+                return frac
         if self.effective_mode() == "ratio":
             return snapmapfig.mode_image(self.view_spec(False), self.region,
                                          self._layers())
@@ -508,24 +536,40 @@ class SnapMapDialog(tk.Toplevel):
         self.ax_spec = self.span = self.im = None
         self.cube = self.region.extra["cube"]
         self._view_sig = (id(self.cube), 0, False, mode)
-        if kept and kept[2] == self._view_sig and mode != "grid":
+        one_map = mode in ("composite", "ratio")
+        if kept and kept[2] == self._view_sig and one_map:
             self.ax_map.set_xlim(kept[0])
             self.ax_map.set_ylim(kept[1])
-        self.rect = None
+        self.rect, self.rects = None, []
         if mode != "grid":
-            self.rect = RectangleSelector(
-                self.ax_map, self._on_roi, useblit=False, button=[1],
-                minspanx=0, minspany=0, spancoords="data", interactive=True,
-                props=dict(edgecolor=pal["accent"], facecolor="none",
-                           linewidth=1.6))
+            # a drag on any map panel adds an area (they share one frame)
+            axes = ([self.ax_map] if one_map else
+                    [a for a in self.fig.axes if a.images])
+            for ax in axes:
+                self.rects.append(RectangleSelector(
+                    ax, self._on_roi, useblit=False, button=[1],
+                    minspanx=0, minspany=0, spancoords="data",
+                    interactive=True,
+                    props=dict(edgecolor=pal["accent"], facecolor="none",
+                               linewidth=1.6)))
+            self.rect = self.rects[0] if self.rects else None
         self.cid = self.canvas.mpl_connect("motion_notify_event", self._hover)
         self._refresh_areas()
+        why = ""
+        if mode == "fit":
+            no_axis = snapmapfig._fit_axis(self.region)[0] is None
+            why = ("Fitting needs a binding-energy axis." if no_axis else
+                   "" if self.fit_spec["components"] else
+                   "No components yet: Reseed, or Add one, in the Fit tab.")
         self.hint.configure(
-            text={"grid": "Every element of this map on its own colour range.",
+            text=why or {"grid": "Every element of this map on its own colour range.",
                   "composite": "Each element on its own 1–99 % range, as "
                                "red, green and blue; drag a box for an area.",
                   "ratio": "First element over the second, blank where the "
-                           "second is under 5 % of its own 99th percentile."
+                           "second is under 5 % of its own 99th percentile.",
+                  "fit": "Components fitted on the mean spectrum, then each "
+                         "pixel's amplitudes from those shapes (Fit tab); "
+                         "drag a box on a map for an area."
                   }[mode])
         self._sync_tools()
         try:
@@ -538,7 +582,8 @@ class SnapMapDialog(tk.Toplevel):
         """The zoom / pan tool and the area / window selectors must not both
         take the mouse."""
         busy = bool(getattr(self.toolbar, "mode", ""))
-        for sel in (getattr(self, "rect", None), getattr(self, "span", None)):
+        sels = list(getattr(self, "rects", [])) or [getattr(self, "rect", None)]
+        for sel in sels + [getattr(self, "span", None)]:
             if sel is not None:
                 sel.set_active(not busy)
 
@@ -556,6 +601,11 @@ class SnapMapDialog(tk.Toplevel):
         """Lay these ``[(parser, region)]`` beside the current map (empty =
         back to the single map). Uses one energy window and colour range."""
         self.tiles = [(p, r) for p, r in tiles if r is not self.region]
+        if self.tiles and self.cube.stage_x_mm is None:
+            self.tiles = []
+            self.hint.configure(text="This map has no stage position to lay "
+                                     "other maps against.")
+            return
         if self.tiles:
             self.mode.set("single")
             self.mode_cb.set(snapmapfig.MODE_NAMES["single"])
@@ -749,7 +799,16 @@ class SnapMapDialog(tk.Toplevel):
 
     # -- the areas' panel and numbers ---------------------------------------------------
     def _side_panel(self, parent):
-        side = ttk.Frame(parent, padding=(8, 0, 0, 0))
+        outer = ttk.Frame(parent, padding=(8, 0, 0, 0))
+        self.side_nb = ttk.Notebook(outer)
+        self.side_nb.pack(fill="both", expand=True)
+        side = ttk.Frame(self.side_nb, padding=(4, 6))
+        self.areas_tab = side
+        self.side_nb.add(side, text="Areas")
+        self.fit_tab = ttk.Frame(self.side_nb, padding=(4, 6))
+        self.side_nb.add(self.fit_tab, text="Fit")
+        self.side_nb.tab(self.fit_tab, state="hidden")
+        self._build_fit_tab(self.fit_tab)
         self.layer_frame = ttk.LabelFrame(side, text="Elements", padding=6)
         self._row_widgets = []
         labels = ["—"] + [self._label(r) for r in self.entries]
@@ -800,7 +859,7 @@ class SnapMapDialog(tk.Toplevel):
         self.area_note = ttk.Label(side, style="Muted.TLabel", wraplength=230,
                                    justify="left", text="")
         self.area_note.pack(anchor="w", pady=(8, 0))
-        return side
+        return outer
 
     def stats(self):
         """The areas' numbers over the energy window on show (see
@@ -808,7 +867,9 @@ class SnapMapDialog(tk.Toplevel):
         mode = self.effective_mode()
         if self.tiles or mode in ("grid", "composite"):
             return []
-        image = self._image() if mode == "ratio" else None
+        image = self._image() if mode in ("ratio", "fit") else None
+        if mode == "fit" and self.fit_fraction() is None:
+            return []
         return snapmapfig.roi_stats(self.cube, self.window,
                                     self.background.get(), self.rois,
                                     image=image)
@@ -819,9 +880,10 @@ class SnapMapDialog(tk.Toplevel):
             return
         tree.delete(*tree.get_children())
         mode = self.effective_mode()
-        image = self._image() if mode == "ratio" else None
+        image = self._image() if mode in ("ratio", "fit") else None
+        no_fit = mode == "fit" and self.fit_fraction() is None
         for k, roi in enumerate(self.rois):
-            got = ([] if self.tiles or mode in ("grid", "composite")
+            got = ([] if self.tiles or no_fit or mode in ("grid", "composite")
                    else snapmapfig.roi_stats(
                        self.cube, self.window, self.background.get(), [roi],
                        image=image))
@@ -839,10 +901,14 @@ class SnapMapDialog(tk.Toplevel):
                   if mode in ("grid", "composite") else
                   "Mean is per pixel of the ratio image; vs map is its ratio "
                   "to the whole map's mean." if mode == "ratio" else
+                  "Mean is the average of the fraction map (the components "
+                  "chosen in Fraction of) over the area; vs map is its ratio to "
+                  "the whole map's." if mode == "fit" else
                   f"Counts summed over {min(lo, hi):.1f}-{max(lo, hi):.1f} "
                   f"{self.region.energy_units}"
                   f"{', background removed' if self.background.get() else ''}; "
                   "Mean is per pixel, vs map its ratio to the whole map's mean."))
+        self._refresh_fit_on()
 
     def _selected_area(self):
         sel = self.area_tree.selection()

@@ -505,6 +505,8 @@ def mosaic_image(cubes, window, background=False):
     import numpy as np
     notes, tiles = [], []
     ref = cubes[0]
+    if ref.stage_x_mm is None or ref.stage_y_mm is None:
+        return None                     # nothing to place the others against
     for c in cubes:
         if c.stage_x_mm is None or c.stage_y_mm is None:
             notes.append("a map with no stage position was left out")
@@ -557,6 +559,8 @@ def mosaic_footprints(cubes):
     reference frame, for outlining the tiles."""
     out = []
     ref = cubes[0]
+    if ref.stage_x_mm is None or ref.stage_y_mm is None:
+        return out
     for i, c in enumerate(cubes):
         if c.stage_x_mm is None or c.stage_y_mm is None:
             continue

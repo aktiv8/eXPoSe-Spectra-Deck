@@ -258,6 +258,11 @@ class TestMosaic(unittest.TestCase):
         self.assertAlmostEqual((m.extent[1] - m.extent[0]) / m.image.shape[1],
                                10.0)
 
+    def test_a_reference_without_a_stage_position_gives_no_mosaic(self):
+        a, b = flat_cube(1.0, (0.0, 0.0)), flat_cube(2.0, (0.1, 0.0))
+        a.stage_x_mm = None
+        self.assertIsNone(snapmapfig.mosaic_image([a, b], self.W))
+
     def test_a_map_without_a_stage_position_is_left_out_with_a_note(self):
         a = flat_cube(1.0, (0.0, 0.0))
         b = flat_cube(1.0, (0.0, 0.0))
@@ -814,6 +819,223 @@ class TestFitFigureInTheApp(unittest.TestCase):
         import pptx_export
         self.assertIn("fit of Si, SiO2", pptx_export.look_notes(fig["state"]))
         self.ws.figures.remove(fig)
+
+
+@unittest.skipUnless(HAVE_MPL, "matplotlib / Tk not available")
+class TestFitInTheDialog(unittest.TestCase):
+    """The Fit tab: seeding, refinement within +/-0.5 eV, components, the
+    fraction, areas, saving and reopening (the Si 2p test map, shown 0.3 eV
+    below where the library puts its states)."""
+
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.root = tk.Tk()
+        except tk.TclError:
+            raise unittest.SkipTest("no display")
+        cls.root.withdraw()
+        cls.rc = dict(ee.matplotlib.rcParams)
+        cls._load = ee.load_file
+        cls.ws = ee.Workspace(cls.root)
+
+    @classmethod
+    def tearDownClass(cls):
+        ee.load_file = cls._load
+        ee.matplotlib.rcParams.update(cls.rc)
+        cls.root.destroy()
+
+    def setUp(self):
+        from test_snapfit import two_state_map
+        cube, truth = two_state_map()
+        self.region = cube_region(cube, "Si 2p", "S1")
+        self.region.energy = [e - 0.3 for e in truth["be"]]     # charging / calibration
+        self.truth = truth
+        self.parser = doc("si.vms", [self.region])
+        ee.load_file = lambda p: self.parser
+        for d in list(self.ws.docs):
+            self.ws.docs.remove(d)
+        self.ws.file_ids.clear()
+        self.ws.region_parser.clear()
+        self.ws.figures.clear()
+        self.ws._add_file("si.vms", file_id="si", refresh=False)
+        self.ws._finish_adding()
+        import snapmap_ui
+        self.dlg = snapmap_ui.SnapMapDialog(self.root, self.ws, self.parser,
+                                            self.region)
+        self.addCleanup(self.dlg.destroy)
+
+    def fit_mode(self):
+        self.dlg.set_mode("fit")
+        return self.dlg
+
+    def test_the_fit_view_seeds_si_and_sio2_and_shows_its_tab(self):
+        d = self.fit_mode()
+        self.assertEqual(d.effective_mode(), "fit")
+        comps = d.fit_spec["components"]
+        self.assertEqual([(c["name"], c["be"]) for c in comps],
+                         [("Si", 99.4), ("SiO2", 103.4)])
+        self.assertTrue(all(c["doublet"] for c in comps))
+        self.assertEqual(str(d.side_nb.tab(d.fit_tab, "state")), "normal")
+        self.assertEqual(d.side_nb.select(), str(d.fit_tab))
+        lo, hi = float(d.v_fwin_lo.get()), float(d.v_fwin_hi.get())
+        self.assertLess(lo, 98.9)
+        self.assertGreater(hi, 104.5)
+        titles = {title_of(a) for a in d.fig.axes}
+        self.assertTrue({"Si", "SiO2", "SiO2 fraction"} <= titles)
+        d.set_mode("single")
+        self.assertEqual(str(d.side_nb.tab(d.fit_tab, "state")), "hidden")
+
+    def test_the_refinement_follows_the_shift_and_reports_what_it_did(self):
+        d = self.fit_mode()
+        res = d.fit_spectrum()
+        self.assertIsNotNone(res)
+        got = {c["name"]: c["be"] for c in d.fit_spec["components"]}
+        self.assertAlmostEqual(got["Si"], 99.1, delta=0.08)       # the seed was 0.3 off
+        self.assertAlmostEqual(got["SiO2"], 103.1, delta=0.08)
+        rows = d.fit_results_rows()
+        self.assertEqual([r[0] for r in rows], ["Si", "SiO2"])
+        self.assertAlmostEqual(sum(r[-1] for r in rows), 100.0, places=6)
+        self.assertIsNotNone(rows[0][2])                          # a BE uncertainty
+        self.assertIn("χ²", d.fit_note.cget("text"))
+        self.assertEqual(len(d.fit_res.get_children()), 2)
+        self.assertEqual(d.fit_tree.item("0", "values")[0], "Si")
+
+    def test_a_shift_beyond_the_allowed_room_is_said(self):
+        d = self.fit_mode()
+        d.fit_edit(0, be_range=0.1)
+        d.fit_edit(1, be_range=0.1)
+        d.fit_spectrum()
+        self.assertIn("limit", d.fit_note.cget("text"))
+
+    def test_the_fraction_and_the_areas_follow_the_fit(self):
+        d = self.fit_mode()
+        d.fit_spectrum()
+        cube = self.region.extra["cube"]
+        self.assertEqual(d.fit_view()["numerator"], None)
+        d.add_roi([cube.x_of(0), cube.y_of(2), cube.x_of(5), cube.y_of(27)],
+                  label="Si side")
+        d.add_roi([cube.x_of(34), cube.y_of(2), cube.x_of(39), cube.y_of(27)],
+                  label="oxide side")
+        rows = {r["label"]: r for r in d.stats()}
+        self.assertLess(rows["Si side"]["mean"], 0.3)
+        self.assertGreater(rows["oxide side"]["mean"], 0.7)
+        self.assertEqual(len(d.area_tree.get_children()), 2)
+        self.assertIn("fraction", d.area_note.cget("text"))
+        # take the fraction of Si instead: it flips
+        d._numer_vars["SiO2"].set(False)
+        d._numer_vars["Si"].set(True)
+        d._numer_changed()
+        self.assertEqual(d.fit_numer, ["Si"])
+        rows = {r["label"]: r for r in d.stats()}
+        self.assertGreater(rows["Si side"]["mean"], 0.7)
+
+    def test_the_spectrum_can_be_fitted_on_an_area(self):
+        d = self.fit_mode()
+        cube = self.region.extra["cube"]
+        d.add_roi([cube.x_of(0), cube.y_of(2), cube.x_of(5), cube.y_of(27)],
+                  label="Si side")
+        whole = [r[-1] for r in d.fit_results_rows()]
+        self.assertIn("Si side", d.fon_cb.cget("values"))
+        d.v_fon.set("Si side")
+        d._fit_on_changed()
+        self.assertEqual(d.fit_on, 0)
+        area = [r[-1] for r in d.fit_results_rows()]
+        self.assertGreater(area[0], whole[0] + 15)       # more elemental Si there
+        self.assertIsNotNone(d.fit_spectrum())            # refines on that area
+        d.remove_roi(0)
+        self.assertIsNone(d.fit_on)
+
+    def test_components_are_added_edited_and_removed(self):
+        d = self.fit_mode()
+        i = d.fit_add_custom("Sub", 101.4, 1.2)
+        self.assertEqual(i, 2)
+        d.fit_edit(2, be_range=0.3, free_fwhm=False, doublet=None,
+                   name="Suboxide")
+        c = d.fit_spec["components"][2]
+        self.assertEqual((c["name"], c["be_range"], c["free_fwhm"], c["doublet"]),
+                         ("Suboxide", 0.3, False, None))
+        self.assertEqual(len(d.fit_tree.get_children()), 3)
+        d.fit_remove(2)
+        self.assertEqual([c["name"] for c in d.fit_spec["components"]],
+                         ["Si", "SiO2"])
+        d.fit_remove(1)
+        self.assertEqual(d.fit_view()["numerator"], None)     # back to default
+        j = d.fit_add_library("SiO2")
+        self.assertEqual(d.fit_spec["components"][j]["be"], 103.4)
+        for k in range(10):
+            d.fit_add_custom(f"X{k}")
+        self.assertEqual(len(d.fit_spec["components"]), snapfit_max())
+
+    def test_options_and_panels_reach_the_view_and_the_picture(self):
+        d = self.fit_mode()
+        d.v_fbg.set("linear")
+        d.v_fbin.set("2")
+        d.v_fshared.set(True)
+        d.v_fshow["residual"].set(False)
+        d._fit_changed()
+        v = d.view_spec()["fit"]
+        self.assertEqual((v["spec"]["background"], v["spec"]["bin"],
+                          v["spec"]["shared_fwhm"]), ("linear", 2, True))
+        self.assertNotIn("residual", v["show"])
+        titles = {title_of(a) for a in d.fig.axes}
+        self.assertFalse(any("\u03c7" in t and "whole" not in t for t in titles))
+        path = os.path.join(tempfile.gettempdir(), "snapmap_dlg_fit.png")
+        self.assertTrue(d.save_picture(path))
+        self.addCleanup(os.remove, path)
+
+    def test_a_saved_fit_figure_comes_back_with_its_fitted_components(self):
+        d = self.fit_mode()
+        d.fit_spectrum()
+        d.v_fshow["components"].set(False)
+        d._fit_changed()
+        fig = d.save_as_figure("Si partition")
+        st = fig["state"]
+        self.assertEqual(st["mode"], "fit")
+        self.assertAlmostEqual(st["fit"]["spec"]["components"][0]["be"], 99.1,
+                               delta=0.08)
+        self.assertEqual(len(self.ws._figure_pngs(fig, dpi=50)), 1)
+        import snapmap_ui
+        again = snapmap_ui.SnapMapDialog(self.root, self.ws, self.parser,
+                                         self.region, view=st, figure=0)
+        self.addCleanup(again.destroy)
+        self.assertEqual(again.effective_mode(), "fit")
+        self.assertAlmostEqual(again.fit_spec["components"][0]["be"],
+                               d.fit_spec["components"][0]["be"], places=6)
+        self.assertFalse(again.v_fshow["components"].get())
+        self.assertEqual(again.view_spec()["fit"]["show"],
+                         ["fraction", "residual", "spectrum"])
+
+    def test_a_mosaic_ends_the_fit_view_and_the_level_name_is_found(self):
+        d = self.fit_mode()
+        other = cube_region(map_cube(), "Si 2p", "S2")
+        d.choose_tiles([(self.parser, other)])         # this map has no position
+        self.assertEqual(d.mode.get(), "fit")
+        self.assertIn("stage position", d.hint.cget("text"))
+        cube = self.region.extra["cube"]
+        cube.stage_x_mm, cube.stage_y_mm = 10.0, 20.0
+        other.extra["cube"].stage_x_mm, other.extra["cube"].stage_y_mm = 10.05, 20.0
+        d.choose_tiles([(self.parser, other)])
+        self.assertEqual(d.mode.get(), "single")
+        self.assertEqual(d.effective_mode(), "single")
+        d.choose_tiles([])
+        for name, want in (("Si 2p", "Si 2p"), ("Cu 2p3/2", "Cu 2p"),
+                           ("C 1s", "C 1s"), ("Survey", "Survey")):
+            self.region.name = name
+            self.assertEqual(d._level_name(), want)
+        self.region.name = "Si 2p"
+
+    def test_without_a_binding_axis_the_tab_says_so(self):
+        self.region.energy_label = "Kinetic Energy"
+        d = self.fit_mode()
+        self.assertEqual(d.fit_spec["components"], [])
+        self.assertIn("binding-energy", d.hint.cget("text"))
+        self.assertIsNone(d.fit_spectrum())
+        self.region.energy_label = "Binding Energy"
+
+
+def snapfit_max():
+    import snapfit
+    return snapfit.MAX_COMPONENTS
 
 
 @unittest.skipUnless(HAVE_MPL, "matplotlib / Tk not available")
