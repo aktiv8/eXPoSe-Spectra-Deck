@@ -985,6 +985,118 @@ class TestFitInTheDialog(unittest.TestCase):
         d.fit_remove(1)
         self.assertEqual(len(d.fit_start), 1)
 
+    def test_moving_the_window_refits_the_peaks_to_the_data_inside_it(self):
+        import snapfit
+        d = self.fit_mode()
+        d.fit_spectrum()
+        before = [(c["be"], c["fwhm"]) for c in d.fit_spec["components"]]
+        self.assertTrue(d.v_fauto.get())
+        self.assertTrue(d.fit_set_window(97.0, 106.0))
+        self.assertEqual((d.v_fwin_lo.get(), d.v_fwin_hi.get()),
+                         ("97.00", "106.00"))
+        self.assertEqual(d.fit_view()["spec"]["window"], [97.0, 106.0])
+        self.assertIn("Refitted on 97.0–106.0 eV", d.fit_note.cget("text"))
+        after = [(c["be"], c["fwhm"]) for c in d.fit_spec["components"]]
+        # the same answer as a fresh fit on that window
+        be, hv, _n = snapmapfig._fit_axis(self.region)
+        data = self.region.extra["cube"].array3d()
+        mean = data.reshape(-1, data.shape[2]).mean(axis=0)
+        spec = dict(d.fit_view()["spec"], components=d.fit_start)
+        extra = snapfit_enriched(d, spec, be, hv)
+        fresh = snapfit_module().fit_multi(
+            be, [(mean, data.shape[0] * data.shape[1])] + extra, hv, spec,
+            gain=d._gain())
+        for (b0, w0), c in zip(after, fresh.spec["components"]):
+            self.assertAlmostEqual(b0, c["be"], places=6)
+            self.assertAlmostEqual(w0, c["fwhm"], places=6)
+        # and the view / figure carry the window
+        self.assertEqual(d.view_spec()["fit"]["spec"]["window"], [97.0, 106.0])
+        self.assertEqual(len(d.fit_res.get_children()), 2)
+
+    def test_with_the_tick_off_the_window_moves_but_the_peaks_stay(self):
+        d = self.fit_mode()
+        d.fit_spectrum()
+        d.v_fauto.set(False)
+        d._fit_auto_changed()
+        shapes = [(c["be"], c["fwhm"]) for c in d.fit_spec["components"]]
+        self.assertTrue(d.fit_set_window(97.5, 105.5))
+        self.assertEqual(shapes, [(c["be"], c["fwhm"])
+                                  for c in d.fit_spec["components"]])
+        self.assertNotIn("Refitted", d.fit_note.cget("text"))
+        self.assertEqual(d.fit_view()["spec"]["window"], [97.5, 105.5])
+        # the maps and the shading follow the window even so
+        self.assertGreaterEqual(len(d.ax_spec.patches), 2)   # outside the window
+        # an explicit refit still works
+        self.assertTrue(d.fit_set_window(97.0, 106.0, refit=True))
+        self.assertIn("Refitted", d.fit_note.cget("text"))
+        # the choice is remembered for the next window
+        self.assertFalse(self.ws.cfg["snapmap"]["fit_auto"])
+        self.ws.cfg["snapmap"]["fit_auto"] = True
+
+    def test_a_window_that_is_too_narrow_or_off_the_data_is_dealt_with(self):
+        d = self.fit_mode()
+        d.fit_spectrum()
+        old = d.fit_view()["spec"]["window"]
+        self.assertFalse(d.fit_set_window(100.0, 100.3))        # a few channels
+        self.assertIn("needs at least", d.hint.cget("text"))
+        self.assertEqual(d.fit_view()["spec"]["window"], old)
+        self.assertEqual(float(d.v_fwin_lo.get()), old[0])
+        self.assertFalse(d.fit_set_window(120.0, 130.0))        # beyond the data
+        self.assertEqual(d.fit_view()["spec"]["window"], old)
+        self.assertTrue(d.fit_set_window(110.0, 90.0))          # either order, cut to the data
+        w = d.fit_view()["spec"]["window"]
+        self.assertAlmostEqual(w[0], 94.7, delta=0.1)
+        self.assertAlmostEqual(w[1], 109.7, delta=0.1)
+
+    def test_typing_in_the_boxes_applies_once_and_reset_goes_back(self):
+        d = self.fit_mode()
+        auto = d.fit_view()["spec"]["window"]
+        d.v_fwin_lo.set("97.5")
+        d.v_fwin_hi.set("105.0")
+        d._fit_window_entered()
+        self.assertEqual(d.fit_view()["spec"]["window"], [97.5, 105.0])
+        msg = d.fit_note.cget("text")
+        d._fit_window_entered()                  # leaving the box again: no change
+        self.assertEqual(d.fit_note.cget("text"), msg)
+        d.v_fwin_lo.set("nonsense")
+        d._fit_window_entered()                  # restored, not applied
+        self.assertEqual(d.v_fwin_lo.get(), "97.50")
+        self.assertTrue(d.fit_reset_window())
+        self.assertEqual(d.fit_view()["spec"]["window"], auto)
+
+    def test_the_spectrum_has_a_selector_on_the_window_that_acts_on_release(self):
+        d = self.fit_mode()
+        d.update_idletasks()
+        self.assertIsNotNone(d.span)
+        lo, hi = d.fit_view()["spec"]["window"]
+        self.assertAlmostEqual(d.span.extents[0], lo, delta=0.01)
+        self.assertAlmostEqual(d.span.extents[1], hi, delta=0.01)
+        d._on_fit_window(100.0, 100.2)           # a click or a sliver: nothing
+        d.update()
+        self.assertEqual(d.fit_view()["spec"]["window"], [lo, hi])
+        d._on_fit_window(97.0, 106.0)            # a real drag, applied after the redraw
+        d.update()
+        self.assertEqual(d.fit_view()["spec"]["window"], [97.0, 106.0])
+        self.assertAlmostEqual(d.span.extents[0], 97.0, delta=0.01)
+        # the zoom / pan tool takes the mouse from it
+        d.toolbar.mode = "zoom rect"
+        d._sync_tools()
+        self.assertFalse(d.span.active)
+        d.toolbar.mode = ""
+        d._sync_tools()
+        self.assertTrue(d.span.active)
+
+    def test_the_end_averaging_is_set_saved_and_refits(self):
+        d = self.fit_mode()
+        d.fit_spectrum()
+        self.assertEqual(d.fit_view()["spec"]["avg"], 3)
+        d.fit_set_avg(7)
+        self.assertEqual(d.fit_view()["spec"]["avg"], 7)
+        d.fit_set_avg(99)                        # cut to the largest allowed
+        self.assertEqual(d.fit_view()["spec"]["avg"], 10)
+        fig = d.save_as_figure("avg")
+        self.assertEqual(fig["state"]["fit"]["spec"]["avg"], 10)
+
     def test_a_shift_beyond_the_allowed_room_is_said(self):
         d = self.fit_mode()
         d.fit_edit(0, be_range=0.1)
@@ -1116,6 +1228,20 @@ class TestFitInTheDialog(unittest.TestCase):
         self.assertIn("binding-energy", d.hint.cget("text"))
         self.assertIsNone(d.fit_spectrum())
         self.region.energy_label = "Binding Energy"
+
+
+def snapfit_module():
+    import snapfit
+    return snapfit
+
+
+def snapfit_enriched(dlg, spec, be, hv):
+    """The extra spectra the dialog adds to a whole-map refinement."""
+    import snapfit
+    if len(spec["components"]) < 2:
+        return []
+    return [(y, n) for y, n, _nm in snapfit.enriched_spectra(
+        dlg.cube, be, hv, spec, gain=dlg._gain())]
 
 
 def snapfit_max():

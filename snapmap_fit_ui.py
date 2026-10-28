@@ -32,6 +32,11 @@ class FitMixin:
         self.v_fwin_hi = tk.StringVar(value="")
         self.v_fbg = tk.StringVar(value="shirley")
         self.v_fbin = tk.StringVar(value="1")
+        self.v_favg = tk.StringVar(value=str(snapfit.DEFAULT_AVG))
+        self.v_fauto = tk.BooleanVar(value=bool(
+            self.app.cfg.get("snapmap", {}).get("fit_auto", True)))
+        self._fit_window_applied = None
+        self._fit_msg = ""
         self.v_fshared = tk.BooleanVar(value=False)
         self.v_fshow = {k: tk.BooleanVar(value=True) for k, _t in SHOW_LABELS}
         self.v_fon = tk.StringVar(value="Whole map")
@@ -42,6 +47,7 @@ class FitMixin:
         """The fit part of the view, as ``snapmapfig`` stores it."""
         spec = dict(self.fit_spec, window=self._fit_window(),
                     background=self.v_fbg.get(), bin=self._fit_bin(),
+                    avg=self._fit_avg(),
                     shared_fwhm=bool(self.v_fshared.get()))
         return {"spec": spec,
                 "show": [k for k, _t in SHOW_LABELS if self.v_fshow[k].get()],
@@ -57,6 +63,8 @@ class FitMixin:
         self.v_fwin_hi.set(f"{w[1]:.2f}" if w else "")
         self.v_fbg.set(f["spec"]["background"])
         self.v_fbin.set(str(f["spec"]["bin"]))
+        self.v_favg.set(str(f["spec"]["avg"]))
+        self._fit_window_applied = (list(w) if w else None)
         self.v_fshared.set(f["spec"]["shared_fwhm"])
         for k, _t in SHOW_LABELS:
             self.v_fshow[k].set(k in f["show"])
@@ -70,6 +78,12 @@ class FitMixin:
         except ValueError:
             return None
         return [min(a, b), max(a, b)] if a != b else None
+
+    def _fit_avg(self):
+        try:
+            return int(self.v_favg.get())
+        except ValueError:
+            return snapfit.DEFAULT_AVG
 
     def _fit_bin(self):
         try:
@@ -110,14 +124,24 @@ class FitMixin:
         for c, v in ((1, self.v_fwin_lo), (2, self.v_fwin_hi)):
             e = ttk.Entry(opts, textvariable=v, width=7)
             e.grid(row=0, column=c, padx=2)
-            e.bind("<Return>", lambda ev: self._fit_changed())
-            e.bind("<FocusOut>", lambda ev: self._fit_changed())
-        ttk.Label(opts, text="eV").grid(row=0, column=3, sticky="w")
+            e.bind("<Return>", lambda ev: self._fit_window_entered())
+            e.bind("<FocusOut>", lambda ev: self._fit_window_entered())
+        ttk.Button(opts, text="Reset", width=6,
+                   command=self.fit_reset_window).grid(row=0, column=3,
+                                                       padx=(4, 0))
         ttk.Label(opts, text="Background").grid(row=1, column=0, sticky="w")
         bg = ttk.Combobox(opts, state="readonly", width=9,
                           textvariable=self.v_fbg, values=("shirley", "linear"))
         bg.grid(row=1, column=1, columnspan=2, sticky="w", padx=2, pady=2)
         bg.bind("<<ComboboxSelected>>", lambda e: self._fit_changed())
+        ttk.Label(opts, text="End avg").grid(row=4, column=0, sticky="w")
+        av = ttk.Combobox(opts, state="readonly", width=4,
+                          textvariable=self.v_favg,
+                          values=[str(i) for i in range(1, snapfit.MAX_AVG + 1)])
+        av.grid(row=4, column=1, sticky="w", padx=2, pady=2)
+        av.bind("<<ComboboxSelected>>", lambda e: self._fit_avg_changed())
+        ttk.Label(opts, text="channels").grid(row=4, column=2, columnspan=2,
+                                              sticky="w")
         ttk.Label(opts, text="Bin").grid(row=2, column=0, sticky="w")
         b = ttk.Combobox(opts, state="readonly", width=4, textvariable=self.v_fbin,
                          values=("1", "2", "3"))
@@ -140,6 +164,10 @@ class FitMixin:
             ttk.Checkbutton(show, text=text, variable=self.v_fshow[k],
                             command=self._fit_changed).grid(
                 row=i // 2, column=i % 2, sticky="w", padx=(0, 8))
+        ttk.Checkbutton(tab, text="Refit when the window moves",
+                        variable=self.v_fauto,
+                        command=self._fit_auto_changed).pack(anchor="w",
+                                                             pady=(4, 0))
         self.numer_btn = ttk.Menubutton(tab, text="Fraction of ▾")
         self.numer_btn.pack(anchor="w", pady=(4, 0))
         self.numer_menu = tk.Menu(self.numer_btn, tearoff=0)
@@ -408,6 +436,135 @@ class FitMixin:
         names = snapmapfig.sanitise_fit(self.fit_view())["numerator"]
         return snapfit.fraction(maps, names) if names else None
 
+    # -- the window: the background limits and the range the peaks are fitted to -----------------
+    def _fit_energy_axis(self):
+        be, _hv, _note = snapmapfig._fit_axis(self.region)
+        return be
+
+    def fit_set_window(self, lo, hi, refit=None):
+        """Move the fit window (the background limits and the range the peaks
+        are fitted to) to ``lo``-``hi`` eV. A window outside the data is cut to
+        it; one too narrow for the components is refused (the old window stays,
+        the hint says why). With *Refit when the window moves* on (or
+        ``refit=True``) the peaks are refitted to the data inside it,
+        otherwise the maps are only redrawn from the present shapes. Returns
+        True when the window was set."""
+        be = self._fit_energy_axis()
+        if be is None:
+            self.hint.configure(text="Fitting needs a binding-energy axis.")
+            return False
+        lo, hi = sorted((float(lo), float(hi)))
+        lo, hi = max(lo, float(be.min())), min(hi, float(be.max()))
+        need = 3 * max(1, len(self.fit_spec["components"])) + 4
+        inside = int(((be >= lo) & (be <= hi)).sum())
+        if hi <= lo or inside < need:
+            self.hint.configure(
+                text=f"That window holds {inside} channels; the fit needs at "
+                     f"least {need}. The window was left as it was.")
+            self._restore_window_entries()
+            return False
+        self.v_fwin_lo.set(f"{lo:.2f}")
+        self.v_fwin_hi.set(f"{hi:.2f}")
+        self._fit_window_applied = [lo, hi]
+        do = self.v_fauto.get() if refit is None else refit
+        self._fit_msg = ""
+        if do and self.fit_spec["components"] and self.mode.get() == "fit":
+            self._busy(True)
+            try:
+                res = self.fit_spectrum()
+            finally:
+                self._busy(False)
+            if res is not None:
+                self._fit_msg = f"Refitted on {lo:.1f}\u2013{hi:.1f} eV."
+                self._refresh_fit_ui()
+            return True
+        self._fit_changed()
+        return True
+
+    def _restore_window_entries(self):
+        w = self._fit_window_applied
+        if w:
+            self.v_fwin_lo.set(f"{w[0]:.2f}")
+            self.v_fwin_hi.set(f"{w[1]:.2f}")
+
+    def _busy(self, on):
+        try:
+            self.configure(cursor="watch" if on else "")
+            self.update_idletasks()
+        except tk.TclError:
+            pass
+
+    def _fit_window_entered(self):
+        """Return or leaving a window box: apply it when it changed."""
+        w = self._fit_window()
+        if w is None:
+            self._restore_window_entries()
+            return
+        applied = self._fit_window_applied
+        if applied and abs(applied[0] - w[0]) < 1e-9 and abs(
+                applied[1] - w[1]) < 1e-9:
+            return
+        self.fit_set_window(*w)
+
+    def fit_reset_window(self):
+        """Back to the automatic window round the components' starting
+        positions (the same window every time, not one that follows the last
+        fit)."""
+        be = self._fit_energy_axis()
+        comps = self.fit_start or self.fit_spec["components"]
+        if be is None or not comps:
+            return False
+        lo, hi = snapfit.suggest_window(be, comps)
+        return self.fit_set_window(lo, hi)
+
+    def fit_set_avg(self, n):
+        """Channels averaged at each end of the window for the Shirley step."""
+        self.v_favg.set(str(max(1, min(snapfit.MAX_AVG, int(n)))))
+        return self._fit_avg_changed()
+
+    def _fit_avg_changed(self):
+        if self.v_fauto.get() and self.fit_spec["components"] and \
+                self.mode.get() == "fit":
+            self._busy(True)
+            try:
+                self.fit_spectrum()
+            finally:
+                self._busy(False)
+        else:
+            self._fit_changed()
+
+    def _fit_auto_changed(self):
+        self._save_cfg()
+
+    def _attach_fit_span(self):
+        """A selector on the spectrum: drag the shaded window, or its edges, to
+        set the background limits (applied on release)."""
+        from matplotlib.widgets import SpanSelector
+        self.span = None
+        if not self.fit_spec["components"] or not self.fig.axes:
+            return
+        ax = self.fig.axes[-1]
+        if not getattr(ax, "axison", True) or not ax.lines:
+            return
+        w = self._fit_window() or [min(ax.get_xlim()), max(ax.get_xlim())]
+        self.ax_spec = ax
+        self.span = SpanSelector(
+            ax, self._on_fit_window, "horizontal", useblit=False,
+            interactive=True,
+            props=dict(facecolor=self.app.palette["accent"], alpha=0.18))
+        self.span.extents = tuple(w)
+
+    def _on_fit_window(self, lo, hi):
+        """The span was released: a click or a sliver is not a window. The
+        figure is redrawn after the selector has finished with its own."""
+        be = self._fit_energy_axis()
+        if be is None or len(be) < 2:
+            return
+        step = abs(float(be[1] - be[0]))
+        if abs(hi - lo) < 4 * step:
+            return
+        self.after_idle(lambda: self.fit_set_window(lo, hi))
+
     # -- changes and what is shown -----------------------------------------------------------------
     def _fit_on_changed(self):
         label = self.v_fon.get()
@@ -503,7 +660,7 @@ class FitMixin:
         menu.add_command(label="Your own…",
                          command=lambda: self._fit_edit_new())
         self.fit_add_btn["menu"] = menu
-        notes = []
+        notes = [self._fit_msg] if self._fit_msg else []
         if self._fit_chi2 is not None and self._fit_chi2 > 5.0:
             at_limit = self.fit_result is not None and any(
                 "limit" in n for n in self.fit_result.notes)

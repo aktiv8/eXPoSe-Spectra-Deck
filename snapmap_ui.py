@@ -398,6 +398,7 @@ class SnapMapDialog(FitMixin, tk.Toplevel):
             "alpha": round(self.alpha.get(), 2),
             "smooth_method": self.smooth_method.get(),
             "smooth_strength": round(self.smooth_strength.get(), 2),
+            "fit_auto": bool(self.v_fauto.get()),
         }
 
     def _settings_changed(self, quiet=False):
@@ -553,6 +554,8 @@ class SnapMapDialog(FitMixin, tk.Toplevel):
                     props=dict(edgecolor=pal["accent"], facecolor="none",
                                linewidth=1.6)))
             self.rect = self.rects[0] if self.rects else None
+        if mode == "fit":
+            self._attach_fit_span()
         self.cid = self.canvas.mpl_connect("motion_notify_event", self._hover)
         self._refresh_areas()
         why = ""
@@ -569,7 +572,8 @@ class SnapMapDialog(FitMixin, tk.Toplevel):
                            "second is under 5 % of its own 99th percentile.",
                   "fit": "Components fitted on the mean spectrum, then each "
                          "pixel's amplitudes from those shapes (Fit tab); "
-                         "drag a box on a map for an area."
+                         "drag a box on a map for an area, or the shaded "
+                         "window on the spectrum to set the background limits."
                   }[mode])
         self._sync_tools()
         try:
