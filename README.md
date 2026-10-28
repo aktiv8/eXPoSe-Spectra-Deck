@@ -37,7 +37,7 @@ energy* (not charge-corrected) whenever the photon energy is known.
 | `spectradeck.py` | the application window and dialogs |
 | `readers/` | one reader per format plus the registry that picks one (`readers/__init__.py`); `thermo_experiment.py` / `thermo_vgx.py` open an Avantage experiment folder |
 | `columntext.py`, `readers/column_text.py`, `columnimport_ui.py` | plain columns of numbers (CSV / ASC / TXT): finding the table, the column guesses, the reader and the import dialog |
-| `snapmap.py`, `snapmap_ui.py` | SnapMap pixels (a spectrum at every pixel), the map viewer and its dialog |
+| `snapmap.py`, `snapmap_ui.py`, `snapmapfig.py` | SnapMap pixels (a spectrum at every pixel), the map viewer and its dialog, and the view as data (areas, mosaic, element views) with the one drawing used for pictures and report figures |
 | `snapshot.py` | camera-image geometry: stage position ↔ picture pixel |
 | `exporters.py` | CSV, VAMAS and metadata (CSV/PDF) writers |
 | `nexus_export.py`, `nexus_settings.py`, `instrument_ui.py` | NeXus NXxps (`.nxs`) writer (h5py) and the per-file instrument settings it uses |
@@ -700,12 +700,34 @@ where the signal comes from:
   counts in it (*Remove background* takes a straight line off first, so a
   sloping baseline does not show as contrast). The window starts on the
   strongest peak.
-* **Drag a box on the map** (or click one pixel) to see that area's spectrum
-  next to the whole map's; *Whole map* clears it. Switching element keeps the
-  area.
+* **Areas.** Drag a box on the map (or click one pixel) to add an *area*; the
+  *New area* box chooses a rectangle or an ellipse. Up to six, each in its own
+  colour on the map and in the spectrum panel, listed at the right with its
+  pixels, size (µm²), mean counts per pixel and mean relative to the whole map
+  (for the energy window on show). *Rename…* / *Delete* manage them, *Clear
+  areas* removes all, *Save the numbers (CSV)…* writes them. The toolbar above
+  the map zooms and pans (the selectors stand aside while it is on); the window
+  can be resized.
+* **View.** *Single map* (the above), *Element grid* (every element of the
+  file as its own small map), *RGB composite* (three elements as red, green
+  and blue, each on its own range) and *Ratio map* (first element over the
+  second, blank where the second is mostly noise). Composite and ratio show a
+  row per element with its energy window. Only elements on the same pixels
+  combine; nothing is corrected for sensitivity, so a composite shows where an
+  element is, not how much.
+* **Mosaic…** lays other SnapMaps of the same core level beside this one by
+  their stage positions, with one energy window and one colour range for all
+  (the mean where maps overlap, blank where none reaches). The placement uses
+  the stage positions only: no rotation or image registration.
 * **On camera image** lays the map over the picture taken at the same spot
   (the slider sets how much of the picture shows through).
-* **Save…** writes the picture (PNG), the map values (CSV) or the spectra (CSV).
+* **Save…** writes a picture (PNG, PDF or SVG, drawn for paper, with the map
+  and spectrum or the map alone), the map values (CSV) or the spectra (CSV).
+  **Save as a figure for the report** stores the view (window, colours, areas,
+  mosaic or element view) as a figure of the workbook, so it appears in the
+  PDF report, the slides, Word, the data browser page and the hand-over ZIP;
+  *Workbook ▸ Figures ▸ Recall* reopens the viewer on it and *Update figure*
+  (in *Save…*) replaces it. A figure whose map is no longer loaded is left out.
 
 **Kratos imaging maps** (stigmatic images from a `.kal` or `.dset`, one
 single-energy image per object) are rows marked *(Map)*, with the binding

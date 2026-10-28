@@ -1397,6 +1397,33 @@ def build_chapters(doc):
         "methods remove the straight line from first to last point before "
         "filtering, so a sloping spectrum does not ring at its ends."
     )
+    para(doc,
+        "The window can be resized and has a zoom / pan toolbar. A drag or "
+        "click on the map adds an area (a rectangle or an ellipse, up to six, "
+        "each in its own colour); a table lists each area's pixels, size, mean "
+        "counts per pixel and mean relative to the whole map for the energy "
+        "window on show, and can be saved as CSV. The View box switches "
+        "between the single map, an element grid, an RGB composite (three "
+        "elements as red, green and blue, each on its own range) and a ratio "
+        "map (first element over the second, blank where the second is "
+        "mostly noise); only elements on the same pixels combine, and nothing "
+        "is corrected for sensitivity, so a composite shows where an element "
+        "is, not how much."
+    )
+    para(doc,
+        "Mosaic lays other SnapMaps of the same core level beside the current "
+        "one by their stage positions, with one energy window and one colour "
+        "range for all; where maps overlap the mean is shown and where none "
+        "reaches the canvas is blank. Only the stage positions are used: "
+        "there is no rotation or image registration."
+    )
+    para(doc,
+        "Save writes a picture (PNG, PDF or SVG, drawn for paper) with the map "
+        "and spectrum or the map alone. Save as a figure for the report "
+        "stores the view in the workbook's figures, so it appears in the PDF "
+        "report, the slides, Word, the data browser page and the hand-over "
+        "ZIP; Recall in the Figures dialog reopens the viewer on it."
+    )
     add_figure(doc, "The SnapMap viewer: the element map and the selected area's spectrum.")
 
     h2(doc, "Avantage projects (.vgp)")
