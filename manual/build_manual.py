@@ -1561,6 +1561,21 @@ def build_chapters(doc):
         "are then computed from those shapes for every pixel at once."
     )
     para(doc,
+        "The fit window is the background limits and the range the peaks are "
+        "fitted to. The spectrum shows all the data with the window shaded and "
+        "its two edges labelled. Drag the window or either edge on the "
+        "spectrum, or type the limits in the Fit tab, and the peaks refit to "
+        "the data inside it; untick Refit when the window moves to move it "
+        "without refitting (the maps are still redrawn from the present peak "
+        "shapes). A refit takes a few seconds on a large map. End avg is the "
+        "number of channels at each end of the window that set the Shirley "
+        "background step, and Reset returns to the automatic window. A window "
+        "with too few channels for the components is refused, and one that "
+        "reaches a part of the spectrum the model does not describe (such as a "
+        "rising background beyond the peaks) shows up as a large reduced "
+        "chi-square."
+    )
+    para(doc,
         "The view shows one map per component (counts summed over the "
         "component, not a rate and not corrected for sensitivity, so it is not "
         "an atomic percent), the fraction map of the components you choose "

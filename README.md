@@ -736,6 +736,11 @@ where the signal comes from:
   (where the model fails) and the fit drawn over the spectrum with each
   component's share. A table gives each component's position, width and area
   with uncertainties, and your areas report the mean fraction inside them.
+  The fit window is the background limits: the spectrum shows all the data with
+  the window shaded. Drag the window or its edges, or type the limits, and the
+  peaks refit to the data inside it (untick *Refit when the window moves* to
+  move it without refitting); *End avg* sets how many channels at each end set
+  the Shirley step and *Reset* returns to the automatic window.
   A state that is strong in only a few pixels (a thin stripe of elemental Si) is
   found because the shapes are also refined on the pixels where it is strongest.
   If one map holds different forms of a state in different places, the
