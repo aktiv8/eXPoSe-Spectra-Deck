@@ -337,7 +337,8 @@ class FitMixin:
             return None
         y, npx, _label = self._fit_spectrum_data()
         try:
-            res = snapfit.fit_mean(be, y, hv, self.fit_view()["spec"], n_pix=npx)
+            res = snapfit.fit_mean(be, y, hv, self.fit_view()["spec"], n_pix=npx,
+                                   gain=self._gain())
         except ValueError as e:
             self.hint.configure(text=str(e).capitalize() + ".")
             return None
@@ -346,6 +347,13 @@ class FitMixin:
         self.fit_result = res
         self._fit_changed()
         return res
+
+    def _gain(self):
+        """The map's noise gain (``snapfit.noise_gain``), found once."""
+        key = id(self.cube)
+        if getattr(self, "_gain_cache", (None, 1.0))[0] != key:
+            self._gain_cache = (key, snapfit.noise_gain(self.cube))
+        return self._gain_cache[1]
 
     def fit_maps(self):
         """The per-pixel partition for the current fit (``snapfit.FitMaps``),
@@ -409,7 +417,8 @@ class FitMixin:
             return []
         y, npx, _label = self._fit_spectrum_data()
         try:
-            res = snapfit.evaluate(be, y, hv, spec, n_pix=npx)
+            res = snapfit.evaluate(be, y, hv, spec, n_pix=npx,
+                                   gain=self._gain())
         except ValueError:
             return []
         errs = {}
@@ -463,7 +472,10 @@ class FitMixin:
         self.fit_add_btn["menu"] = menu
         notes = []
         if self._fit_chi2 is not None:
-            notes.append(f"Reduced χ² {self._fit_chi2:.2f}.")
+            g = self._gain()
+            notes.append(f"Reduced χ² {self._fit_chi2:.2f}"
+                         + (f" (noise: one count is worth about {g:.0f} in "
+                            f"the map's values)." if g > 3 or g < 0.3 else "."))
         if self.fit_result is not None:
             notes += [n.capitalize() + "." for n in self.fit_result.notes]
         self.fit_note.configure(text=" ".join(notes))

@@ -233,6 +233,55 @@ def two_state_map(nx=40, ny=30, seed=5, scale=1.0, hv=1486.6):
 
 
 @unittest.skipUnless(HAVE, "numpy not available")
+class TestNoiseGain(unittest.TestCase):
+    def test_integer_counts_have_a_gain_of_one_and_scaled_ones_of_the_scale(self):
+        cube, truth = two_state_map()
+        self.assertAlmostEqual(snapfit.noise_gain(cube), 1.0, delta=0.15)
+        scaled = snapmap.MapCube(
+            list(cube.energy), cube.nx, cube.ny, 0.0, 10.0, 0.0, 10.0,
+            snapmap.array("f", (cube.array3d() * 100.0).astype("float32").ravel()))
+        self.assertAlmostEqual(snapfit.noise_gain(scaled), 100.0, delta=15.0)
+        rate = snapmap.MapCube(
+            list(cube.energy), cube.nx, cube.ny, 0.0, 10.0, 0.0, 10.0,
+            snapmap.array("f", (cube.array3d() / 4.0).astype("float32").ravel()))
+        self.assertAlmostEqual(snapfit.noise_gain(rate), 0.25, delta=0.05)
+
+    def test_the_fit_does_not_depend_on_the_scale_and_chi2_is_about_one(self):
+        cube, truth = two_state_map()
+        scaled = snapmap.MapCube(
+            list(cube.energy), cube.nx, cube.ny, 0.0, 10.0, 0.0, 10.0,
+            snapmap.array("f", (cube.array3d() * 100.0).astype("float32").ravel()))
+        be = truth["be"]
+        mean = cube.array3d().reshape(-1, len(be)).mean(axis=0)
+        start = {"components": [dict(c, be=c["be"] + 0.2)
+                                for c in truth["spec"]["components"]],
+                 "window": [95.0, 110.0]}
+        a = snapfit.fit_mean(be, mean, 1486.6, start, n_pix=1200)
+        g = snapfit.noise_gain(scaled)
+        b = snapfit.fit_mean(be, mean * 100.0, 1486.6, start, n_pix=1200, gain=g)
+        for ca, cb in zip(a.spec["components"], b.spec["components"]):
+            self.assertAlmostEqual(ca["be"], cb["be"], delta=0.03)
+        self.assertAlmostEqual(b.chi2red, a.chi2red, delta=0.5)
+        self.assertLess(b.chi2red, 2.0)
+        # without the gain the scaled data would look 100 times too noisy-free
+        wrong = snapfit.fit_mean(be, mean * 100.0, 1486.6, start, n_pix=1200)
+        self.assertGreater(wrong.chi2red, 20 * b.chi2red)
+        maps = snapfit.fit_maps(scaled, be, 1486.6, b.spec)
+        self.assertAlmostEqual(float(maps.chi2.mean()), 1.0, delta=0.3)
+
+    def test_the_width_limit_is_reported_and_clipped_parameters_do_not_spoil_errors(self):
+        cube, truth = two_state_map()
+        be = truth["be"]
+        mean = cube.array3d().reshape(-1, len(be)).mean(axis=0)
+        s = {"components": [dict(c, fwhm_range=[0.3, 0.5])
+                            for c in truth["spec"]["components"]],
+             "window": [95.0, 110.0]}
+        res = snapfit.fit_mean(be, mean, 1486.6, s, n_pix=1200)
+        self.assertTrue(any("width at its limit" in n for n in res.notes))
+        self.assertNotIn("could not be estimated", " ".join(res.notes))
+
+
+@unittest.skipUnless(HAVE, "numpy not available")
 class TestMeanFit(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

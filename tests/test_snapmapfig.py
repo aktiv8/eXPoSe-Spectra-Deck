@@ -1189,5 +1189,46 @@ class TestRealOverlappingMaps(unittest.TestCase):
             self.assertLessEqual(abs(best[1] - oy / abs(ca.dy)), 1.5, name)
 
 
+@unittest.skipUnless(HAVE_PLOT and os.environ.get("XPS_SNAPMAP_CORPUS"),
+                     "set XPS_SNAPMAP_CORPUS to the Vishay experiment folder")
+class TestRealSiFit(unittest.TestCase):
+    """Si 2p of Point 002a (Vishay): a doublet of SiO2 at about 103.0 eV
+    dominates, a small, broader feature near 99.8 eV lies along one stripe of
+    the sample, and the two-state model explains the data to the noise."""
+
+    def test_si_2p_partitions_into_oxide_and_a_stripe_feature(self):
+        import numpy as np
+        import snapfit
+        from readers import load_file
+        parser = load_file(os.environ["XPS_SNAPMAP_CORPUS"])
+        reg = next(r for r in parser.regions
+                   if r.sample.startswith("Point 002a") and r.name == "Si 2p"
+                   and r.extra.get("cube") is not None)
+        cube = reg.extra["cube"]
+        shift = reg.energy[0] - cube.energy[0]
+        be = np.asarray(cube.energy) + shift
+        mean = cube.array3d().reshape(-1, len(be)).mean(axis=0)
+        g = snapfit.noise_gain(cube)
+        self.assertGreater(g, 30.0)                  # scaled counts, not integers
+        comps = snapfit.seed_components("Si 2p")
+        spec = {"components": comps,
+                "window": snapfit.suggest_window(be, comps)}
+        res = snapfit.fit_mean(be, mean, reg.photon_energy or 1486.6, spec,
+                               n_pix=cube.nx * cube.ny, gain=g)
+        got = {c["name"]: c for c in res.spec["components"]}
+        self.assertAlmostEqual(got["SiO2"]["be"], 103.0, delta=0.2)
+        self.assertLessEqual(abs(got["Si"]["be"] - 99.4), 0.5 + 1e-9)
+        self.assertLess(res.chi2red, 2.0)            # to the noise
+        maps = snapfit.fit_maps(cube, be, reg.photon_energy or 1486.6, res.spec,
+                                y_mean=mean, gain=g)
+        self.assertLess(float(maps.chi2.mean()), 1.5)
+        frac = snapfit.fraction(maps, ["SiO2"])
+        self.assertGreater(float(np.nanmean(frac)), 0.8)
+        row = int(np.argmax(maps.area_of("Si").mean(axis=1)))
+        self.assertTrue(5 <= row <= 20, row)         # the stripe, y about -750 um
+        total = maps.areas.sum()
+        self.assertLess(total, cube.array3d().sum())  # the rest is background
+
+
 if __name__ == "__main__":
     unittest.main()

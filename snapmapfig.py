@@ -885,7 +885,8 @@ def draw_fit_view(fig, rect, s, region, pal, cmap, unit_mark=None):
         else:
             y, npx, what = mean, cube.nx * cube.ny, "whole map"
         try:
-            res = snapfit.evaluate(be, y, hv, spec, n_pix=npx)
+            res = snapfit.evaluate(be, y, hv, spec, n_pix=npx,
+                                   gain=snapfit.noise_gain(cube))
         except ValueError as e:
             ax_spec.set_axis_off()
             ax_spec.text(0.5, 0.5, str(e), ha="center", va="center",

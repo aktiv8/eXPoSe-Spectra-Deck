@@ -721,6 +721,22 @@ where the signal comes from:
   the stage positions only: no rotation or image registration. Reports add
   the same thing by themselves: with the report's mosaic option on, SnapMap
   sites that lie side by side get a "SnapMap mosaic" page.
+* **Fit components** splits one core level into its chemical states, for example
+  Si 2p into elemental Si and Si oxide. The *Fit* tab starts the components from
+  the tables (Si 2p: Si at 99.4 eV and SiO₂ at 103.4 eV as spin-orbit doublets;
+  another level: its main line, moved to the measured peak; *Add* offers the
+  level's states from the chemical-state table or your own). Each position may
+  move ±0.5 eV (changeable per component), and a width or position that reaches
+  its limit is reported. *Fit spectrum* refines the positions and widths on the
+  mean spectrum of the whole map, or of one of your areas (*Fit on*); the maps
+  then come from those frozen shapes, solved for every pixel at once: one map
+  per component (counts summed over the component, not a rate and not corrected
+  for sensitivity), the fraction map of the components you choose (the oxide
+  by default; blank where there is too little signal to say), the reduced χ² map
+  (where the model fails) and the fit drawn over the spectrum with each
+  component's share. A table gives each component's position, width and area
+  with uncertainties, and your areas report the mean fraction inside them.
+  Pictures and report figures keep the fit.
 * **On camera image** lays the map over the picture taken at the same spot
   (the slider sets how much of the picture shows through).
 * **Save…** writes a picture (PNG, PDF or SVG, drawn for paper, with the map

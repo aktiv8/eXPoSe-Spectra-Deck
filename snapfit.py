@@ -137,6 +137,31 @@ def sanitise(spec) -> dict:
             "shared_fwhm": bool(spec.get("shared_fwhm", False))}
 
 
+def noise_gain(cube) -> float:
+    """How much one count is worth in the map's values: ``variance = gain x
+    value`` (1 for integer counts; about 100 for the Avantage maps, whose
+    values are counts scaled by transmission and detector corrections; below 1
+    for counts per second). Estimated from the channel-to-channel differences
+    of every pixel, which for Poisson noise on a smooth spectrum satisfy
+    ``var(x[c] - x[c+1]) = gain (m[c] + m[c+1])``; the median over channels is
+    used. It only sets the weights of the fit and the scale of the reduced
+    chi-square (so that it is about 1 for a good fit); the amplitudes do not
+    depend on it."""
+    np = _np()
+    a = cube.array3d()
+    if a.shape[2] < 4:
+        return 1.0
+    a = np.asarray(a, dtype=float)
+    d = a[:, :, 1:] - a[:, :, :-1]
+    s = a[:, :, 1:] + a[:, :, :-1]
+    num = (d * d).sum(axis=(0, 1))
+    den = s.sum(axis=(0, 1))
+    ok = den > 0
+    if not ok.any():
+        return 1.0
+    return float(max(np.median(num[ok] / den[ok]), 1e-6))
+
+
 # -- seeds from the reference tables -----------------------------------------------------
 _LOWER_J = {"p": ("3/2", "1/2"), "d": ("5/2", "3/2"), "f": ("7/2", "5/2")}
 
@@ -463,13 +488,15 @@ def _model(be, hv, spec, params, y, w):
     return A, x
 
 
-def fit_mean(be, y, hv, spec, window=None, n_pix=1, max_iter=60) -> Result:
+def fit_mean(be, y, hv, spec, window=None, n_pix=1, gain=1.0,
+             max_iter=60) -> Result:
     """Refine the free positions and widths of ``spec`` on one spectrum
     (``be``, ``y`` counts per channel): Levenberg-Marquardt over only those
     parameters, the amplitudes and the background levels solved by NNLS inside
     every step (variable projection). ``y`` is a mean over ``n_pix`` pixels,
-    so its Poisson variance is ``y / n_pix`` (the weights), which makes the
-    reduced chi-square about 1 for a good fit."""
+    so its variance is ``gain * y / n_pix`` (the weights; ``gain`` from
+    :func:`noise_gain`), which makes the reduced chi-square about 1 for a good
+    fit."""
     np = _np()
     spec = sanitise(spec)
     if not spec["components"]:
@@ -482,7 +509,7 @@ def fit_mean(be, y, hv, spec, window=None, n_pix=1, max_iter=60) -> Result:
         be, y = be[sel], y[sel]
     if len(be) < 3 * len(spec["components"]) + 4:
         raise ValueError("too few channels in the fit window")
-    w = float(max(1, n_pix)) / np.maximum(y, 1.0)
+    w = float(max(1, n_pix)) / (gain * np.maximum(y, gain))
     spec = dict(spec, _be0=[c["be"] for c in spec["components"]])
     free = _free_vector(spec)
     theta = np.array([spec["components"][i]["be" if what == "be" else "fwhm"]
@@ -545,11 +572,14 @@ def fit_mean(be, y, hv, spec, window=None, n_pix=1, max_iter=60) -> Result:
     chi2red = cost / ndf
     errors = {}
     if free and J is not None:
+        live = [k for k in range(len(free)) if np.abs(J[:, k]).max() > 0]
         try:
-            cov = np.linalg.inv(J.T @ J) * chi2red
-            for k, (i, what) in enumerate(free):
-                errors[(spec["components"][i]["name"], what)] = float(
-                    math.sqrt(max(cov[k, k], 0.0)))
+            if live:
+                cov = np.linalg.inv(J[:, live].T @ J[:, live]) * chi2red
+                for n, k in enumerate(live):
+                    i, what = free[k]
+                    errors[(spec["components"][i]["name"], what)] = float(
+                        math.sqrt(max(cov[n, n], 0.0)))
         except np.linalg.LinAlgError:
             notes.append("the uncertainties could not be estimated "
                          "(the free parameters are not independent)")
@@ -565,6 +595,11 @@ def fit_mean(be, y, hv, spec, window=None, n_pix=1, max_iter=60) -> Result:
     if edge:
         notes.append("position at its limit: " + ", ".join(
             c["name"] for c in edge))
+    wide = [c["name"] for i, c in enumerate(spec["components"])
+            if c["free_fwhm"] and (pars[i][1] <= c["fwhm_range"][0] * 1.001
+                                   or pars[i][1] >= c["fwhm_range"][1] * 0.999)]
+    if wide:
+        notes.append("width at its limit: " + ", ".join(wide))
     if (x[:k] <= 0).any():
         notes.append("no intensity in: " + ", ".join(
             c["name"] for c, v in zip(out["components"], x[:k]) if v <= 0))
@@ -611,13 +646,15 @@ def _boxcar(a, b):
     return out / cnt[..., None]
 
 
-def fit_maps(cube, be, hv, spec, y_mean=None, window=None) -> FitMaps:
+def fit_maps(cube, be, hv, spec, y_mean=None, window=None,
+             gain=None) -> FitMaps:
     """Frozen shapes, per-pixel amplitudes: every pixel of ``cube`` solved at
     once by weighted non-negative least squares. ``be`` is the cube's energy
     axis as shown (shift applied), ``y_mean`` the mean spectrum the Shirley
     step is taken from (default: the whole map's), ``window`` the fit window
-    (default ``spec["window"]``, else everything). Nothing is written to the
-    cube."""
+    (default ``spec["window"]``, else everything), ``gain`` the noise gain
+    (default: estimated from the cube, :func:`noise_gain`). Nothing is written
+    to the cube."""
     np = _np()
     spec = sanitise(spec)
     if not spec["components"]:
@@ -641,7 +678,8 @@ def fit_maps(cube, be, hv, spec, y_mean=None, window=None) -> FitMaps:
             raise ValueError("the mean spectrum does not match the energy axis")
         y_mean = y_mean[sel]
     A = design(be_w, hv, spec, None, y_mean)
-    w = 1.0 / np.maximum(y_mean, 1.0)
+    g = noise_gain(cube) if gain is None else gain
+    w = 1.0 / (g * np.maximum(y_mean, g))
     sw = np.sqrt(w)
     flat = Y.reshape(-1, nc)
     X = nnls_many(A * sw[:, None], (flat * sw).T)          # (k+2, npix)
@@ -673,7 +711,7 @@ def fraction(maps, names, floor=FRACTION_FLOOR):
     return out
 
 
-def evaluate(be, y, hv, spec, window=None, n_pix=1) -> Result:
+def evaluate(be, y, hv, spec, window=None, n_pix=1, gain=1.0) -> Result:
     """The model of ``spec`` as it stands (no refinement) on one spectrum:
     amplitudes and background solved by NNLS for the frozen shapes. What the
     overlay draws for an area of a map; the same fields as :func:`fit_mean`."""
@@ -689,7 +727,7 @@ def evaluate(be, y, hv, spec, window=None, n_pix=1) -> Result:
         be, y = be[sel], y[sel]
     if len(be) < 3 * len(spec["components"]) + 4:
         raise ValueError("too few channels in the fit window")
-    w = float(max(1, n_pix)) / np.maximum(y, 1.0)
+    w = float(max(1, n_pix)) / (gain * np.maximum(y, gain))
     A, x = _model(be, hv, spec, None, y, w)
     k = len(spec["components"])
     comps = (A[:, :k] * x[:k]).T

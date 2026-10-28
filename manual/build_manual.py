@@ -1548,6 +1548,33 @@ def build_chapters(doc):
         "report, the slides, Word, the data browser page and the hand-over "
         "ZIP; Recall in the Figures dialog reopens the viewer on it."
     )
+    para(doc,
+        "Fit components splits one core level into its chemical states, for "
+        "example Si 2p into elemental Si and Si oxide. The Fit tab starts the "
+        "components from the tables (Si 2p: Si at 99.4 eV and SiO2 at 103.4 eV "
+        "as spin-orbit doublets; another level: its main line, moved to the "
+        "measured peak; Add offers the level’s states from the "
+        "chemical-state table or your own). Each position may move ±0.5 eV "
+        "(changeable per component) and a position or width that reaches its "
+        "limit is reported. Fit spectrum refines the positions and widths on "
+        "the mean spectrum of the whole map or of one of your areas; the maps "
+        "are then computed from those shapes for every pixel at once."
+    )
+    para(doc,
+        "The view shows one map per component (counts summed over the "
+        "component, not a rate and not corrected for sensitivity, so it is not "
+        "an atomic percent), the fraction map of the components you choose "
+        "(the oxide by default; blank where there is too little signal), the "
+        "reduced chi-square map, which shows where the model fails, and the "
+        "fit over the spectrum with each component’s share. The results "
+        "table gives each component’s position, width and area with "
+        "uncertainties, and your areas report the mean fraction inside them. "
+        "The reduced chi-square is scaled by the noise of the map (Avantage "
+        "SnapMap values are scaled counts), so about 1 means the model "
+        "explains the data to the noise. A level with several states (C 1s, "
+        "O 1s) needs more components than the one it starts with. Suboxides "
+        "are not seeded; add them yourself if the data call for them."
+    )
     add_figure(doc, "The SnapMap viewer: the element map and the selected area's spectrum.")
 
     h2(doc, "Kratos imaging maps")
