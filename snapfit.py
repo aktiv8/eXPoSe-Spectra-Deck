@@ -399,16 +399,23 @@ def shirley_step(be, y, avg=3, iters=100):
 
 
 def background_columns(kind, be, y_mean):
-    """Two non-negative columns whose sum, with their coefficients, is the
-    background: its level at the low-BE end and at the high-BE end. Shirley
-    joins them by the step of the mean spectrum, linear by a straight line."""
+    """Two non-negative columns of the background, with their coefficients.
+
+    **Shirley:** ``[1, step]``: a base level (the background at the low-binding
+    energy end) and a **non-negative step** up to the high-BE side, the step
+    being the Shirley step of ``y_mean``. The background can only rise towards
+    high binding energy (what inelastic scattering does), so it cannot sink
+    below a peak on the low-BE side and take its intensity (a low-BE end level
+    free to exceed the data there did exactly that to a small elemental-Si
+    peak). **Linear:** ``[1 - ramp, ramp]``: the levels at the two ends, either
+    of which may be the higher."""
     np = _np()
     be = np.asarray(be, dtype=float)
     if kind == "shirley":
         s = shirley_step(be, y_mean)
-    else:
-        span = float(be.max() - be.min()) or 1.0
-        s = (be - be.min()) / span
+        return np.stack([np.ones(len(be)), s], axis=1)
+    span = float(be.max() - be.min()) or 1.0
+    s = (be - be.min()) / span
     return np.stack([1.0 - s, s], axis=1)          # (n, 2): low-BE level, high-BE level
 
 
@@ -491,25 +498,42 @@ def _model(be, hv, spec, params, y, w):
 def fit_mean(be, y, hv, spec, window=None, n_pix=1, gain=1.0,
              max_iter=60) -> Result:
     """Refine the free positions and widths of ``spec`` on one spectrum
-    (``be``, ``y`` counts per channel): Levenberg-Marquardt over only those
-    parameters, the amplitudes and the background levels solved by NNLS inside
-    every step (variable projection). ``y`` is a mean over ``n_pix`` pixels,
-    so its variance is ``gain * y / n_pix`` (the weights; ``gain`` from
-    :func:`noise_gain`), which makes the reduced chi-square about 1 for a good
-    fit."""
+    (``be``, ``y`` counts per channel): see :func:`fit_multi`. ``y`` is a mean
+    over ``n_pix`` pixels, so its variance is ``gain * y / n_pix`` (the
+    weights; ``gain`` from :func:`noise_gain`), which makes the reduced
+    chi-square about 1 for a good fit."""
+    return fit_multi(be, [(y, n_pix)], hv, spec, window=window, gain=gain,
+                     max_iter=max_iter)
+
+
+def fit_multi(be, spectra, hv, spec, window=None, gain=1.0,
+              max_iter=60) -> Result:
+    """Refine the free positions and widths of ``spec`` on one or several
+    spectra at once: ``spectra`` is ``[(y, n_pix)]``, each a mean over
+    ``n_pix`` pixels. Levenberg-Marquardt over only those parameters, which
+    the spectra **share**; each spectrum has its own amplitudes and background
+    levels (and its own Shirley step), solved by NNLS inside every step
+    (variable projection). The result describes the **first** spectrum (the
+    whole map's mean), its chi-square included; the others only pin the shapes
+    (a state that is strong in a few pixels is invisible in the mean)."""
     np = _np()
     spec = sanitise(spec)
     if not spec["components"]:
         raise ValueError("no components to fit")
     be = np.asarray(be, dtype=float)
-    y = np.asarray(y, dtype=float)
     win = window or spec["window"]
+    sel = np.ones(len(be), dtype=bool)
     if win:
         sel = (be >= min(win)) & (be <= max(win))
-        be, y = be[sel], y[sel]
+    be = be[sel]
     if len(be) < 3 * len(spec["components"]) + 4:
         raise ValueError("too few channels in the fit window")
-    w = float(max(1, n_pix)) / (gain * np.maximum(y, gain))
+    ys, ws = [], []
+    for y, n_pix in spectra:
+        y = np.asarray(y, dtype=float)[sel]
+        ys.append(y)
+        ws.append(float(max(1, n_pix)) / (gain * np.maximum(y, gain)))
+    y, w = ys[0], ws[0]
     spec = dict(spec, _be0=[c["be"] for c in spec["components"]])
     free = _free_vector(spec)
     theta = np.array([spec["components"][i]["be" if what == "be" else "fwhm"]
@@ -517,8 +541,12 @@ def fit_mean(be, y, hv, spec, window=None, n_pix=1, gain=1.0,
 
     def resid(th):
         pars = _params_from(th, spec, free)
-        A, x = _model(be, hv, spec, pars, y, w)
-        return (y - A @ x) * np.sqrt(w), pars, A, x
+        parts, models = [], []
+        for yy, ww in zip(ys, ws):
+            A, x = _model(be, hv, spec, pars, yy, ww)
+            parts.append((yy - A @ x) * np.sqrt(ww))
+            models.append((A, x))
+        return np.concatenate(parts), pars, models
 
     # a coarse look along each free position first: a component whose seed is
     # off the peak gets no amplitude, so its gradient is zero and the
@@ -527,7 +555,8 @@ def fit_mean(be, y, hv, spec, window=None, n_pix=1, gain=1.0,
         if what != "be":
             continue
         rng_ = spec["components"][i]["be_range"]
-        best = (float(resid(theta)[0] @ resid(theta)[0]), theta[j])
+        r0 = resid(theta)[0]
+        best = (float(r0 @ r0), theta[j])
         for cand in np.linspace(spec["_be0"][i] - rng_, spec["_be0"][i] + rng_,
                                 max(5, int(round(2 * rng_ / 0.1)) + 1)):
             th2 = theta.copy()
@@ -536,7 +565,7 @@ def fit_mean(be, y, hv, spec, window=None, n_pix=1, gain=1.0,
             if float(rr @ rr) < best[0] - 1e-9:
                 best = (float(rr @ rr), cand)
         theta[j] = best[1]
-    r, pars, A, x = resid(theta)
+    r, pars, models = resid(theta)
     cost = float(r @ r)
     lam = 1e-2
     notes = []
@@ -558,24 +587,27 @@ def fit_mean(be, y, hv, spec, window=None, n_pix=1, gain=1.0,
                 lam *= 10
                 continue
             th2 = theta + step
-            r2, pars2, A2, x2 = resid(th2)
+            r2, pars2, models2 = resid(th2)
             c2 = float(r2 @ r2)
             if c2 < cost:
                 improved = abs(cost - c2) > 1e-9 * cost
-                theta, r, pars, A, x, cost = th2, r2, pars2, A2, x2, c2
+                theta, r, pars, models, cost = th2, r2, pars2, models2, c2
                 lam = max(lam / 3.0, 1e-9)
                 break
             lam *= 4.0
         if not improved:
             break
-    ndf = max(1, len(be) - len(free) - A.shape[1])
-    chi2red = cost / ndf
+    A, x = models[0]
+    nc = A.shape[1]
+    ndf_all = max(1, len(r) - len(free) - nc * len(ys))
+    r1 = r[:len(be)]
+    chi2red = float(r1 @ r1) / max(1, len(be) - len(free) - nc)
     errors = {}
     if free and J is not None:
         live = [k for k in range(len(free)) if np.abs(J[:, k]).max() > 0]
         try:
             if live:
-                cov = np.linalg.inv(J[:, live].T @ J[:, live]) * chi2red
+                cov = np.linalg.inv(J[:, live].T @ J[:, live]) * (cost / ndf_all)
                 for n, k in enumerate(live):
                     i, what = free[k]
                     errors[(spec["components"][i]["name"], what)] = float(
@@ -600,12 +632,51 @@ def fit_mean(be, y, hv, spec, window=None, n_pix=1, gain=1.0,
                                    or pars[i][1] >= c["fwhm_range"][1] * 0.999)]
     if wide:
         notes.append("width at its limit: " + ", ".join(wide))
-    if (x[:k] <= 0).any():
-        notes.append("no intensity in: " + ", ".join(
-            c["name"] for c, v in zip(out["components"], x[:k]) if v <= 0))
+    unused = [c["name"] for n, c in enumerate(out["components"])
+              if all(m[1][n] <= 0 for m in models)]
+    if unused:
+        notes.append("no intensity in: " + ", ".join(unused))
     return Result(spec=out, amplitudes=x[:k], levels=x[k:], be=be, y=y,
                   components=comps, bg=bgcurve, envelope=comps.sum(axis=0) + bgcurve,
                   chi2red=chi2red, errors=errors, notes=notes)
+
+
+def enriched_spectra(cube, be, hv, spec, gain=None, share=0.03,
+                     min_pixels=30, window=None):
+    """``[(mean spectrum over all channels, n_pixels, component name)]``: for
+    **minor** component (under half of the map's total in a first partition
+    with the starting shapes), the mean spectrum of the pixels where it is
+    most prominent (the top ``share`` of the map, at least ``min_pixels``, by
+    its share of the total), left out when it is not prominent anywhere (under
+    10 % in those pixels). The dominant state is left alone: the mean already
+    shows it, and the pixels where it "wins" are arbitrary. Feeding
+    these to :func:`fit_multi` lets a state that is strong in only a few
+    pixels (a stripe of elemental Si on an oxidised surface) fix its own
+    position and width, which the mean of the whole map cannot."""
+    np = _np()
+    maps = fit_maps(cube, be, hv, spec, gain=gain, window=window)
+    total = maps.total
+    ok = total > 0
+    if ok.any():
+        ok &= total >= FRACTION_FLOOR * float(np.percentile(total[ok], 99))
+    data = cube.array3d()
+    out = []
+    grand = float(total.sum()) or 1.0
+    for k, name in enumerate(maps.names):
+        if ok.sum() < min_pixels:
+            break
+        if float(maps.areas[k].sum()) / grand >= 0.5:
+            continue
+        sh = np.where(ok, maps.areas[k] / np.where(total > 0, total, 1.0), -1.0)
+        n = max(min_pixels, int(share * ok.sum()))
+        idx = np.argsort(sh.ravel())[::-1][:n]
+        if float(sh.ravel()[idx].mean()) < 0.10:
+            continue
+        mask = np.zeros(sh.size, dtype=bool)
+        mask[idx] = True
+        mask = mask.reshape(sh.shape)
+        out.append((data[mask].mean(axis=0), int(mask.sum()), name))
+    return out
 
 
 # -- the whole map ----------------------------------------------------------------------------

@@ -736,6 +736,11 @@ where the signal comes from:
   (where the model fails) and the fit drawn over the spectrum with each
   component's share. A table gives each component's position, width and area
   with uncertainties, and your areas report the mean fraction inside them.
+  A state that is strong in only a few pixels (a thin stripe of elemental Si) is
+  found because the shapes are also refined on the pixels where it is strongest.
+  If one map holds different forms of a state in different places, the
+  whole-map fit cannot describe it (the table then says so: reduced χ² far
+  above 1): draw an area on one form and use *Fit on* it.
   Pictures and report figures keep the fit. Only the elemental and the fully
   oxidised state are considered (Si and SiO₂ for Si 2p); suboxides are
   deliberately ignored, because image data are too noisy to separate

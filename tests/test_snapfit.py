@@ -188,7 +188,7 @@ class TestModel(unittest.TestCase):
         cols = snapfit.background_columns("shirley", be, y)
         hi_be = float(y[:3].mean())                          # high-BE end
         lo_be = float(y[-3:].mean())
-        mine = cols @ np.array([lo_be, hi_be])
+        mine = cols @ np.array([lo_be, hi_be - lo_be])     # base + step
         order = np.argsort(hi_be * 0 + (1486.6 - be))        # ascending KE
         ref = lineshapes.shirley(y[order], avg=3)
         self.assertTrue(np.allclose(mine[order], ref, atol=1e-6 * y.max()))
@@ -226,7 +226,7 @@ def two_state_map(nx=40, ny=30, seed=5, scale=1.0, hv=1486.6):
     for iy in range(ny):
         for ix in range(nx):
             m = a_si[iy, ix] * prof[0] + a_ox[iy, ix] * prof[1]
-            m = m + bg_step @ np.array([6.0, 14.0]) * scale
+            m = m + bg_step @ np.array([6.0, 8.0]) * scale
             blocks.append(((ix, iy), rng.poisson(m).astype(float)))
     cube = snapmap.build(list(be), nx, ny, 0.0, 10.0, 0.0, 10.0, blocks)
     return cube, {"a_si": a_si, "a_ox": a_ox, "spec": spec, "be": be}
@@ -362,6 +362,97 @@ class TestMeanFit(unittest.TestCase):
             snapfit.fit_mean(self.be, self.mean, 1486.6, {"components": []})
 
 
+def stripe_map(nx=40, ny=30, seed=3, hv=1486.6, scale=100.0, amp=150.0):
+    """Oxide everywhere, elemental Si (0.3 eV from the library and broader
+    than its seed) in ONE row only (a thin stripe), counts scaled by 100 as
+    the Avantage maps are."""
+    be = np.linspace(110.0, 95.0, 121)
+    truth = snapfit.sanitise({"components": [
+        snapfit.new_component("Si", 99.7, 1.3, doublet={"split": 0.61,
+                                                         "ratio": 0.5}),
+        snapfit.new_component("SiO2", 103.3, 1.6, doublet={"split": 0.61,
+                                                            "ratio": 0.5})],
+        "window": [95.0, 110.0]})
+    step = abs(be[1] - be[0])
+    prof = [snapfit.component_profile(be, hv, c) * step
+            for c in truth["components"]]
+    rng = np.random.RandomState(seed)
+    blocks = []
+    for iy in range(ny):
+        for ix in range(nx):
+            m = (amp if iy == 13 else 0.0) * prof[0] + 600.0 * prof[1] + 9.0
+            blocks.append(((ix, iy), rng.poisson(m).astype(float) * scale))
+    return snapmap.build(list(be), nx, ny, 0.0, 10.0, 0.0, 10.0, blocks), truth
+
+
+@unittest.skipUnless(HAVE, "numpy not available")
+class TestStrongestPixels(unittest.TestCase):
+    """A state present in only a few pixels barely shows in the mean of the
+    map: its width is biased there, but the pixels where it is strongest
+    pin it."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.cube, cls.truth = stripe_map()
+        cls.be = np.array(cls.cube.energy)
+        cls.gain = snapfit.noise_gain(cls.cube)
+        cls.mean = cls.cube.array3d().reshape(-1, 121).mean(axis=0)
+        cls.seed = {"components": snapfit.seed_components("Si 2p"),
+                    "window": [95.0, 110.0]}
+
+    def test_enriched_spectra_pick_the_stripe(self):
+        got = snapfit.enriched_spectra(self.cube, self.be, 1486.6, self.seed,
+                                       gain=self.gain)
+        names = [g[2] for g in got]
+        self.assertEqual(names, ["Si"])              # the dominant oxide is left alone
+        y, n, _ = got[names.index("Si")]
+        self.assertGreaterEqual(n, 30)
+        band = (self.be > 99) & (self.be < 100.5)
+        self.assertGreater(y[band].mean(), 2 * self.mean[band].mean())
+
+    def test_the_enriched_fit_is_closer_to_the_truth_than_the_mean_alone(self):
+        extra = snapfit.enriched_spectra(self.cube, self.be, 1486.6, self.seed,
+                                         gain=self.gain)
+        mean_only = snapfit.fit_mean(self.be, self.mean, 1486.6, self.seed,
+                                     n_pix=1200, gain=self.gain)
+        both = snapfit.fit_multi(
+            self.be, [(self.mean, 1200)] + [(y, n) for y, n, _ in extra],
+            1486.6, self.seed, gain=self.gain)
+        w = lambda r: r.spec["components"][0]["fwhm"]
+        self.assertLess(abs(w(both) - 1.3), abs(w(mean_only) - 1.3))
+        got = {c["name"]: c for c in both.spec["components"]}
+        self.assertAlmostEqual(got["Si"]["be"], 99.7, delta=0.08)
+        self.assertAlmostEqual(got["Si"]["fwhm"], 1.3, delta=0.1)
+        self.assertAlmostEqual(got["SiO2"]["be"], 103.3, delta=0.05)
+        self.assertEqual(both.notes, [])
+        maps = snapfit.fit_maps(self.cube, self.be, 1486.6, both.spec,
+                                gain=self.gain)
+        stripe = maps.areas[0][13].mean()
+        other = np.concatenate([maps.areas[0][:13].ravel(),
+                                maps.areas[0][14:].ravel()]).mean()
+        self.assertGreater(stripe, 8 * max(other, 1.0))
+
+    def test_a_state_that_is_nowhere_prominent_adds_no_spectrum(self):
+        cube, truth = two_state_map()                 # both states everywhere
+        be = np.array(cube.energy)
+        spec = {"components": [snapfit.new_component("Ghost", 105.5, 1.0)] +
+                list(truth["spec"]["components"]), "window": [95.0, 110.0]}
+        got = snapfit.enriched_spectra(cube, be, 1486.6, spec)
+        self.assertNotIn("Ghost", [g[2] for g in got])
+
+    def test_one_spectrum_through_fit_multi_is_fit_mean(self):
+        cube, truth = two_state_map()
+        be = truth["be"]
+        mean = cube.array3d().reshape(-1, len(be)).mean(axis=0)
+        s = {"components": [dict(c, be=c["be"] + 0.2)
+                            for c in truth["spec"]["components"]],
+             "window": [95.0, 110.0]}
+        a = snapfit.fit_mean(be, mean, 1486.6, s, n_pix=1200)
+        b = snapfit.fit_multi(be, [(mean, 1200)], 1486.6, s)
+        for ca, cb in zip(a.spec["components"], b.spec["components"]):
+            self.assertEqual((ca["be"], ca["fwhm"]), (cb["be"], cb["fwhm"]))
+
+
 @unittest.skipUnless(HAVE, "numpy not available")
 class TestMaps(unittest.TestCase):
     @classmethod
@@ -454,7 +545,7 @@ def level_map(centres, widths, patterns, lo, hi, n=161, nx=30, ny=24, seed=3,
     xs = np.linspace(0, 1, nx)
     rng = np.random.RandomState(seed)
     base = snapfit.background_columns(
-        "shirley", be, sum(p * 300 for p in prof) + 5.0) @ np.array([bg, bg * 1.8])
+        "shirley", be, sum(p * 300 for p in prof) + 5.0) @ np.array([bg, bg * 0.8])
     blocks, truth = [], np.zeros((len(centres), ny, nx))
     for iy in range(ny):
         for ix in range(nx):

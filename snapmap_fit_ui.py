@@ -336,12 +336,25 @@ class FitMixin:
             self.hint.configure(text="Add components first (Add, or Reseed).")
             return None
         y, npx, _label = self._fit_spectrum_data()
+        spectra, strong = [(y, npx)], []
+        spec = self.fit_view()["spec"]
+        if self.fit_on is None and len(spec["components"]) >= 2:
+            # a state that is strong in only a few pixels cannot be seen in the
+            # mean of the whole map: its shape is pinned by the pixels where it
+            # is strongest (found with the starting shapes)
+            try:
+                for ey, en, name in snapfit.enriched_spectra(
+                        self.cube, be, hv, spec, gain=self._gain()):
+                    spectra.append((ey, en))
+                    strong.append(name)
+            except ValueError:
+                pass
         try:
-            res = snapfit.fit_mean(be, y, hv, self.fit_view()["spec"], n_pix=npx,
-                                   gain=self._gain())
+            res = snapfit.fit_multi(be, spectra, hv, spec, gain=self._gain())
         except ValueError as e:
             self.hint.configure(text=str(e).capitalize() + ".")
             return None
+        self._fit_strong = strong
         keep = self.fit_view()["spec"]
         self.fit_spec = snapfit.sanitise(dict(keep, components=res.spec["components"]))
         self.fit_result = res
@@ -359,11 +372,11 @@ class FitMixin:
         """The per-pixel partition for the current fit (``snapfit.FitMaps``),
         or None when there is no binding-energy axis or no components."""
         view = self.fit_view()
-        key = repr((view["spec"], self.region.name, id(self.cube),
-                    self.region.energy[:1]))
+        key = repr((view["spec"], view["on"], self.rois, self.region.name,
+                    id(self.cube), self.region.energy[:1]))
         if self._fit_cache[0] == key:
             return self._fit_cache[1]
-        maps, _sp, _note = snapmapfig.fit_result(self.region, view)
+        maps, _sp, _note = snapmapfig.fit_result(self.region, view, self.rois)
         self._fit_cache = (key, maps)
         return maps
 
@@ -471,6 +484,10 @@ class FitMixin:
                          command=lambda: self._fit_edit_new())
         self.fit_add_btn["menu"] = menu
         notes = []
+        if self._fit_chi2 is not None and self._fit_chi2 > 5.0:
+            notes.append("The model does not describe this spectrum: the map "
+                         "may hold different forms of the same state in "
+                         "different places. Try Fit on an area.")
         if self._fit_chi2 is not None:
             g = self._gain()
             notes.append(f"Reduced χ² {self._fit_chi2:.2f}"
@@ -478,6 +495,11 @@ class FitMixin:
                             f"the map's values)." if g > 3 or g < 0.3 else "."))
         if self.fit_result is not None:
             notes += [n.capitalize() + "." for n in self.fit_result.notes]
+            if getattr(self, "_fit_strong", None):
+                notes.append("Shapes refined on the mean and on the pixels "
+                             "where " + ", ".join(self._fit_strong)
+                             + (" is" if len(self._fit_strong) == 1 else " are")
+                             + " strongest.")
         self.fit_note.configure(text=" ".join(notes))
 
     def _fit_edit_new(self):

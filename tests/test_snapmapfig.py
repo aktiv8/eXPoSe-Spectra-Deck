@@ -749,6 +749,33 @@ class TestFitView(unittest.TestCase):
         # the area is outlined on the maps too
         self.assertTrue(any(a.patches for a in fig.axes if title_of(a) == "Si"))
 
+    def test_fitting_on_an_area_takes_the_background_step_from_that_area(self):
+        import numpy as np
+        import snapfit
+        region, spec, _t = si_view()
+        cube = region.extra["cube"]
+        roi = snapmapfig.new_roi([cube.x_of(0), cube.y_of(0), cube.x_of(5),
+                                  cube.y_of(29)], label="left")
+        seen = []
+        real = snapfit.fit_maps
+
+        def spy(cube_, be, hv, sp, y_mean=None, **kw):
+            seen.append(np.asarray(y_mean))
+            return real(cube_, be, hv, sp, y_mean=y_mean, **kw)
+        snapfit.fit_maps = spy
+        try:
+            snapmapfig.fit_result(region, snapmapfig.sanitise_fit(spec["fit"]))
+            on = snapmapfig.sanitise_fit(dict(spec["fit"], on=0))
+            snapmapfig.fit_result(region, on, [roi])
+        finally:
+            snapfit.fit_maps = real
+        data = cube.array3d()
+        whole = data.reshape(-1, data.shape[2]).mean(axis=0)
+        left = data[snapmapfig.roi_mask(cube, roi)].mean(axis=0)
+        self.assertTrue(np.allclose(seen[0], whole))
+        self.assertTrue(np.allclose(seen[1], left))
+        self.assertFalse(np.allclose(whole, left))
+
     def test_without_a_binding_axis_or_components_it_says_so(self):
         region, spec, _t = si_view()
         region.energy_label = "Kinetic Energy"

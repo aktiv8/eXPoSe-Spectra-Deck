@@ -767,12 +767,13 @@ def _fit_axis(region):
             region.photon_energy or 1486.6, "")
 
 
-def fit_result(region, fit):
+def fit_result(region, fit, rois=None):
     """``(FitMaps, (be, hv, mean spectrum), note)`` for a view's fit: the
     per-pixel partition with the frozen shapes, the energy axis as shown, the
-    photon energy and the whole map's mean spectrum (the Shirley step is taken
-    from it); ``(None, None, why)`` when the region has no binding-energy
-    axis."""
+    photon energy and the mean spectrum the Shirley step is taken from: the
+    whole map's, or that of the area ``fit["on"]`` points at in ``rois`` (the
+    spectrum the shapes were fitted on); ``(None, None, why)`` when the region
+    has no binding-energy axis."""
     import numpy as np
     import snapfit
     cube = region.extra["cube"]
@@ -782,6 +783,11 @@ def fit_result(region, fit):
     spec = fit["spec"]
     data = cube.array3d()
     mean = data.reshape(-1, data.shape[2]).mean(axis=0)
+    on = fit.get("on")
+    if on is not None and rois and on < len(rois):
+        mask = roi_mask(cube, rois[on])
+        if mask is not None:
+            mean = data[mask].mean(axis=0)
     maps = snapfit.fit_maps(cube, be, hv, spec, y_mean=mean)
     return maps, (be, hv, mean), ""
 
@@ -809,7 +815,7 @@ def draw_fit_view(fig, rect, s, region, pal, cmap, unit_mark=None):
 
     if not spec["components"]:
         return say("No components to fit: add some in the Fit panel")
-    maps, spectrum, note = fit_result(region, fit)
+    maps, spectrum, note = fit_result(region, fit, s["rois"])
     if maps is None:
         return say(note)
     be, hv, mean = spectrum
