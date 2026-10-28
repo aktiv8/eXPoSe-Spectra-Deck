@@ -29,7 +29,7 @@ DEFAULTS = {
     "kind": KIND, "ref": None, "window": None, "background": False,
     "scale": "Viridis", "overlay": {"on": False, "alpha": 0.65}, "roi": None,
     "smooth": {"method": "None", "strength": 0.5}, "show_spectrum": True,
-    "scalebar": True,
+    "scalebar": True, "tiles": [],
 }
 
 
@@ -66,6 +66,9 @@ def sanitise(spec) -> dict:
         "strength": float(min(1.0, max(0.0, s))) if _num(s) else 0.5}
     out["show_spectrum"] = bool(spec.get("show_spectrum", True))
     out["scalebar"] = bool(spec.get("scalebar", True))
+    tl = spec.get("tiles")
+    out["tiles"] = ([dict(t) for t in tl if isinstance(t, dict)]
+                    if isinstance(tl, (list, tuple)) else [])
     return out
 
 
@@ -140,7 +143,7 @@ def describe(spec, region=None) -> str:
 
 
 def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
-              unit_mark=None):
+              unit_mark=None, tiles=None):
     """Draw a view onto ``fig`` inside ``rect`` = ``(left, bottom, right, top)``
     figure fractions (None = the whole figure) and return its axes
     ``(ax_map, ax_spec or None)``.
@@ -148,7 +151,10 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
     ``region`` carries the cube (``extra["cube"]``) and the energy labels;
     ``pal`` needs ``plot_bg``, ``plot_fg``, ``muted`` and ``accent``;
     ``photo`` is ``(PIL image, calibration)`` for the camera overlay.
-    ``unit_mark`` is appended to the scale bar (e.g. "(approx.)")."""
+    ``unit_mark`` is appended to the scale bar (e.g. "(approx.)").
+    ``tiles`` are further regions whose maps are laid beside this one by their
+    stage positions (one canvas, one window, one colour range); the camera
+    overlay and the area are not used then."""
     from matplotlib.patches import Rectangle
     s = sanitise(spec)
     cube = region.extra["cube"]
@@ -171,7 +177,14 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
             sp.set_color(pal["muted"])
 
     left, right, bottom, top = cube.extent()
-    use_photo = s["overlay"]["on"] and photo is not None
+    mos = None
+    if tiles:
+        mos = mosaic_image([region.extra["cube"]]
+                           + [t.extra["cube"] for t in tiles], window,
+                           s["background"])
+        if mos is not None:
+            left, right, bottom, top = mos.extent
+    use_photo = s["overlay"]["on"] and photo is not None and mos is None
     if use_photo:
         img, cal = photo
         cx, cy = snapshot.stage_to_pixel(cal, cube.stage_x_mm, cube.stage_y_mm)
@@ -179,9 +192,17 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
         pw, ph = img.size
         ax_map.imshow(img, extent=[-cx * ux, (pw - cx) * ux,
                                    (ph - cy) * uy, -cy * uy], zorder=0)
-    image = cube.image(window[0], window[1], background=s["background"])
+    if mos is not None:
+        image, extent = mos.image, mos.extent
+        try:
+            cmap = cmap.with_extremes(bad=pal["plot_bg"])
+        except Exception:
+            pass
+    else:
+        image = cube.image(window[0], window[1], background=s["background"])
+        extent = cube.extent()
     vmin, vmax = snapmap.colour_range(image)
-    im = ax_map.imshow(image, extent=cube.extent(), origin="upper", cmap=cmap,
+    im = ax_map.imshow(image, extent=extent, origin="upper", cmap=cmap,
                        interpolation="nearest", vmin=vmin, vmax=vmax, zorder=1,
                        alpha=s["overlay"]["alpha"] if use_photo else 1.0)
     if use_photo:
@@ -200,7 +221,12 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
     cb.ax.tick_params(colors=pal["muted"], labelsize=8)
     cb.set_label(cube.label or "Counts", color=pal["plot_fg"], fontsize=8)
 
-    mask = roi_mask(cube, s["roi"])
+    mask = roi_mask(cube, s["roi"]) if mos is None else None
+    if mos is not None:
+        for i, fl, ft, fw, fh in mosaic_footprints(
+                [cube] + [t.extra["cube"] for t in tiles]):
+            ax_map.add_patch(Rectangle((fl, ft), fw, fh, fill=False, lw=0.8,
+                                       ls=":", ec=pal["muted"], zorder=4))
     if mask is not None:
         import numpy as np
         rows = np.flatnonzero(mask.any(axis=1))
@@ -226,6 +252,9 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
 
     if ax_spec is not None:
         whole, roi = mean_spectra(cube, mask, s["smooth"])
+        if mos is not None:
+            whole, _n = mean_spectrum_of(mos.used)
+            roi = None
         e = cube.energy
         ax_spec.plot(e, whole, color=pal["muted"] if roi else pal["accent"],
                      lw=1.4, label="whole map")
@@ -246,3 +275,107 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
 def _outline():
     import matplotlib.patheffects as pe
     return [pe.withStroke(linewidth=1.6, foreground="black")]
+
+
+# -- several maps laid side by side on one canvas ---------------------------------------
+class Mosaic:
+    """``image`` (NaN where no map reaches), its ``extent`` (µm, the common
+    frame), the ``used`` cubes, ``notes`` and the ``gap`` flag."""
+
+    def __init__(self, image, extent, used, notes, overlap_px):
+        self.image, self.extent, self.used = image, extent, used
+        self.notes, self.overlap_px = notes, overlap_px
+
+
+def tile_offset(cube, ref_cube):
+    """Where ``cube``'s centre lies from ``ref_cube``'s, in µm of the common
+    (image) frame: image x runs against stage X, image y with stage Y, as for a
+    camera picture (``snapshot.X_DIR`` / ``Y_DIR``)."""
+    return (snapshot.X_DIR * (cube.stage_x_mm - ref_cube.stage_x_mm) * 1000.0,
+            snapshot.Y_DIR * (cube.stage_y_mm - ref_cube.stage_y_mm) * 1000.0)
+
+
+def mosaic_image(cubes, window, background=False):
+    """Lay ``cubes`` (the first is the reference) on one canvas by their stage
+    positions and sum each over the same energy ``window``.
+
+    The canvas pixel is the finest of the maps'; each canvas pixel takes the
+    pixel of a map that covers it (the mean where maps overlap) by nearest
+    neighbour, never interpolating. A map with no stage position or a zero
+    pixel size is left out, with a note."""
+    import numpy as np
+    notes, tiles = [], []
+    ref = cubes[0]
+    for c in cubes:
+        if c.stage_x_mm is None or c.stage_y_mm is None:
+            notes.append("a map with no stage position was left out")
+            continue
+        if not c.dx or not c.dy:
+            notes.append("a map with no pixel size was left out")
+            continue
+        ox, oy = tile_offset(c, ref)
+        l, r, b, t = c.extent()
+        tiles.append((c, ox, oy, min(l, r) + ox, max(l, r) + ox,
+                      min(t, b) + oy, max(t, b) + oy))
+    if not tiles:
+        return None
+    gdx = min(abs(c.dx) for c, *_ in tiles)
+    gdy = min(abs(c.dy) for c, *_ in tiles)
+    x0 = min(t[3] for t in tiles)
+    x1 = max(t[4] for t in tiles)
+    y0 = min(t[5] for t in tiles)
+    y1 = max(t[6] for t in tiles)
+    nx = max(1, int(round((x1 - x0) / gdx)))
+    ny = max(1, int(round((y1 - y0) / gdy)))
+    gx = x0 + (np.arange(nx) + 0.5) * gdx
+    gy = y0 + (np.arange(ny) + 0.5) * gdy
+    total = np.zeros((ny, nx))
+    count = np.zeros((ny, nx))
+    for c, ox, oy, tl, tr, tt, tb in tiles:
+        img = c.image(window[0], window[1], background=background)
+        ix = np.floor((gx - tl) / abs(c.dx)).astype(int)
+        iy = np.floor((gy - tt) / abs(c.dy)).astype(int)
+        okx = (ix >= 0) & (ix < c.nx)
+        oky = (iy >= 0) & (iy < c.ny)
+        if not okx.any() or not oky.any():
+            continue
+        sub = img[np.ix_(np.clip(iy, 0, c.ny - 1), np.clip(ix, 0, c.nx - 1))]
+        cover = oky[:, None] & okx[None, :]
+        total += np.where(cover, sub, 0.0)
+        count += cover
+    overlap = int((count > 1).sum())
+    out = np.where(count > 0, total / np.maximum(count, 1), np.nan)
+    if overlap:
+        notes.append(f"where maps overlap ({overlap} px) the mean is shown")
+    if (count == 0).any():
+        notes.append("blank where no map reaches")
+    used = [t[0] for t in tiles]
+    return Mosaic(out, (x0, x1, y1, y0), used, notes, overlap)
+
+
+def mosaic_footprints(cubes):
+    """``[(label_index, left, top, width, height)]`` of each map in the
+    reference frame, for outlining the tiles."""
+    out = []
+    ref = cubes[0]
+    for i, c in enumerate(cubes):
+        if c.stage_x_mm is None or c.stage_y_mm is None:
+            continue
+        ox, oy = tile_offset(c, ref)
+        l, r, b, t = c.extent()
+        out.append((i, min(l, r) + ox, min(t, b) + oy, abs(r - l), abs(b - t)))
+    return out
+
+
+def mean_spectrum_of(cubes):
+    """Mean counts per pixel over several maps when they share one energy
+    axis, else the first map's."""
+    import numpy as np
+    first = cubes[0]
+    same = [c for c in cubes if len(c.energy) == len(first.energy)
+            and np.allclose(c.energy, first.energy)]
+    n = sum(c.nx * c.ny for c in same)
+    tot = np.zeros(len(first.energy))
+    for c in same:
+        tot += np.asarray(c.total())
+    return (tot / n).tolist(), len(same)

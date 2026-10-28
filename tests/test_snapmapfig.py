@@ -130,6 +130,98 @@ class TestDrawing(unittest.TestCase):
             snapmapfig.describe({"kind": "snapmap", "window": [1, 2]}))
 
 
+def flat_cube(value, stage, nx=4, ny=3, dx=10.0, ne=12):
+    """A map whose every pixel counts ``value`` in every channel."""
+    import snapmap
+    blocks = [((ix, iy), [value] * ne) for iy in range(ny) for ix in range(nx)]
+    c = snapmap.build([float(300 - i) for i in range(ne)], nx, ny,
+                      -(nx - 1) * dx / 2, dx, -(ny - 1) * dx / 2, dx, blocks)
+    c.stage_x_mm, c.stage_y_mm = stage
+    return c
+
+
+@unittest.skipUnless(HAVE_PLOT, "numpy / matplotlib not available")
+class TestMosaic(unittest.TestCase):
+    W = (290.0, 300.0)
+
+    def test_a_map_to_the_right_on_the_stage_lies_to_the_left_in_the_image(self):
+        # image x runs against stage X (snapshot.X_DIR), as for camera pictures
+        a = flat_cube(1.0, (0.0, 0.0))
+        b = flat_cube(5.0, (0.1, 0.0))              # 100 um further along stage X
+        m = snapmapfig.mosaic_image([a, b], self.W)
+        x0, x1, y1, y0 = m.extent
+        self.assertAlmostEqual(x0, -100.0 - 20.0)   # b occupies -120..-80
+        self.assertAlmostEqual(x1, 20.0)
+        left_half = m.image[:, : m.image.shape[1] // 2]
+        self.assertTrue(np_all(left_half[~np_isnan(left_half)] > 0))
+        self.assertGreater(np_nanmax(m.image[:, 0]), np_nanmax(m.image[:, -1]))
+
+    def test_stage_y_runs_down_the_image(self):
+        a = flat_cube(1.0, (0.0, 0.0))
+        b = flat_cube(5.0, (0.0, 0.1))              # +Y: further down the image
+        m = snapmapfig.mosaic_image([a, b], self.W)
+        self.assertGreater(np_nanmax(m.image[-1]), np_nanmax(m.image[0]))
+
+    def test_overlap_is_averaged_and_gaps_are_blank(self):
+        a = flat_cube(2.0, (0.0, 0.0))
+        b = flat_cube(4.0, (0.02, 0.0))             # 20 um over: 2 px overlap
+        m = snapmapfig.mosaic_image([a, b], self.W)
+        vals = sorted({round(v, 6) for v in m.image[~np_isnan(m.image)]})
+        self.assertEqual(vals, sorted({2.0 * 11, 3.0 * 11, 4.0 * 11}))
+        self.assertTrue(any("overlap" in n for n in m.notes))
+        c = flat_cube(1.0, (0.0, 0.0))
+        d = flat_cube(1.0, (0.0, 0.2))              # well apart
+        gap = snapmapfig.mosaic_image([c, d], self.W)
+        self.assertTrue(np_isnan(gap.image).any())
+        self.assertTrue(any("blank" in n for n in gap.notes))
+
+    def test_maps_of_different_pixel_size_share_the_finest_grid(self):
+        a = flat_cube(1.0, (0.0, 0.0), dx=10.0)
+        b = flat_cube(1.0, (0.0, 0.0), nx=2, ny=2, dx=20.0)
+        m = snapmapfig.mosaic_image([a, b], self.W)
+        self.assertAlmostEqual((m.extent[1] - m.extent[0]) / m.image.shape[1],
+                               10.0)
+
+    def test_a_map_without_a_stage_position_is_left_out_with_a_note(self):
+        a = flat_cube(1.0, (0.0, 0.0))
+        b = flat_cube(1.0, (0.0, 0.0))
+        b.stage_x_mm = None
+        m = snapmapfig.mosaic_image([a, b], self.W)
+        self.assertEqual(len(m.used), 1)
+        self.assertTrue(any("stage position" in n for n in m.notes))
+
+    def test_mosaic_drawing_uses_one_window_and_one_range_for_all(self):
+        from matplotlib.figure import Figure
+        a, b = flat_cube(1.0, (0.0, 0.0)), flat_cube(9.0, (0.1, 0.0))
+        ra, rb = cube_region(a), cube_region(b)
+        fig = Figure(figsize=(10, 5))
+        ax_map, ax_spec = snapmapfig.draw_view(
+            fig, None, {"window": list(self.W), "scalebar": False}, ra,
+            themes.PRINT, themes.scale_colourmap("Viridis", False, themes.PRINT),
+            tiles=[rb])
+        im = ax_map.images[0]
+        lo, hi = im.get_clim()
+        self.assertLess(lo, 12.0)
+        self.assertGreater(hi, 12.0)
+        self.assertEqual(len(ax_map.patches), 2)       # a footprint per map
+        self.assertTrue(snapmapfig.sanitise({"tiles": [{"file": "f"}]})["tiles"])
+
+
+def np_all(a):
+    import numpy
+    return bool(numpy.all(a))
+
+
+def np_isnan(a):
+    import numpy
+    return numpy.isnan(a)
+
+
+def np_nanmax(a):
+    import numpy
+    return float(numpy.nanmax(a))
+
+
 @unittest.skipUnless(HAVE_MPL, "matplotlib / Tk not available")
 class TestFigureInTheApp(unittest.TestCase):
     @classmethod
@@ -251,6 +343,34 @@ class TestFigureInTheApp(unittest.TestCase):
         self.assertEqual(made[0].figure, 0)
         self.assertFalse(self.ws.open_snapmap_view({"kind": "snapmap",
                                                     "ref": {"file": "x"}}))
+
+    def test_a_mosaic_is_offered_saved_and_reopened(self):
+        other = cube_region(map_cube(), "C 1s", "S2")
+        other.extra["cube"].stage_x_mm = 10.05       # 50 um along from S1
+        other.extra["cube"].stage_y_mm = 20.0
+        extra = doc("n.vms", [other])
+        ee.load_file = lambda p: {"m.vms": self.parser, "n.vms": extra}[
+            os.path.basename(p)]
+        self.ws._add_file("n.vms", file_id="n", refresh=False)
+        self.ws._finish_adding()
+        self.addCleanup(lambda: (self.ws.docs.remove(extra),
+                                 self.ws.file_ids.pop(id(extra), None)))
+        cands = self.ws.snapmap_candidates(self.parser, self.region)
+        self.assertEqual([r for _p, r, _d in cands], [other])
+        self.assertAlmostEqual(cands[0][2], 0.05)
+        dlg = self.dialog()
+        dlg.choose_tiles([(extra, other)])
+        wide = dlg._extent()
+        self.assertGreater(wide[1] - wide[0],
+                           self.region.extra["cube"].extent()[1]
+                           - self.region.extra["cube"].extent()[0])
+        fig = dlg.save_as_figure("two maps")
+        self.assertEqual(len(fig["state"]["tiles"]), 1)
+        self.assertEqual(len(self.ws._figure_pngs(fig, dpi=50)), 1)
+        again = self.dialog(view=fig["state"], figure=0)
+        self.assertEqual(len(again.tiles), 1)
+        dlg.choose_tiles([])
+        self.assertEqual(dlg.view_spec()["tiles"], [])
 
     def test_spectrum_figures_are_untouched(self):
         fig = self.ws.add_figure("plain")

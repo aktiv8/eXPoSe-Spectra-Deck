@@ -4466,8 +4466,33 @@ class Workspace:
         if cmap is None:
             name = s["scale"] if s["scale"] in themes.SCALE_NAMES else "Viridis"
             cmap = themes.scale_colourmap(name, False, pal)
-        snapmapfig.draw_view(fig, rect, s, region, pal, cmap, photo=photo)
+        tiles = []
+        for ref in s["tiles"]:
+            t = self.snapmap_target({"ref": ref})
+            if t is not None and t[1] is not region:
+                tiles.append(t[1])
+        snapmapfig.draw_view(fig, rect, s, region, pal, cmap, photo=photo,
+                             tiles=tiles)
         return True
+
+    def snapmap_candidates(self, parser, region):
+        """``[(parser, region, distance_mm)]``: the other SnapMaps of the same
+        core level with a stage position, nearest first (what a mosaic can
+        add to ``region``)."""
+        cube = region.extra["cube"]
+        if cube.stage_x_mm is None:
+            return []
+        out = []
+        for p in self.docs:
+            for r in p.regions:
+                c = r.extra.get("cube")
+                if (r is region or c is None or c.n_energy < 2
+                        or r.name != region.name or c.stage_x_mm is None):
+                    continue
+                d = math.hypot(c.stage_x_mm - cube.stage_x_mm,
+                               c.stage_y_mm - cube.stage_y_mm)
+                out.append((p, r, d))
+        return sorted(out, key=lambda t: t[2])
 
     def snapmap_picture(self, spec, path, dpi=200, size=(10.4, 4.9)):
         """Write a SnapMap view as a picture file (PNG, PDF or SVG by the

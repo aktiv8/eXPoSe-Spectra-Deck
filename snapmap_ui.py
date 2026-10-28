@@ -54,6 +54,7 @@ class SnapMapDialog(tk.Toplevel):
         self.smooth_strength = tk.DoubleVar(
             value=float(cfg.get("smooth_strength", 0.5)))
         self.roi = None                      # [x0, y0, x1, y1] µm, None = whole map
+        self.tiles = []                      # [(parser, region)] laid beside this map
         self.figure = figure
         self.title(f"SnapMap — {region.sample}")
         if view:
@@ -111,6 +112,8 @@ class SnapMapDialog(tk.Toplevel):
         self.hint.pack(side="left", fill="x", expand=True)
         ttk.Button(row, text="Whole map", command=self._whole_map).pack(
             side="right")
+        ttk.Button(row, text="Mosaic…", command=self._mosaic_dialog).pack(
+            side="right", padx=6)
         ttk.Button(row, text="Save…", command=self._save_menu).pack(
             side="right", padx=6)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
@@ -132,6 +135,7 @@ class SnapMapDialog(tk.Toplevel):
             "smooth": {"method": self.smooth_method.get(),
                        "strength": self.smooth_strength.get()},
             "show_spectrum": show_spectrum,
+            "tiles": [self.app.snapmap_ref(p, r) for p, r in self.tiles],
         })
 
     def _apply_view(self, view):
@@ -148,7 +152,11 @@ class SnapMapDialog(tk.Toplevel):
         if v["smooth"]["method"] in smoothing.METHODS:
             self.smooth_method.set(v["smooth"]["method"])
         self.smooth_strength.set(v["smooth"]["strength"])
-        self.roi = v["roi"]
+        for ref in v["tiles"]:
+            hit = self.app.snapmap_target({"ref": ref})
+            if hit is not None and hit[1] is not self.region:
+                self.tiles.append(hit)
+        self.roi = None if self.tiles else v["roi"]
         self.mask = snapmapfig.roi_mask(self.cube, self.roi)
         if self.mask is None:
             self.roi = None
@@ -168,9 +176,23 @@ class SnapMapDialog(tk.Toplevel):
     def _cmap(self):
         return themes.scale_colourmap(self.scale.get(), False, self.app.palette)
 
+    def _mosaic(self):
+        if not self.tiles:
+            return None
+        return snapmapfig.mosaic_image(
+            [self.cube] + [r.extra["cube"] for _p, r in self.tiles],
+            self.window, self.background.get())
+
     def _image(self):
         lo, hi = self.window
+        mos = self._mosaic()
+        if mos is not None:
+            return mos.image
         return self.cube.image(lo, hi, background=self.background.get())
+
+    def _extent(self):
+        mos = self._mosaic()
+        return mos.extent if mos is not None else self.cube.extent()
 
     def _save_cfg(self):
         self.app.cfg["snapmap"] = {
@@ -204,6 +226,7 @@ class SnapMapDialog(tk.Toplevel):
     def _element(self):
         self.region = self.entries[self.el_cb.current()]
         self.cube = self.region.extra["cube"]
+        self.tiles = []                      # a mosaic is of one core level
         self.window = snapmap.default_window(self.cube)
         self.photo = self._camera_image()
         self.overlay_cb.configure(
@@ -234,8 +257,8 @@ class SnapMapDialog(tk.Toplevel):
                 sp.set_color(pal["muted"])
         cube = self.cube
         # the photo under the map, in the map's own micrometres
-        left, right, bottom, top = cube.extent()
-        if self.overlay.get() and self.photo is not None:
+        left, right, bottom, top = self._extent()
+        if self.overlay.get() and self.photo is not None and not self.tiles:
             img = self.app._photo_image(self.parser, self.photo)
             if img is not None:
                 cal = self.photo.calib
@@ -252,7 +275,7 @@ class SnapMapDialog(tk.Toplevel):
         image = self._image()
         vmin, vmax = snapmap.colour_range(image)
         self.im = self.ax_map.imshow(
-            image, extent=cube.extent(), origin="upper", cmap=self._cmap(),
+            image, extent=self._extent(), origin="upper", cmap=self._cmap(),
             interpolation="nearest", vmin=vmin, vmax=vmax, zorder=1,
             alpha=self.alpha.get() if self.overlay.get() else 1.0)
         if not self.overlay.get():
@@ -266,6 +289,7 @@ class SnapMapDialog(tk.Toplevel):
                                  pad=0.02)
         self.cbar.ax.tick_params(colors=pal["muted"], labelsize=8)
         self._draw_roi_outline()
+        self._draw_tile_outlines()
         self._draw_spectrum()
         self._update_titles()
 
@@ -282,6 +306,62 @@ class SnapMapDialog(tk.Toplevel):
             text="Drag across the spectrum to choose the energy window; drag a "
                  "box (or click a pixel) on the map for that area's spectrum.")
         self.canvas.draw_idle()
+
+    def _draw_tile_outlines(self):
+        if not self.tiles:
+            return
+        from matplotlib.patches import Rectangle
+        cubes = [self.cube] + [r.extra["cube"] for _p, r in self.tiles]
+        for _i, l, t, w, h in snapmapfig.mosaic_footprints(cubes):
+            self.ax_map.add_patch(Rectangle(
+                (l, t), w, h, fill=False, lw=0.8, ls=":",
+                ec=self.app.palette["muted"], zorder=4))
+
+    def choose_tiles(self, tiles):
+        """Lay these ``[(parser, region)]`` beside the current map (empty =
+        back to the single map). Uses one energy window and colour range."""
+        self.tiles = [(p, r) for p, r in tiles if r is not self.region]
+        if self.tiles:
+            self.mask = self.roi = None
+            self.overlay.set(False)
+        self._rebuild()
+        mos = self._mosaic()
+        if mos is not None and mos.notes:
+            self.hint.configure(text="Mosaic: " + "; ".join(mos.notes) + ".")
+
+    def _mosaic_dialog(self):
+        cands = self.app.snapmap_candidates(self.parser, self.region)
+        if not cands:
+            from tkinter import messagebox
+            messagebox.showinfo(
+                "Mosaic", f"No other {self.region.name} SnapMap with a stage "
+                          "position is loaded.", parent=self)
+            return
+        win = tk.Toplevel(self)
+        win.title("Mosaic of SnapMaps")
+        win.transient(self)
+        ttk.Label(win, padding=8, wraplength=380, justify="left",
+                  text=f"Maps of {self.region.name} to lay beside this one by "
+                       "their stage positions (shared energy window and "
+                       "colour range).").pack(anchor="w")
+        vars_ = []
+        chosen = {id(r) for _p, r in self.tiles}
+        for p, r, d in cands:
+            v = tk.BooleanVar(value=id(r) in chosen)
+            vars_.append((v, p, r))
+            ttk.Checkbutton(
+                win, variable=v,
+                text=f"{r.sample}   ({d:.2f} mm away)").pack(anchor="w", padx=12)
+
+        def ok():
+            self.choose_tiles([(p, r) for v, p, r in vars_ if v.get()])
+            win.destroy()
+        row = ttk.Frame(win, padding=8)
+        row.pack(fill="x")
+        ttk.Button(row, text="Apply", command=ok).pack(side="right")
+        ttk.Button(row, text="Cancel", command=win.destroy).pack(
+            side="right", padx=6)
+        _finish(win, self.app, 420, 120 + 26 * len(cands))
 
     def _draw_roi_outline(self):
         """The chosen area's bounding box on the map (the selector's own box
@@ -357,6 +437,7 @@ class SnapMapDialog(tk.Toplevel):
         image = self._image()
         vmin, vmax = snapmap.colour_range(image)
         self.im.set_data(image)
+        self.im.set_extent(self._extent())
         self.im.set_clim(vmin, vmax)
         self.im.set_cmap(self._cmap())
         self.im.set_alpha(self.alpha.get() if self.overlay.get() else 1.0)
@@ -385,6 +466,8 @@ class SnapMapDialog(tk.Toplevel):
         self._update_map()
 
     def _on_roi(self, click, release):
+        if self.tiles:                       # an area belongs to one map
+            return
         cube = self.cube
         if None in (click.xdata, click.ydata, release.xdata, release.ydata):
             return
