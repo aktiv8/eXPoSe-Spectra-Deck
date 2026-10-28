@@ -787,15 +787,46 @@ class TestFitView(unittest.TestCase):
         self.assertTrue(any("No components" in t.get_text()
                             for a in fig.axes for t in a.texts))
 
+    def test_the_drawn_spectrum_shows_all_the_data_with_the_window_shaded(self):
+        import numpy as np
+        region, spec, _t = si_view()
+        spec["fit"]["spec"] = dict(spec["fit"]["spec"], window=[97.0, 106.0])
+        fig, (ax, ax_spec) = self.draw(spec, region)
+        x = np.asarray(ax_spec.lines[0].get_xdata())
+        self.assertAlmostEqual(float(x.min()), 95.0, delta=0.05)    # the whole range
+        self.assertAlmostEqual(float(x.max()), 110.0, delta=0.05)
+        self.assertEqual(ax_spec.get_xlim(), (float(x.max()), float(x.min())))
+        spans = [p for p in ax_spec.patches]
+        self.assertEqual(len(spans), 2)                  # outside the window, both sides
+        edges = sorted(float(l.get_xdata()[0]) for l in ax_spec.lines
+                       if l.get_linestyle() == "--" and len(set(l.get_xdata())) == 1)
+        self.assertEqual(edges, [97.0 + (edges[0] - 97.0), edges[1]])
+        self.assertAlmostEqual(edges[0], 97.0, delta=0.15)
+        self.assertAlmostEqual(edges[1], 106.0, delta=0.15)
+        labels = [t.get_text() for t in ax_spec.texts]
+        self.assertEqual(len(labels), 2)
+        # the model is drawn inside the window only
+        env = next(l for l in ax_spec.lines if l.get_label() == "fit")
+        ex = np.asarray(env.get_xdata())
+        self.assertGreaterEqual(float(ex.min()), 96.9)
+        self.assertLessEqual(float(ex.max()), 106.1)
+        # a window that is the whole range draws no shading
+        region, spec, _t = si_view()
+        fig, (ax, ax_spec) = self.draw(spec, region)
+        self.assertEqual(len(ax_spec.patches), 0)
+        self.assertEqual(len(ax_spec.texts), 0)
+
     def test_the_energy_shift_of_the_shown_region_is_followed(self):
         # the user shifted the spectrum by +0.7 eV: the fit looks there
         import numpy as np
         region, spec, truth = si_view()
         region.energy = [e + 0.7 for e in region.energy]
         fig, (ax, ax_spec) = self.draw(spec, region)
-        x = np.asarray(ax_spec.lines[0].get_xdata())    # the data, on the shown axis
+        x = np.asarray(ax_spec.lines[0].get_xdata())    # all the data, on the shown axis
         self.assertAlmostEqual(float(x.min()), 95.7, delta=0.05)
-        self.assertLess(float(x.max()), 110.0)          # still cut to the window
+        self.assertAlmostEqual(float(x.max()), 110.7, delta=0.05)
+        inside = np.asarray(ax_spec.lines[1].get_xdata())   # the part the fit used
+        self.assertLess(float(inside.max()), 110.0)          # cut to the window
 
     def test_drawing_does_not_touch_the_cube(self):
         region, spec, _t = si_view()

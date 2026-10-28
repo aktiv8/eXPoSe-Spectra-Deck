@@ -899,8 +899,26 @@ def draw_fit_view(fig, rect, s, region, pal, cmap, unit_mark=None):
                          transform=ax_spec.transAxes, color=pal["plot_fg"],
                          fontsize=9)
             return first or ax_spec, ax_spec
+        # all the data, the part outside the window dimmed and shaded: the
+        # window is the background limits and the range the peaks are fitted to
+        wlo, whi = float(min(res.be)), float(max(res.be))
+        dlo, dhi = float(min(be)), float(max(be))
+        ax_spec.plot(be, y, ".", ms=2.5, color=pal["muted"], alpha=0.45)
         ax_spec.plot(res.be, res.y, ".", ms=2.5, color=pal["muted"],
                      label="data")
+        if wlo > dlo + 1e-9:
+            ax_spec.axvspan(dlo, wlo, color=pal["muted"], alpha=0.12, lw=0)
+        if whi < dhi - 1e-9:
+            ax_spec.axvspan(whi, dhi, color=pal["muted"], alpha=0.12, lw=0)
+        if wlo > dlo + 1e-9 or whi < dhi - 1e-9:
+            import matplotlib.transforms as mtrans
+            trans = mtrans.blended_transform_factory(ax_spec.transData,
+                                                     ax_spec.transAxes)
+            for edge in (wlo, whi):
+                ax_spec.axvline(edge, color=pal["accent"], lw=0.9, ls="--")
+                ax_spec.text(edge, 1.0, f"{edge:.1f}", transform=trans,
+                             ha="center", va="bottom", fontsize=7,
+                             color=pal["accent"])
         total = float(res.amplitudes.sum()) or 1.0
         for k, (c, curve) in enumerate(zip(spec["components"],
                                            res.components)):
@@ -913,7 +931,7 @@ def draw_fit_view(fig, rect, s, region, pal, cmap, unit_mark=None):
         ax_spec.plot(res.be, res.bg, "--", color=pal["muted"], lw=0.9)
         ax_spec.plot(res.be, res.envelope, color=pal["plot_fg"], lw=1.2,
                      label="fit")
-        ax_spec.set_xlim(max(res.be), min(res.be))
+        ax_spec.set_xlim(dhi, dlo)
         ax_spec.set_xlabel(f"{region.energy_label} ({region.energy_units})",
                            color=pal["plot_fg"], fontsize=9)
         ax_spec.set_ylabel("Counts per pixel" if what == "whole map"
