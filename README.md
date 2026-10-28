@@ -718,7 +718,9 @@ where the signal comes from:
 * **Mosaic…** lays other SnapMaps of the same core level beside this one by
   their stage positions, with one energy window and one colour range for all
   (the mean where maps overlap, blank where none reaches). The placement uses
-  the stage positions only: no rotation or image registration.
+  the stage positions only: no rotation or image registration. Reports add
+  the same thing by themselves: with the report's mosaic option on, SnapMap
+  sites that lie side by side get a "SnapMap mosaic" page.
 * **On camera image** lays the map over the picture taken at the same spot
   (the slider sets how much of the picture shows through).
 * **Save…** writes a picture (PNG, PDF or SVG, drawn for paper, with the map

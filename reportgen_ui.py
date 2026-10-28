@@ -364,9 +364,10 @@ class ReportGeneratorDialog(tk.Toplevel):
                             command=lambda: self.set_option(
                                 "dividers", self.dividers.get())).pack(
                 anchor="w", padx=(12, 0), pady=2)
-        ttk.Label(tab, text="Overlapping camera pictures").pack(
+        ttk.Label(tab, text="Overlapping camera pictures and neighbouring "
+                            "SnapMaps").pack(
             anchor="w", pady=(14, 0))
-        for value, text in (("on", "Also stitch them into a mosaic"),
+        for value, text in (("on", "Also lay them side by side as a mosaic"),
                             ("off", "Show them separately only")):
             ttk.Radiobutton(tab, text=text, value=value, variable=self.mosaic,
                             command=lambda: self.set_option(

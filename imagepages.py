@@ -13,6 +13,11 @@ drawing:
 * **SnapMap pages**: one per map site: the camera picture taken there (with the
   map's footprint) beside a grid of element maps, each the counts in the window
   round that element's strongest peak, with its own colour bar;
+* **SnapMap mosaic pages** (with ``mosaics``): where the SnapMap sites of one
+  file lie side by side (their footprints overlap or nearly touch), one page
+  lays each element's maps on one canvas by their stage positions
+  (``snapmapfig.mosaic_image``): one energy window and one colour range for all
+  the tiles of an element;
 * **image-map pages**: the Kratos stigmatic images (``kratosmap``) of one
   stage position, in acquisition order, up to ``IMAGES_PER_PAGE`` to a page,
   each with its own colour scale, a scale bar marked approximate (the field of
@@ -77,6 +82,7 @@ class Site:
     maps: list                   # [(shown region, cube)]
     camera: Picture | None = None
     key: str = ""
+    doc: object = None
 
 
 @dataclass
@@ -89,7 +95,7 @@ class ImageSet:
 
 @dataclass
 class Page:
-    kind: str                    # "camera", "mosaic", "maps" or "images"
+    kind: str                    # "camera", "mosaic", "mapmosaic", "maps", "images"
     title: str
     n_items: int
     _draw: object = field(default=None, repr=False)
@@ -167,8 +173,9 @@ def plan(docs, label_of=None, display=None, per_sheet=6, columns=3, skip=(),
     label_of = label_of or (lambda p, s: s)
     display = display or (lambda r: r)
     skip = set(skip)
-    pictures, sites, sets, image_sets = [], [], [], []
+    pictures, sites, sets, image_sets, map_sets = [], [], [], [], []
     for p in docs:
+        doc_sites = []
         by_sample = {}                              # sample -> its image maps
         for r in p.regions:
             if _is_image_map(r):
@@ -207,9 +214,13 @@ def plan(docs, label_of=None, display=None, per_sheet=6, columns=3, skip=(),
                 near = next((m for m in mine if m.blob is b), None)
                 if near is not None and near.key in skip:
                     near = None
-            sites.append(Site(label_of(p, sample),
-                              [(display(r), r.extra["cube"]) for r in rs],
-                              near, item_key("map", p, sample)))
+            site = Site(label_of(p, sample),
+                        [(display(r), r.extra["cube"]) for r in rs],
+                        near, item_key("map", p, sample), p)
+            sites.append(site)
+            doc_sites.append(site)
+        if mosaics:
+            map_sets += snapmap_clusters(doc_sites)
     pages = []
     slots = -(-per_sheet // columns) * columns
     chunks = [pictures[i:i + per_sheet] for i in range(0, len(pictures),
@@ -231,6 +242,15 @@ def plan(docs, label_of=None, display=None, per_sheet=6, columns=3, skip=(),
             lambda fig, rect, cmap, c=cluster, ps=positions, fs=first:
                 draw_mosaic(fig, rect, c, ps, fs),
             lambda c=cluster: _mosaic_notes(c)))
+    for n, cluster in enumerate(map_sets, 1):
+        span = sample_span([q.title for q in cluster])
+        title = "SnapMap mosaic" + (f" \u2013 {span}" if span else "") + (
+            f" ({n} of {len(map_sets)})" if len(map_sets) > 1 else "")
+        pages.append(Page(
+            "mapmosaic", title, len(cluster),
+            lambda fig, rect, cmap, c=cluster: draw_snap_mosaic(fig, rect, c,
+                                                                cmap),
+            lambda c=cluster: _snap_mosaic_notes(c)))
     for site in sites:
         pages.append(Page(
             "maps", f"SnapMap – {site.title}", len(site.maps),
@@ -250,6 +270,148 @@ def plan(docs, label_of=None, display=None, per_sheet=6, columns=3, skip=(),
                     fig, rect, e, cmap),
                 lambda e=entries, c=chunk: _image_notes(e, c)))
     return pages
+
+
+SNAP_GAP = 0.05          # sites this close (share of a map's width) count as touching
+SNAP_MOSAIC_ELEMENTS = 6
+
+
+def _footprint(site):
+    """``(left, top, right, bottom)`` of a site's first map in the common
+    image frame (µm), or None without a stage position."""
+    cube = site.maps[0][1]
+    if cube.stage_x_mm is None or cube.stage_y_mm is None:
+        return None
+    l, r, b, t = cube.extent()
+    ox = snapshot.X_DIR * cube.stage_x_mm * 1000.0
+    oy = snapshot.Y_DIR * cube.stage_y_mm * 1000.0
+    return (min(l, r) + ox, min(t, b) + oy, max(l, r) + ox, max(t, b) + oy)
+
+
+def snapmap_clusters(sites):
+    """Sets of two or more SnapMap sites of one file whose footprints overlap
+    or lie within ``SNAP_GAP`` of a map's width of each other, directly or
+    through neighbours (stage positions only; nothing is read)."""
+    boxes = [(s, _footprint(s)) for s in sites]
+    boxes = [(s, f) for s, f in boxes if f is not None]
+    parent = list(range(len(boxes)))
+
+    def find(i):
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for i in range(len(boxes)):
+        for j in range(i + 1, len(boxes)):
+            a, b = boxes[i][1], boxes[j][1]
+            gap = SNAP_GAP * max(a[2] - a[0], b[2] - b[0])
+            if (a[0] - gap <= b[2] and b[0] - gap <= a[2]
+                    and a[1] - gap <= b[3] and b[1] - gap <= a[3]):
+                parent[find(i)] = find(j)
+    groups = {}
+    for i, (s, _f) in enumerate(boxes):
+        groups.setdefault(find(i), []).append(s)
+    return [g for g in groups.values() if len(g) > 1]
+
+
+def _snap_elements(cluster):
+    """``[(name, [(site, region, cube)])]``: the core levels found in at least
+    two sites of the cluster, in the order first met, up to
+    ``SNAP_MOSAIC_ELEMENTS``."""
+    by_name = {}
+    for site in cluster:
+        seen = set()
+        for region, cube in site.maps:
+            if region.name in seen:
+                continue
+            seen.add(region.name)
+            by_name.setdefault(region.name, []).append((site, region, cube))
+    return [(n, v) for n, v in by_name.items() if len(v) > 1][
+        :SNAP_MOSAIC_ELEMENTS]
+
+
+def _snap_mosaics(cluster):
+    """``[(name, window, Mosaic, [(site, region, cube)])]``."""
+    import snapmapfig
+    out = []
+    for name, members in _snap_elements(cluster):
+        cubes = [c for _s, _r, c in members]
+        window = snapmap.default_window(cubes[0])
+        mos = snapmapfig.mosaic_image(cubes, window)
+        if mos is not None:
+            out.append((name, window, mos, members))
+    return out
+
+
+def _snap_mosaic_notes(cluster):
+    import snapmapfig
+    rows = []
+    for name, window, mos, members in _snap_mosaics(cluster):
+        rows.append(f"{name}: counts summed over {window[0]:.1f}\u2013"
+                    f"{window[1]:.1f} eV from {len(mos.used)} maps; "
+                    + ("; ".join(mos.notes) + "." if mos.notes else ""))
+    where = "; ".join(f"{s.title} (stage {s.maps[0][1].stage_x_mm:.3f}, "
+                      f"{s.maps[0][1].stage_y_mm:.3f} mm)" for s in cluster)
+    return (f"SnapMaps laid side by side by their stage positions only (no "
+            f"rotation or image registration), one energy window and one "
+            f"colour range for all the maps of an element: {where}.\n"
+            + "\n".join(rows))
+
+
+def draw_snap_mosaic(fig, rect, cluster, cmap=None):
+    """One mosaic per element, in a grid, each with its tiles outlined and
+    named, a colour bar and a scale bar."""
+    import matplotlib
+    import snapmapfig
+    left, bottom, right, top = rect
+    cmap = cmap or matplotlib.colormaps["viridis"]
+    try:
+        cmap = cmap.with_extremes(bad="#EDEDED")
+    except Exception:                      # noqa: BLE001
+        pass
+    mosaics = _snap_mosaics(cluster)
+    if not mosaics:
+        return
+    n = len(mosaics)
+    ext = mosaics[0][2].extent
+    wide = abs(ext[1] - ext[0]) > 1.5 * abs(ext[2] - ext[3])
+    cols = 1 if wide else min(2, n)        # a wide mosaic gets the page's width
+    rows = -(-n // cols)
+    gs = fig.add_gridspec(rows, cols, left=left + 0.05, right=right - 0.06,
+                          top=top - 0.03, bottom=bottom + 0.03, wspace=0.35,
+                          hspace=0.45)
+    for i, (name, window, mos, members) in enumerate(mosaics):
+        ax = fig.add_subplot(gs[i // cols, i % cols])
+        vmin, vmax = snap_range(mos.image)
+        im = ax.imshow(mos.image, extent=mos.extent, origin="upper", cmap=cmap,
+                       vmin=vmin, vmax=vmax, interpolation="nearest")
+        cubes = [c for _s, _r, c in members]
+        for (k, fl, ft, fw, fh), (site, _r, _c) in zip(
+                snapmapfig.mosaic_footprints(cubes), members):
+            from matplotlib.patches import Rectangle
+            ax.add_patch(Rectangle((fl, ft), fw, fh, fill=False, lw=0.6,
+                                   ls=":", ec="#444444"))
+            ax.text(fl + fw * 0.02, ft + fh * 0.03, site.title, fontsize=5,
+                    color="white", va="top", ha="left",
+                    bbox=dict(boxstyle="square,pad=0.1", fc="#00000088",
+                              ec="none"))
+        ax.set_xlim(mos.extent[0], mos.extent[1])
+        ax.set_ylim(mos.extent[2], mos.extent[3])
+        ax.set_title(f"{name}   {window[0]:.1f}\u2013{window[1]:.1f} eV",
+                     fontsize=7, pad=3)
+        ax.tick_params(labelsize=5.5, length=2, pad=1)
+        ax.set_xlabel("X (\u00b5m)", fontsize=6, labelpad=1)
+        ax.set_ylabel("Y (\u00b5m)", fontsize=6, labelpad=1)
+        # a colour bar as tall as the (equal-aspect) map, not as its cell
+        from mpl_toolkits.axes_grid1 import make_axes_locatable
+        cax = make_axes_locatable(ax).append_axes("right", size="3%", pad=0.08)
+        cb = fig.colorbar(im, cax=cax)
+        cb.ax.tick_params(labelsize=5.5, length=2, pad=1)
+
+
+def snap_range(image):
+    return snapmap.colour_range(image)
 
 
 def _pack_images(sets):

@@ -47,6 +47,94 @@ def site_doc(n_pictures=1, with_map=True):
                images=two_pictures(n_pictures) if n_pictures else [])
 
 
+def map_site_doc(positions, names=("C 1s",), far=()):
+    """A file with one SnapMap site per stage position (x_mm, y_mm), each with
+    the given elements (the map is 60 x 40 um)."""
+    regs, pos = [], {}
+    for i, (x, y) in enumerate(positions):
+        sample = f"M{i + 1}"
+        for name in names:
+            r = cube_region(map_cube(seed=i + 1), name, sample)
+            r.extra["cube"].stage_x_mm, r.extra["cube"].stage_y_mm = x, y
+            regs.append(r)
+        pos[sample] = (x, y)
+    return doc("m.vgd", regs, positions=pos)
+
+
+@unittest.skipUnless(HAVE, "matplotlib, numpy and Pillow needed")
+class TestSnapMapMosaicPages(unittest.TestCase):
+    def kinds(self, d, **kw):
+        return [(p.kind, p.title) for p in ip.plan([d], **kw)]
+
+    def test_neighbouring_sites_make_one_mosaic_page_when_asked(self):
+        d = map_site_doc([(10.0, 20.0), (10.05, 20.0)])         # 50 um apart
+        self.assertEqual([k for k, _t in self.kinds(d)], ["maps", "maps"])
+        got = self.kinds(d, mosaics=True)
+        self.assertEqual([k for k, _t in got], ["mapmosaic", "maps", "maps"])
+        self.assertEqual(got[0][1], "SnapMap mosaic \u2013 M1/2")
+
+    def test_far_apart_sites_and_single_sites_make_none(self):
+        far = map_site_doc([(10.0, 20.0), (12.0, 20.0)])        # 2 mm apart
+        self.assertNotIn("mapmosaic", [k for k, _t in self.kinds(far, mosaics=True)])
+        one = map_site_doc([(10.0, 20.0)])
+        self.assertNotIn("mapmosaic", [k for k, _t in self.kinds(one, mosaics=True)])
+
+    def test_sites_that_nearly_touch_count_and_a_chain_joins(self):
+        # maps are 60 um wide; 62 um apart leaves a 2 um gap (under 5 % of 60)
+        d = map_site_doc([(10.0, 20.0), (10.062, 20.0), (10.124, 20.0)])
+        pages = ip.plan([d], mosaics=True)
+        mos = [p for p in pages if p.kind == "mapmosaic"]
+        self.assertEqual(len(mos), 1)
+        self.assertEqual(mos[0].n_items, 3)
+
+    def test_a_site_left_out_is_not_stitched(self):
+        d = map_site_doc([(10.0, 20.0), (10.05, 20.0), (10.1, 20.0)])
+        key = ip.item_key("map", d, "M2")
+        pages = ip.plan([d], mosaics=True, skip=[key])
+        self.assertEqual([p.kind for p in pages].count("mapmosaic"), 0)
+        # M1 and M3 are 100 um apart: no longer joined once M2 is out
+
+    def test_the_page_has_one_mosaic_per_element_found_in_two_sites(self):
+        d = map_site_doc([(10.0, 20.0), (10.05, 20.0)], names=("C 1s", "O 1s"))
+        page = [p for p in ip.plan([d], mosaics=True)
+                if p.kind == "mapmosaic"][0]
+        fig = Figure(figsize=(11.7, 8.3))
+        page.draw(fig, (0.0, 0.03, 1.0, 0.93))
+        titles = [a.get_title() for a in fig.axes if a.get_title()]
+        self.assertEqual(len(titles), 2)
+        self.assertTrue(titles[0].startswith("C 1s"))
+        wide = [a for a in fig.axes if a.get_title()][0]
+        x0, x1 = wide.get_xlim()
+        self.assertGreater(x1 - x0, 60.0)             # wider than one 60 um map
+        note = page.notes()
+        self.assertIn("stage positions only", note)
+        self.assertIn("C 1s: counts summed over", note)
+        self.assertIn("M1", note)
+
+    def test_an_element_in_one_site_only_is_not_mosaicked(self):
+        a = cube_region(map_cube(seed=1), "C 1s", "M1")
+        b = cube_region(map_cube(seed=2), "O 1s", "M2")
+        for r, x in ((a, 10.0), (b, 10.05)):
+            r.extra["cube"].stage_x_mm, r.extra["cube"].stage_y_mm = x, 20.0
+        d = doc("m.vgd", [a, b], positions={"M1": (10.0, 20.0),
+                                            "M2": (10.05, 20.0)})
+        page = [p for p in ip.plan([d], mosaics=True)
+                if p.kind == "mapmosaic"][0]
+        fig = Figure(figsize=(11.7, 8.3))
+        page.draw(fig)
+        self.assertEqual([a.get_title() for a in fig.axes if a.get_title()], [])
+
+    def test_the_report_and_the_deck_carry_the_page(self):
+        d = map_site_doc([(10.0, 20.0), (10.05, 20.0)])
+        from pptx_export import FIGURE_SIZE
+        fig = Figure(figsize=FIGURE_SIZE)
+        [p for p in ip.plan([d], mosaics=True) if p.kind == "mapmosaic"][0].draw(
+            fig, (0.0, 0.0, 1.0, 1.0))
+        buf = io.BytesIO()
+        fig.savefig(buf, format="png", dpi=60)
+        self.assertEqual(buf.getvalue()[:4], b"\x89PNG")
+
+
 @unittest.skipUnless(HAVE, "matplotlib, numpy and Pillow needed")
 class TestPlan(unittest.TestCase):
     def test_sheets_come_before_map_pages(self):
