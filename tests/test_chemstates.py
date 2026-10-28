@@ -37,6 +37,15 @@ class TestTable(unittest.TestCase):
             self.assertTrue(0 < e["be"] < 1500, e)
             self.assertTrue(e["source"])
 
+    def test_si_2p_has_the_elemental_and_oxide_states(self):
+        si = {e["state"]: e for e in STATES if e["core_level"] == "Si 2p"}
+        self.assertEqual(si["Si2p3/2 Si"]["be"], 99.4)
+        self.assertEqual(si["Si2p3/2 SiO2"]["be"], 103.4)
+        for e in si.values():
+            self.assertIn("user", e["source"])           # said where they come from
+        near = cs.state_candidates(103.2, 1.0, STATES, core_level="Si2p")
+        self.assertEqual([e["state"] for _d, e in near], ["Si2p3/2 SiO2"])
+
     def test_bundled_ranges_are_sane_and_empirical(self):
         # every 'range' is a real [lo, hi] that actually brackets every
         # observed 'be' of that exact (core_level, state) group -- i.e. it

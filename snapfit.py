@@ -135,6 +135,56 @@ def sanitise(spec) -> dict:
             "shared_fwhm": bool(spec.get("shared_fwhm", False))}
 
 
+# -- seeds from the reference tables -----------------------------------------------------
+_LOWER_J = {"p": ("3/2", "1/2"), "d": ("5/2", "3/2"), "f": ("7/2", "5/2")}
+
+
+def doublet_of_level(core_level, lines=None):
+    """The spin-orbit ``doublet`` of a core level ("Si 2p", "Pt 4f"): the
+    separation from the app's own line table (``xpslines``: the two lines of
+    the element) and the degeneracy area ratio; None for an s level or when
+    the table lacks a line."""
+    import xpslines
+    from readers.base import canon_region_name
+    name = canon_region_name(core_level)
+    parts = name.split()
+    if len(parts) != 2 or parts[1][-1] not in _LOWER_J:
+        return None
+    el, shell = parts[0], parts[1]
+    lo_j, hi_j = _LOWER_J[shell[-1]]
+    lines = lines if lines is not None else xpslines.load_lines()
+    be = {e["line"]: xpslines.line_be(e) for e in lines
+          if e.get("el") == el and e.get("line") in (shell + lo_j,
+                                                      shell + hi_j)}
+    if len(be) != 2:
+        return None
+    split = be[shell + hi_j] - be[shell + lo_j]
+    return doublet_for(shell, split)
+
+
+def seed_components(core_level, states=None, lines=None):
+    """Starting components for a core level from the chemical-state table
+    (``chemstates``): one per distinct state, named by the part of the state
+    after the line (``Si2p3/2 SiO2`` -> ``SiO2``), at that state's binding
+    energy and width, as a spin-orbit doublet when the line table has both
+    lines. These are starting values for :func:`fit_mean`, not results."""
+    import chemstates
+    from readers.base import canon_region_name
+    want = canon_region_name(core_level)
+    rows = states if states is not None else chemstates.load_states()
+    doublet = doublet_of_level(want, lines)
+    out, seen = [], set()
+    for r in rows:
+        if canon_region_name(r["core_level"]) != want or r["state"] in seen:
+            continue
+        seen.add(r["state"])
+        label = r["state"].split(None, 1)
+        name = label[1] if len(label) > 1 else r["state"]
+        out.append(new_component(name, r["be"], r.get("fwhm") or 1.0,
+                                 doublet=doublet))
+    return out[:MAX_COMPONENTS]
+
+
 # -- solvers ------------------------------------------------------------------------------
 def nnls(A, b, max_iter=None):
     """``x >= 0`` minimising ``|A x - b|`` (Lawson-Hanson active set)."""

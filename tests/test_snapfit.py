@@ -51,6 +51,33 @@ class TestSpec(unittest.TestCase):
         self.assertIsNone(snapfit.doublet_for("2p", 0))
 
 
+class TestSeeds(unittest.TestCase):
+    def test_si_2p_is_seeded_from_the_bundled_states(self):
+        comps = snapfit.seed_components("Si 2p")
+        self.assertEqual([c["name"] for c in comps], ["Si", "SiO2"])
+        self.assertEqual([c["be"] for c in comps], [99.4, 103.4])
+        d = comps[0]["doublet"]
+        self.assertAlmostEqual(d["split"], 100.03 - 99.4, places=6)  # the line table's
+        self.assertAlmostEqual(d["ratio"], 0.5)
+        self.assertEqual(snapfit.seed_components("Si2p")[0]["name"], "Si")
+
+    def test_a_level_without_states_or_lines_is_just_empty_or_singlet(self):
+        self.assertEqual(snapfit.seed_components("Xx 9z"), [])
+        s_only = snapfit.seed_components("Si 2s", states=[
+            {"core_level": "Si 2s", "state": "Si2s Si", "be": 150.0,
+             "fwhm": 1.0}])
+        self.assertEqual(len(s_only), 1)
+        self.assertIsNone(s_only[0]["doublet"])
+
+    def test_the_doublet_comes_from_the_given_line_table(self):
+        lines = [{"el": "Pt", "line": "4f7/2", "be": 71.0},
+                 {"el": "Pt", "line": "4f5/2", "be": 74.33}]
+        d = snapfit.doublet_of_level("Pt 4f", lines)
+        self.assertAlmostEqual(d["split"], 3.33)
+        self.assertAlmostEqual(d["ratio"], 0.75)
+        self.assertIsNone(snapfit.doublet_of_level("Pt 4f", []))
+
+
 @unittest.skipUnless(HAVE, "numpy not available")
 class TestSolvers(unittest.TestCase):
     def test_nnls_matches_least_squares_when_the_answer_is_positive(self):

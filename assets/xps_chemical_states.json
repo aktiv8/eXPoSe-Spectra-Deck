@@ -2626,6 +2626,22 @@
    "source": "KherveFitting Peaks Library: Pt4f_PtO2_LA-GL_GK_2502"
   },
   {
+   "core_level": "Si 2p",
+   "state": "Si2p3/2 Si",
+   "be": 99.4,
+   "fwhm": 0.9,
+   "model": "GL (Area)",
+   "source": "Starting values set by the user for the SnapMap fit (Si 99.4 eV, SiO2 103.4 eV; the Si 99.4 eV matches xps_lines.json); the FWHM is a generic starting width, not a measured one"
+  },
+  {
+   "core_level": "Si 2p",
+   "state": "Si2p3/2 SiO2",
+   "be": 103.4,
+   "fwhm": 1.6,
+   "model": "GL (Area)",
+   "source": "Starting values set by the user for the SnapMap fit (Si 99.4 eV, SiO2 103.4 eV; the Si 99.4 eV matches xps_lines.json); the FWHM is a generic starting width, not a measured one"
+  },
+  {
    "core_level": "Sr 3d",
    "state": "Sr3d5/2 Sr-Lat",
    "be": 132.49,
