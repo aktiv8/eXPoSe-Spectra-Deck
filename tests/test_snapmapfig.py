@@ -927,6 +927,33 @@ class TestFitInTheDialog(unittest.TestCase):
         self.assertEqual(len(d.fit_res.get_children()), 2)
         self.assertEqual(d.fit_tree.item("0", "values")[0], "Si")
 
+    def test_a_fit_always_starts_from_the_seed_not_the_last_result(self):
+        d = self.fit_mode()
+        cube = self.region.extra["cube"]
+        first = d.fit_spectrum()
+        a = [(c["be"], c["fwhm"]) for c in d.fit_spec["components"]]
+        second = d.fit_spectrum()                      # again: the same answer
+        b = [(c["be"], c["fwhm"]) for c in d.fit_spec["components"]]
+        self.assertEqual(a, b)
+        # a fit on an area does not depend on the whole-map fit before it
+        d.add_roi([cube.x_of(0), cube.y_of(2), cube.x_of(5), cube.y_of(27)],
+                  label="Si side")
+        d.v_fon.set("Si side")
+        d._fit_on_changed()
+        d.fit_spectrum()
+        after_whole = [(c["be"], c["fwhm"]) for c in d.fit_spec["components"]]
+        d.fit_seed()
+        d.fit_add_custom("tmp")
+        d.fit_remove(2)
+        d.fit_spectrum()
+        fresh = [(c["be"], c["fwhm"]) for c in d.fit_spec["components"]]
+        self.assertEqual(after_whole, fresh)
+        # Edit moves the start; the next fit begins there
+        d.fit_edit(1, be=103.0)
+        self.assertEqual(d.fit_start[1]["be"], 103.0)
+        d.fit_remove(1)
+        self.assertEqual(len(d.fit_start), 1)
+
     def test_a_shift_beyond_the_allowed_room_is_said(self):
         d = self.fit_mode()
         d.fit_edit(0, be_range=0.1)

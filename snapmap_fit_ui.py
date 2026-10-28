@@ -24,6 +24,7 @@ class FitMixin:
     def _fit_init(self):
         """Variables of the Fit tab (before any widget exists)."""
         self.fit_spec = snapfit.sanitise({})
+        self.fit_start = []                # the components a refinement starts from
         self.fit_numer = None              # None = the default (last of two or more)
         self.fit_on = None                 # None = whole map, else an area index
         self.fit_result = None             # the last snapfit.Result of a refinement
@@ -50,6 +51,7 @@ class FitMixin:
         """Set the Fit tab from a saved view's fit part."""
         f = snapmapfig.sanitise_fit(fit)
         self.fit_spec = f["spec"]
+        self.fit_start = [dict(c) for c in f["spec"]["components"]]
         w = f["spec"]["window"]
         self.v_fwin_lo.set(f"{w[0]:.2f}" if w else "")
         self.v_fwin_hi.set(f"{w[1]:.2f}" if w else "")
@@ -180,6 +182,7 @@ class FitMixin:
             self.hint.configure(text=f"No starting components are known for "
                                      f"{self.region.name}: add some with Add.")
         self.fit_spec = snapfit.sanitise({"components": comps})
+        self.fit_start = [dict(c) for c in self.fit_spec["components"]]
         if comps:
             w = snapfit.suggest_window(be, self.fit_spec["components"])
             self.v_fwin_lo.set(f"{w[0]:.2f}")
@@ -214,6 +217,8 @@ class FitMixin:
                 text=f"At most {snapfit.MAX_COMPONENTS} components.")
             return None
         self.fit_spec = snapfit.sanitise(dict(self.fit_spec, components=comps))
+        self.fit_start = list(self.fit_start) + [dict(
+            self.fit_spec["components"][-1])]
         self.fit_result = None
         self._fit_changed()
         return len(self.fit_spec["components"]) - 1
@@ -226,6 +231,13 @@ class FitMixin:
             return False
         comps[i].update(fields)
         self.fit_spec = snapfit.sanitise(dict(self.fit_spec, components=comps))
+        if len(self.fit_start) == len(comps):
+            start = [dict(c) for c in self.fit_start]
+            start[i].update(fields)
+            self.fit_start = snapfit.sanitise(
+                dict(self.fit_spec, components=start))["components"]
+        else:
+            self.fit_start = [dict(c) for c in self.fit_spec["components"]]
         self.fit_result = None
         self._fit_changed()
         return True
@@ -233,6 +245,7 @@ class FitMixin:
     def fit_remove(self, i):
         comps = [c for k, c in enumerate(self.fit_spec["components"]) if k != i]
         self.fit_spec = snapfit.sanitise(dict(self.fit_spec, components=comps))
+        self.fit_start = [c for k, c in enumerate(self.fit_start) if k != i]
         self.fit_numer = None
         self.fit_result = None
         self._fit_changed()
@@ -338,6 +351,13 @@ class FitMixin:
         y, npx, _label = self._fit_spectrum_data()
         spectra, strong = [(y, npx)], []
         spec = self.fit_view()["spec"]
+        if len(self.fit_start) == len(spec["components"]):
+            # always from the starting positions and widths (the library's, or
+            # what you set with Edit), never from the last result: a fit on an
+            # area must not depend on the fit on the whole map before it
+            start = [dict(c, be=s["be"], fwhm=s["fwhm"])
+                     for c, s in zip(spec["components"], self.fit_start)]
+            spec = dict(spec, components=start)
         if self.fit_on is None and len(spec["components"]) >= 2:
             # a state that is strong in only a few pixels cannot be seen in the
             # mean of the whole map: its shape is pinned by the pixels where it
@@ -485,9 +505,16 @@ class FitMixin:
         self.fit_add_btn["menu"] = menu
         notes = []
         if self._fit_chi2 is not None and self._fit_chi2 > 5.0:
-            notes.append("The model does not describe this spectrum: the map "
-                         "may hold different forms of the same state in "
-                         "different places. Try Fit on an area.")
+            at_limit = self.fit_result is not None and any(
+                "limit" in n for n in self.fit_result.notes)
+            notes.append(
+                "The model does not describe this spectrum"
+                + (": a state is at the end of its allowed range, so widen "
+                   "its ± (Edit) or move its start there." if at_limit and
+                   self.fit_on is not None else
+                   ": the map may hold different forms of the same state in "
+                   "different places. Try Fit on an area." if self.fit_on is None
+                   else ".") )
         if self._fit_chi2 is not None:
             g = self._gain()
             notes.append(f"Reduced χ² {self._fit_chi2:.2f}"
