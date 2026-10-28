@@ -723,10 +723,10 @@ where the signal comes from:
   sites that lie side by side get a "SnapMap mosaic" page.
 * **Fit components** splits one core level into its chemical states, for example
   Si 2p into elemental Si and Si oxide. The *Fit* tab starts the components from
-  the tables (Si 2p: Si at 99.4 eV and SiO₂ at 103.4 eV as spin-orbit doublets;
-  another level: its main line, moved to the measured peak; *Add* offers the
+  the tables (Si 2p: Si at 99.4 eV and SiO₂ at 103.4 eV, Al 2p: Al at 72.5 eV and
+  Al₂O₃ at 75.0 eV, as spin-orbit doublets; another level: its main line, moved to the measured peak; *Add* offers the
   level's states from the chemical-state table or your own). Each position may
-  move ±0.5 eV (changeable per component), and a width or position that reaches
+  move ±0.5 eV (±0.8 eV for the Al states; changeable per component), and a width or position that reaches
   its limit is reported. *Fit spectrum* refines the positions and widths on the
   mean spectrum of the whole map, or of one of your areas (*Fit on*); the maps
   then come from those frozen shapes, solved for every pixel at once: one map

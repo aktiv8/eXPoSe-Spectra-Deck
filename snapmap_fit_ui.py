@@ -240,7 +240,8 @@ class FitMixin:
             if e["name"] == name:
                 return self._fit_add(snapfit.new_component(
                     e["name"], e["be"], e["fwhm"],
-                    doublet=snapfit.doublet_of_level(self._level_name())))
+                    doublet=snapfit.doublet_of_level(self._level_name()),
+                    be_range=e["be_range"] or snapfit.DEFAULT_BE_RANGE))
         return None
 
     def fit_add_custom(self, name="New", be=None, fwhm=1.0):

@@ -2,6 +2,24 @@
  "comment": "Literature-derived chemical-state binding energies, curated from KherveFitting's Peaks Library JSON files (github.com/KherveFitting/KherveFitting) -- each row's own 'source' cites the underlying paper when its containing folder names one (mostly the Biesinger group's Applied Surface Science handbook papers), else credits the Peaks Library file itself. 'be' is the position from the file's own worked example fit, not a guaranteed universal constant -- treat as a starting point for identification, not ground truth. Edit or extend this file freely. 'range' (present on states with 2+ independent worked-example observations in this table) is the min-max spread THIS APP'S OWN corpus shows for that exact state -- not an independently reported literature range; states with only one observation have no range and fall back to a caller-supplied window, as before.",
  "states": [
   {
+   "core_level": "Al 2p",
+   "state": "Al2p3/2 Al",
+   "be": 72.5,
+   "fwhm": 0.9,
+   "model": "GL (Area)",
+   "source": "Starting values set by the user for the SnapMap fit (Al 72.5 eV, Al2O3 75.0 eV, each allowed to move +/-0.8 eV); the FWHM is a generic starting width, not a measured one",
+   "be_range": 0.8
+  },
+  {
+   "core_level": "Al 2p",
+   "state": "Al2p3/2 Al2O3",
+   "be": 75.0,
+   "fwhm": 1.6,
+   "model": "GL (Area)",
+   "source": "Starting values set by the user for the SnapMap fit (Al 72.5 eV, Al2O3 75.0 eV, each allowed to move +/-0.8 eV); the FWHM is a generic starting width, not a measured one",
+   "be_range": 0.8
+  },
+  {
    "core_level": "Br 3d",
    "state": "Br3d5/2 Br-Lat",
    "be": 68.05,

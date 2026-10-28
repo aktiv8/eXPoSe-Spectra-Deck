@@ -1248,8 +1248,8 @@ class TestFitInTheDialog(unittest.TestCase):
         d.update()
         self.assertEqual(errors, [])
         comps = d.fit_spec["components"]
-        self.assertEqual([c["name"] for c in comps], ["Al"])
-        self.assertAlmostEqual(comps[0]["be"], 72.7, delta=0.4)
+        self.assertEqual([(c["name"], c["be"], c["be_range"]) for c in comps],
+                         [("Al", 72.5, 0.8), ("Al2O3", 75.0, 0.8)])
         self.assertIsNotNone(comps[0]["doublet"])                # the line table's
         lo, hi = d.fit_view()["spec"]["window"]
         self.assertTrue(68.0 <= lo < hi <= 80.0)                 # inside Al's range
@@ -1271,7 +1271,8 @@ class TestFitInTheDialog(unittest.TestCase):
         d.el_cb.current(names.index("Al 2p"))      # ... then the element changes
         d._element()
         d.set_mode("fit")                          # ... and only then the fit view
-        self.assertEqual([c["name"] for c in d.fit_spec["components"]], ["Al"])
+        self.assertEqual([c["name"] for c in d.fit_spec["components"]],
+                         ["Al", "Al2O3"])
 
     def test_a_window_outside_the_data_draws_a_message_not_a_traceback(self):
         d = self.fit_mode()

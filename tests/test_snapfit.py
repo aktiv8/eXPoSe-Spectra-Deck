@@ -65,12 +65,27 @@ class TestSeeds(unittest.TestCase):
         c = snapfit.seed_components("C 1s")            # many table states: one start
         self.assertEqual([(x["name"], x["be"], x["doublet"]) for x in c],
                          [("C", 284.8, None)])
-        al = snapfit.seed_components("Al 2p")           # no table states at all
-        self.assertEqual((al[0]["name"], al[0]["be"]), ("Al", 72.7))
-        self.assertAlmostEqual(al[0]["doublet"]["split"], 0.44, places=6)
         f = snapfit.seed_components("F 1s")
         self.assertEqual(f[0]["be"], 686.0)
         self.assertEqual(snapfit.seed_components("Xx 9z"), [])
+
+    def test_al_2p_is_seeded_with_the_metal_and_the_oxide_each_moving_0_8_ev(self):
+        al = snapfit.seed_components("Al 2p")
+        self.assertEqual([(c["name"], c["be"]) for c in al],
+                         [("Al", 72.5), ("Al2O3", 75.0)])
+        self.assertEqual([c["be_range"] for c in al], [0.8, 0.8])
+        self.assertAlmostEqual(al[0]["doublet"]["split"], 0.44, places=6)
+        lib = {e["name"]: e for e in snapfit.library_states("Al 2p")}
+        self.assertEqual(lib["Al2O3"]["be_range"], 0.8)
+        # Si keeps the default room, and a state without one falls back to it
+        self.assertEqual({c["be_range"] for c in snapfit.seed_components("Si 2p")},
+                         {0.5})
+        self.assertEqual(snapfit.library_states("Si 2p")[0]["be_range"], None)
+        # the window leaves the larger room and the doublet inside it
+        be = np.linspace(86.0, 66.0, 321)
+        lo, hi = snapfit.suggest_window(be, al)
+        self.assertLess(lo, 72.5 - 0.8)
+        self.assertGreater(hi, 75.0 + 0.8 + 0.44)
 
     def test_the_seed_moves_to_the_measured_peak_but_only_nearby(self):
         be = np.linspace(292.0, 280.0, 241)
@@ -638,16 +653,23 @@ class TestOtherLevels(unittest.TestCase):
         f = snapfit.fraction(maps, [maps.names[0]])
         self.assertTrue(np.allclose(f[np.isfinite(f)], 1.0))
 
-    def test_an_al_2p_metal_and_oxide_pair_with_the_line_tables_doublet(self):
-        seed = snapfit.seed_components("Al 2p")
-        self.assertEqual(seed[0]["be"], 72.7)
-        oxide = snapfit.new_component("Al2O3", 74.5, 1.3,
-                                      doublet=seed[0]["doublet"])
-        self.assertAlmostEqual(oxide["doublet"]["split"], 0.44, places=6)
-        spec = snapfit.sanitise({"components": seed + [oxide],
-                                 "window": [68.0, 80.0]})
-        self.assertEqual([c["name"] for c in spec["components"]],
-                         ["Al", "Al2O3"])
+    def test_an_al_2p_metal_and_oxide_pair_fits_with_the_wider_room(self):
+        # oxide 0.7 eV above its seed: beyond the default 0.5, inside the 0.8
+        cube, truth, spec = level_map((72.9, 75.7), (0.9, 1.5),
+                                      (lambda x: 400 * (1 - x),
+                                       lambda x: 100 + 500 * x), 66.0, 82.0)
+        be = np.array(cube.energy)
+        mean = cube.array3d().reshape(-1, len(be)).mean(axis=0)
+        seed = snapfit.seed_components("Al 2p", be=be, y=mean)
+        self.assertEqual([c["name"] for c in seed], ["Al", "Al2O3"])
+        start = {"components": seed,
+                 "window": snapfit.suggest_window(be, seed)}
+        res = snapfit.fit_mean(be, mean, 1486.6, start, n_pix=720)
+        got = {c["name"]: c["be"] for c in res.spec["components"]}
+        # (the test data are singlets, the model doublets: a centroid offset)
+        self.assertAlmostEqual(got["Al"], 72.9, delta=0.25)
+        self.assertAlmostEqual(got["Al2O3"], 75.7, delta=0.25)
+        self.assertFalse(any("limit" in n for n in res.notes))
 
 
 if __name__ == "__main__":

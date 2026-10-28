@@ -36,7 +36,8 @@ def _valid_range(r):
 
 def load_states(path=None):
     """The chemical-state table as a list of dicts (``core_level``, ``state``,
-    ``be``, ``fwhm``, ``model``, ``source``, optional ``range``); [] if the
+    ``be``, ``fwhm``, ``model``, ``source``, optional ``range`` and
+    ``be_range``, the eV a fit may move the position from this value); [] if the
     file is missing or unreadable. A present-but-malformed ``range`` is
     dropped (not the whole entry), the same as a state with none at all."""
     try:
@@ -48,6 +49,11 @@ def load_states(path=None):
                     and isinstance(e.get("be"), (int, float))):
                 if "range" in e and not _valid_range(e["range"]):
                     e = {k: v for k, v in e.items() if k != "range"}
+                r = e.get("be_range")
+                if "be_range" in e and not (
+                        isinstance(r, (int, float)) and not isinstance(r, bool)
+                        and 0 < r <= 5):
+                    e = {k: v for k, v in e.items() if k != "be_range"}
                 out.append(e)
         return out
     except (OSError, ValueError, AttributeError):

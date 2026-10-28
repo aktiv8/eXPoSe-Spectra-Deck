@@ -214,9 +214,11 @@ def library_states(core_level, states=None):
         label = state.split(None, 1)
         bes = sorted(float(r["be"]) for r in rs)
         fw = sorted(float(r["fwhm"]) for r in rs if _num(r.get("fwhm")))
+        room = [float(r["be_range"]) for r in rs if _num(r.get("be_range"))]
         out.append({"name": label[1] if len(label) > 1 else state,
                     "be": bes[len(bes) // 2],
                     "fwhm": fw[len(fw) // 2] if fw else 1.0,
+                    "be_range": max(room) if room else None,
                     "source": rs[0].get("source", "")})
     return sorted(out, key=lambda e: e["be"])
 
@@ -272,7 +274,8 @@ def seed_components(core_level, states=None, lines=None, be=None, y=None):
     doublet = doublet_of_level(core_level, lines)
     lib = library_states(core_level, states)
     if 0 < len(lib) <= MAX_SEEDED_STATES:
-        return [new_component(e["name"], e["be"], e["fwhm"], doublet=doublet)
+        return [new_component(e["name"], e["be"], e["fwhm"], doublet=doublet,
+                              be_range=e["be_range"] or DEFAULT_BE_RANGE)
                 for e in lib]
     line = main_line(core_level, lines)
     if line is None:

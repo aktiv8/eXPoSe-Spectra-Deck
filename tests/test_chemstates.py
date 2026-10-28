@@ -37,6 +37,26 @@ class TestTable(unittest.TestCase):
             self.assertTrue(0 < e["be"] < 1500, e)
             self.assertTrue(e["source"])
 
+    def test_al_2p_has_the_metal_and_oxide_with_their_room_to_move(self):
+        al = {e["state"]: e for e in STATES if e["core_level"] == "Al 2p"}
+        self.assertEqual(al["Al2p3/2 Al"]["be"], 72.5)
+        self.assertEqual(al["Al2p3/2 Al2O3"]["be"], 75.0)
+        for e in al.values():
+            self.assertEqual(e["be_range"], 0.8)
+            self.assertIn("user", e["source"])
+
+    def test_a_malformed_be_range_is_dropped_not_the_state(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, "s.json")
+            rows = [{"core_level": "X 1s", "state": "a", "be": 1.0, "be_range": v}
+                    for v in (0.8, -1, "x", 99, True)]
+            with open(p, "w", encoding="utf-8") as fh:
+                json.dump({"states": rows}, fh)
+            got = cs.load_states(p)
+        self.assertEqual(len(got), 5)
+        self.assertEqual([e.get("be_range") for e in got],
+                         [0.8, None, None, None, None])
+
     def test_si_2p_has_the_elemental_and_oxide_states(self):
         si = {e["state"]: e for e in STATES if e["core_level"] == "Si 2p"}
         self.assertEqual(si["Si2p3/2 Si"]["be"], 99.4)
