@@ -1572,8 +1572,11 @@ def build_chapters(doc):
         "The reduced chi-square is scaled by the noise of the map (Avantage "
         "SnapMap values are scaled counts), so about 1 means the model "
         "explains the data to the noise. A level with several states (C 1s, "
-        "O 1s) needs more components than the one it starts with. Suboxides "
-        "are not seeded; add them yourself if the data call for them."
+        "O 1s) needs more components than the one it starts with. The fit "
+        "deliberately considers only the elemental and the fully oxidised "
+        "state (Si and SiO2 for Si 2p) and ignores suboxides: image data are "
+        "too noisy to separate intermediate states, so a feature between the "
+        "two is taken up by the nearer component or shows in the residual map."
     )
     add_figure(doc, "The SnapMap viewer: the element map and the selected area's spectrum.")
 

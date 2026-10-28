@@ -736,7 +736,10 @@ where the signal comes from:
   (where the model fails) and the fit drawn over the spectrum with each
   component's share. A table gives each component's position, width and area
   with uncertainties, and your areas report the mean fraction inside them.
-  Pictures and report figures keep the fit.
+  Pictures and report figures keep the fit. Only the elemental and the fully
+  oxidised state are considered (Si and SiO₂ for Si 2p); suboxides are
+  deliberately ignored, because image data are too noisy to separate
+  intermediate states.
 * **On camera image** lays the map over the picture taken at the same spot
   (the slider sets how much of the picture shows through).
 * **Save…** writes a picture (PNG, PDF or SVG, drawn for paper, with the map
