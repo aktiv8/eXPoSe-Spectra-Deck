@@ -4471,8 +4471,14 @@ class Workspace:
             t = self.snapmap_target({"ref": ref})
             if t is not None and t[1] is not region:
                 tiles.append(t[1])
+        layers = []
+        if s["mode"] != "single":
+            for ly in s["layers"]:
+                t = self.snapmap_target({"ref": ly["ref"]})
+                if t is not None:
+                    layers.append((t[1], ly["window"]))
         snapmapfig.draw_view(fig, rect, s, region, pal, cmap, photo=photo,
-                             tiles=tiles)
+                             tiles=tiles, layers=layers)
         return True
 
     def snapmap_candidates(self, parser, region):

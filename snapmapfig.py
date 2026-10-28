@@ -11,7 +11,13 @@ HTML page with the same result::
      "rois": [{"shape": "rect" | "ellipse", "rect": [x0, y0, x1, y1],
                "label": str}, ...],           # µm, the map's own frame
      "smooth": {"method": "None", "strength": 0.5},
-     "show_spectrum": bool, "scalebar": bool}
+     "show_spectrum": bool, "scalebar": bool,
+     "mode": "single" | "grid" | "composite" | "ratio",
+     "layers": [{"ref": <region_ref>, "window": [lo, hi] | None}, ...]}
+
+``mode`` other than single lays several elements of one map file on the one
+grid: *grid* = every layer as its own small map, *composite* = the first three
+as red, green and blue, *ratio* = the first divided by the second.
 
 Nothing here edits the cube: the window, background and ROI are applied on the
 way out, as everywhere else in the app.
@@ -30,8 +36,13 @@ DEFAULTS = {
     "kind": KIND, "ref": None, "window": None, "background": False,
     "scale": "Viridis", "overlay": {"on": False, "alpha": 0.65}, "rois": [],
     "smooth": {"method": "None", "strength": 0.5}, "show_spectrum": True,
-    "scalebar": True, "tiles": [],
+    "scalebar": True, "tiles": [], "mode": "single", "layers": [],
 }
+MODES = ("single", "grid", "composite", "ratio")
+MODE_NAMES = {"single": "Single map", "grid": "Element grid",
+              "composite": "RGB composite", "ratio": "Ratio map"}
+MAX_LAYERS = 12
+RATIO_FLOOR = 0.05      # a denominator under this share of its 99th percentile is blank
 
 
 def _num(v):
@@ -64,9 +75,29 @@ def sanitise(spec) -> dict:
         "strength": float(min(1.0, max(0.0, s))) if _num(s) else 0.5}
     out["show_spectrum"] = bool(spec.get("show_spectrum", True))
     out["scalebar"] = bool(spec.get("scalebar", True))
+    out["mode"] = spec.get("mode") if spec.get("mode") in MODES else "single"
+    out["layers"] = sanitise_layers(spec.get("layers"))
     tl = spec.get("tiles")
     out["tiles"] = ([dict(t) for t in tl if isinstance(t, dict)]
                     if isinstance(tl, (list, tuple)) else [])
+    return out
+
+
+def sanitise_layers(layers) -> list:
+    """``[{"ref", "window"}]`` with a reference dict each, a window of two
+    numbers or None (the map's own default), at most ``MAX_LAYERS``."""
+    out = []
+    for it in layers if isinstance(layers, (list, tuple)) else []:
+        ref = it.get("ref") if isinstance(it, dict) else None
+        if not isinstance(ref, dict):
+            continue
+        w = it.get("window")
+        out.append({"ref": dict(ref),
+                    "window": ([float(w[0]), float(w[1])]
+                               if isinstance(w, (list, tuple)) and len(w) == 2
+                               and all(_num(v) for v in w) else None)})
+        if len(out) == MAX_LAYERS:
+            break
     return out
 
 
@@ -151,24 +182,30 @@ def roi_masks(cube, rois):
     return [roi_mask(cube, r) for r in rois]
 
 
-def roi_stats(cube, window, background, rois) -> list:
+def roi_stats(cube, window, background, rois, image=None) -> list:
     """One row per area, from the map as shown (the counts summed over the
-    window): ``label, shape, px, area_um2, mean, sum, sd`` and ``ratio``, the
-    area's mean over the whole map's. An area with no pixel is left out."""
+    window, or the given ``image``): ``label, shape, px, area_um2, mean, sum,
+    sd`` and ``ratio``, the area's mean over the whole map's. An area with no
+    pixel is left out; blank (NaN) pixels are not counted."""
     import numpy as np
-    image = cube.image(window[0], window[1], background=background)
-    whole = float(np.mean(image)) if image.size else 0.0
+    if image is None:
+        image = cube.image(window[0], window[1], background=background)
+    image = np.asarray(image, dtype=float)
+    whole = float(np.nanmean(image)) if np.isfinite(image).any() else 0.0
     rows = []
     for r in rois:
         m = roi_mask(cube, r)
         if m is None:
             continue
         v = image[m]
+        v = v[np.isfinite(v)]
+        if v.size == 0:
+            continue
         mean = float(v.mean())
         rows.append({
             "label": r.get("label", ""), "shape": r.get("shape", "rect"),
-            "px": int(m.sum()),
-            "area_um2": float(m.sum() * abs(cube.dx * cube.dy)),
+            "px": int(v.size),
+            "area_um2": float(v.size * abs(cube.dx * cube.dy)),
             "mean": mean, "sum": float(v.sum()),
             "sd": float(v.std(ddof=1)) if v.size > 1 else 0.0,
             "ratio": mean / whole if whole else float("nan")})
@@ -222,6 +259,9 @@ def describe(spec, region=None) -> str:
     if s["background"]:
         parts.append("background removed")
     parts.append(f"{s['scale']} colours")
+    if s["mode"] != "single" and s["layers"]:
+        parts.append(f"{MODE_NAMES[s['mode']].lower()} of "
+                     f"{len(s['layers'])} elements")
     if s["rois"]:
         n = len(s["rois"])
         parts.append("1 area of interest marked" if n == 1
@@ -232,7 +272,7 @@ def describe(spec, region=None) -> str:
 
 
 def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
-              unit_mark=None, tiles=None):
+              unit_mark=None, tiles=None, layers=None):
     """Draw a view onto ``fig`` inside ``rect`` = ``(left, bottom, right, top)``
     figure fractions (None = the whole figure) and return its axes
     ``(ax_map, ax_spec or None)``.
@@ -241,6 +281,7 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
     ``pal`` needs ``plot_bg``, ``plot_fg``, ``muted`` and ``accent``;
     ``photo`` is ``(PIL image, calibration)`` for the camera overlay.
     ``unit_mark`` is appended to the scale bar (e.g. "(approx.)").
+    ``layers`` = ``[(region, window)]`` for the modes other than single.
     ``tiles`` are further regions whose maps are laid beside this one by their
     stage positions (one canvas, one window, one colour range); the camera
     overlay and the area are not used then."""
@@ -248,6 +289,10 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
     s = sanitise(spec)
     cube = region.extra["cube"]
     window = tuple(s["window"]) if s["window"] else snapmap.default_window(cube)
+    if s["mode"] != "single" and layers and not tiles:
+        out = draw_layers(fig, rect, s, region, layers, pal, cmap, unit_mark)
+        if out is not None:
+            return out
     l, b, r, t = rect if rect else (0.0, 0.0, 1.0, 1.0)
     w, h = r - l, t - b
     show_spec = s["show_spectrum"]
@@ -324,19 +369,7 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
                 continue
             _outline_roi(ax_map, cube, roi, m, roi_colour(k))
     if s["scalebar"]:
-        length = nice_length(abs(right - left))
-        # the bar sits near the bottom edge of the map
-        ymin, ymax = ax_map.get_ylim()
-        by = ymin + (ymax - ymin) * 0.06
-        xmin, xmax = ax_map.get_xlim()
-        bx = xmin + (xmax - xmin) * 0.05
-        ax_map.plot([bx, bx + length], [by, by], color="white", lw=3,
-                    solid_capstyle="butt", zorder=6,
-                    path_effects=_outline())
-        txt = f"{length:g} µm" + (f" {unit_mark}" if unit_mark else "")
-        ax_map.text(bx + length / 2, by + (ymax - ymin) * 0.025, txt,
-                    color="white", fontsize=8, ha="center", va="bottom",
-                    zorder=6, path_effects=_outline())
+        _scalebar(ax_map, abs(right - left), unit_mark)
 
     if ax_spec is not None:
         whole, spectra = mean_spectra(cube, masks, s["smooth"])
@@ -361,6 +394,21 @@ def draw_view(fig, rect, spec, region, pal, cmap, photo=None,
         ax_spec.set_ylabel("Counts per pixel", color=pal["plot_fg"], fontsize=9)
         ax_spec.set_title(region.name, fontsize=9, color=pal["plot_fg"])
     return ax_map, ax_spec
+
+
+def _scalebar(ax, width_um, unit_mark=None):
+    """A white bar of a round length near the bottom-left of the map."""
+    length = nice_length(width_um)
+    ymin, ymax = ax.get_ylim()
+    by = ymin + (ymax - ymin) * 0.06
+    xmin, xmax = ax.get_xlim()
+    bx = xmin + (xmax - xmin) * 0.05
+    ax.plot([bx, bx + length], [by, by], color="white", lw=3,
+            solid_capstyle="butt", zorder=6, path_effects=_outline())
+    txt = f"{length:g} µm" + (f" {unit_mark}" if unit_mark else "")
+    ax.text(bx + length / 2, by + (ymax - ymin) * 0.025, txt, color="white",
+            fontsize=8, ha="center", va="bottom", zorder=6,
+            path_effects=_outline())
 
 
 def _outline_roi(ax, cube, roi, mask, colour):
@@ -491,3 +539,172 @@ def mean_spectrum_of(cubes):
     for c in same:
         tot += np.asarray(c.total())
     return (tot / n).tolist(), len(same)
+
+
+# -- several elements of one map file on one grid -----------------------------------------
+def same_grid(a, b) -> bool:
+    """True when two maps have the very same pixels (what the elements of one
+    SnapMap file have), so images can be combined pixel by pixel."""
+    return (a.nx, a.ny) == (b.nx, b.ny) and all(
+        abs(x - y) <= 1e-6 * max(1.0, abs(x))
+        for x, y in ((a.x0, b.x0), (a.dx, b.dx), (a.y0, b.y0), (a.dy, b.dy)))
+
+
+def ratio_image(num, den, floor=RATIO_FLOOR):
+    """``num / den`` pixel by pixel, NaN where the denominator is not
+    positive or is under ``floor`` of its own 99th percentile (a ratio of
+    noise is not a map)."""
+    import numpy as np
+    num = np.asarray(num, dtype=float)
+    den = np.asarray(den, dtype=float)
+    ok = den > 0
+    if ok.any():
+        ok &= den >= floor * float(np.percentile(den[ok], 99))
+    out = np.full(num.shape, np.nan)
+    out[ok] = num[ok] / den[ok]
+    return out
+
+
+def unit_range(image, low=1.0, high=99.0):
+    """``image`` scaled 0..1 between its ``low`` and ``high`` percentiles."""
+    import numpy as np
+    vmin, vmax = snapmap.colour_range(image, low, high)
+    return np.clip((np.asarray(image, dtype=float) - vmin) / (vmax - vmin),
+                   0.0, 1.0)
+
+
+def rgb_image(images):
+    """``(ny, nx, 3)`` from up to three images (red, green, blue), each
+    scaled on its own 1st-99th percentile range; a missing channel is 0."""
+    import numpy as np
+    first = np.asarray(images[0])
+    out = np.zeros(first.shape + (3,))
+    for k, im in enumerate(images[:3]):
+        out[..., k] = unit_range(im)
+    return out
+
+
+def layer_image(layer, background):
+    """``(cube, window, image)`` of one ``(region, window)`` layer."""
+    rg, win = layer
+    cube = rg.extra["cube"]
+    win = tuple(win) if win else snapmap.default_window(cube)
+    return cube, win, cube.image(win[0], win[1], background=background)
+
+
+def mode_image(spec, region, layers):
+    """The image a ratio view shows (numerator over denominator), else None.
+    Layers that are not on the region's pixels are ignored."""
+    s = sanitise(spec)
+    cube = region.extra["cube"]
+    use = [ly for ly in layers if same_grid(cube, ly[0].extra["cube"])]
+    if s["mode"] != "ratio" or len(use) < 2:
+        return None
+    a = layer_image(use[0], s["background"])[2]
+    b = layer_image(use[1], s["background"])[2]
+    return ratio_image(a, b)
+
+
+def _map_axes(fig, box, pal):
+    ax = fig.add_axes(box)
+    ax.set_facecolor(pal["plot_bg"])
+    ax.tick_params(colors=pal["muted"], labelsize=8)
+    for sp in ax.spines.values():
+        sp.set_color(pal["muted"])
+    return ax
+
+
+def _rois_on(ax, cube, rois):
+    for k, (roi, m) in enumerate(zip(rois, roi_masks(cube, rois))):
+        if m is not None:
+            _outline_roi(ax, cube, roi, m, roi_colour(k))
+
+
+def draw_layers(fig, rect, s, region, layers, pal, cmap, unit_mark=None):
+    """The multi-element modes of :func:`draw_view`; returns ``(first axes,
+    None)``, or None when there are too few usable layers (the caller then
+    draws the single map)."""
+    import numpy as np
+    from matplotlib.lines import Line2D
+    cube = region.extra["cube"]
+    use = [ly for ly in layers if same_grid(cube, ly[0].extra["cube"])]
+    mode = s["mode"]
+    need = {"grid": 2, "composite": 2, "ratio": 2}[mode]
+    if len(use) < need:
+        return None
+    use = use[:{"grid": MAX_LAYERS, "composite": 3, "ratio": 2}[mode]]
+    l, b, r, t = rect if rect else (0.0, 0.0, 1.0, 1.0)
+    w, h = r - l, t - b
+    ext = cube.extent()
+    left, right, bottom, top = ext
+    bg = s["background"]
+    rois = s["rois"]
+
+    if mode == "grid":
+        n = len(use)
+        cols = int(np.ceil(np.sqrt(n)))
+        rows = int(np.ceil(n / cols))
+        cw, ch = 0.94 * w / cols, 0.90 * h / rows
+        first = None
+        for k, ly in enumerate(use):
+            cx, cy = k % cols, k // cols
+            box = [l + 0.05 * w + cx * cw, b + h * 0.95 - (cy + 1) * ch + 0.10 * ch,
+                   cw * 0.72, ch * 0.66]
+            ax = _map_axes(fig, box, pal)
+            _c, win, img = layer_image(ly, bg)
+            vmin, vmax = snapmap.colour_range(img)
+            im = ax.imshow(img, extent=ext, origin="upper", cmap=cmap,
+                           interpolation="nearest", vmin=vmin, vmax=vmax)
+            ax.set_xlim(left, right)
+            ax.set_ylim(bottom, top)
+            ax.set_title(f"{ly[0].name}  {min(win):.1f}–{max(win):.1f}",
+                         fontsize=8, color=pal["plot_fg"])
+            ax.tick_params(labelsize=6)
+            cb = fig.colorbar(im, ax=ax, fraction=0.05, pad=0.02)
+            cb.ax.tick_params(colors=pal["muted"], labelsize=6)
+            _rois_on(ax, cube, rois)
+            if k == 0 and s["scalebar"]:
+                _scalebar(ax, abs(right - left), unit_mark)
+            first = first or ax
+        return first, None
+
+    ax = _map_axes(fig, [l + 0.10 * w, b + 0.10 * h, 0.72 * w, 0.78 * h], pal)
+    ax.set_xlabel("X (µm)", color=pal["plot_fg"], fontsize=9)
+    ax.set_ylabel("Y (µm)", color=pal["plot_fg"], fontsize=9)
+    if mode == "composite":
+        imgs, handles = [], []
+        for k, ly in enumerate(use):
+            _c, win, img = layer_image(ly, bg)
+            imgs.append(img)
+            handles.append(Line2D([0], [0], color=("#FF5050", "#40E060",
+                                                   "#5080FF")[k], lw=4,
+                                  label=f"{ly[0].name}  {min(win):.1f}–"
+                                        f"{max(win):.1f}"))
+        ax.imshow(rgb_image(imgs), extent=ext, origin="upper",
+                  interpolation="nearest")
+        ax.legend(handles=handles, loc="upper right", fontsize=8,
+                  facecolor="black", edgecolor="none", framealpha=0.65,
+                  labelcolor="white")
+        ax.set_title("RGB composite  (each channel on its own 1–99 % range)",
+                     fontsize=9, color=pal["plot_fg"])
+    else:
+        img = mode_image(s, region, use)
+        try:
+            cmap = cmap.with_extremes(bad=pal["plot_bg"])
+        except Exception:
+            pass
+        vmin, vmax = snapmap.colour_range(img)
+        im = ax.imshow(img, extent=ext, origin="upper", cmap=cmap,
+                       interpolation="nearest", vmin=vmin, vmax=vmax)
+        ax.set_title(f"{use[0][0].name} / {use[1][0].name}", fontsize=9,
+                     color=pal["plot_fg"])
+        cb = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.02)
+        cb.ax.tick_params(colors=pal["muted"], labelsize=8)
+        cb.set_label("ratio of summed counts", color=pal["plot_fg"],
+                     fontsize=8)
+    ax.set_xlim(left, right)
+    ax.set_ylim(bottom, top)
+    _rois_on(ax, cube, rois)
+    if s["scalebar"]:
+        _scalebar(ax, abs(right - left), unit_mark)
+    return ax, None

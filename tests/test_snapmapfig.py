@@ -278,6 +278,141 @@ def np_nanmax(a):
     return float(numpy.nanmax(a))
 
 
+def title_of(ax):
+    """An axes' title whichever side the active style puts it."""
+    return ax.get_title(loc="left") or ax.get_title()
+
+
+def element_cubes():
+    """Three elements of one map file on one pixel grid: C 1s bright on the
+    left, O 1s bright on the right, N 1s weak and flat."""
+    import snapmap
+    nx, ny, ne = 6, 4, 30
+    out = []
+    for name, centre, left in (("C 1s", 12, 1.0), ("O 1s", 18, -1.0),
+                               ("N 1s", 15, 0.0)):
+        blocks = []
+        for iy in range(ny):
+            for ix in range(nx):
+                f = (1.0 - 0.25 * left * (ix - 2.5)) if left else 0.4
+                y = [20 + 80 * f * 2.718 ** (-((c - centre) / 2.0) ** 2)
+                     for c in range(ne)]
+                blocks.append(((ix, iy), y))
+        c = snapmap.build([300.0 - 0.5 * i for i in range(ne)], nx, ny,
+                          -25.0, 10.0, -15.0, 10.0, blocks)
+        c.stage_x_mm, c.stage_y_mm = 10.0, 20.0
+        out.append((name, c))
+    return out
+
+
+@unittest.skipUnless(HAVE_PLOT, "numpy / matplotlib not available")
+class TestLayerHelpers(unittest.TestCase):
+    def test_a_ratio_leaves_blank_where_the_denominator_is_noise(self):
+        import numpy as np
+        num = np.array([[100.0, 400.0], [6.0, 8.0]])
+        den = np.array([[50.0, 100.0], [0.0, 100.0]])
+        out = snapmapfig.ratio_image(num, den)
+        self.assertEqual(out[0, 0], 2.0)
+        self.assertEqual(out[0, 1], 4.0)
+        self.assertTrue(np.isnan(out[1, 0]))                 # zero
+        self.assertAlmostEqual(out[1, 1], 0.08)
+        tiny = snapmapfig.ratio_image(num, np.array([[100.0, 100.0],
+                                                     [100.0, 1.0]]))
+        self.assertTrue(np.isnan(tiny[1, 1]))                # under 5 % of p99
+
+    def test_rgb_channels_are_scaled_on_their_own_range(self):
+        import numpy as np
+        a = np.linspace(0, 1000, 12).reshape(3, 4)
+        b = np.linspace(0, 1, 12).reshape(3, 4)
+        rgb = snapmapfig.rgb_image([a, b])
+        self.assertEqual(rgb.shape, (3, 4, 3))
+        self.assertAlmostEqual(float(rgb[..., 0].max()), 1.0, places=6)
+        self.assertAlmostEqual(float(rgb[..., 1].max()), 1.0, places=6)
+        self.assertEqual(float(rgb[..., 2].max()), 0.0)      # no blue given
+
+    def test_only_maps_on_the_same_pixels_combine(self):
+        (_, a), (_, b), _ = element_cubes()
+        self.assertTrue(snapmapfig.same_grid(a, b))
+        b.dx = 20.0
+        self.assertFalse(snapmapfig.same_grid(a, b))
+
+    def test_modes_and_layers_are_sanitised(self):
+        s = snapmapfig.sanitise({"mode": "bogus"})
+        self.assertEqual((s["mode"], s["layers"]), ("single", []))
+        s = snapmapfig.sanitise({"mode": "ratio", "layers": [
+            {"ref": {"file": "f"}, "window": [1, 2]}, {"ref": 3}, {"x": 1},
+            {"ref": {"file": "g"}, "window": "no"}]})
+        self.assertEqual(s["mode"], "ratio")
+        self.assertEqual([l["window"] for l in s["layers"]], [[1.0, 2.0], None])
+        self.assertEqual(snapmapfig.sanitise(json.loads(json.dumps(s))), s)
+        self.assertIn("ratio map of 2 elements", snapmapfig.describe(s))
+
+
+@unittest.skipUnless(HAVE_PLOT, "numpy / matplotlib not available")
+class TestLayerDrawing(unittest.TestCase):
+    def setUp(self):
+        self.pairs = element_cubes()
+        self.regions = [cube_region(c, n, "S1") for n, c in self.pairs]
+        self.layers = [(r, None) for r in self.regions]
+
+    def draw(self, mode, layers=None, **spec):
+        from matplotlib.figure import Figure
+        fig = Figure(figsize=(10, 5))
+        axes = snapmapfig.draw_view(
+            fig, None, dict(spec, mode=mode), self.regions[0], themes.PRINT,
+            themes.scale_colourmap("Viridis", False, themes.PRINT),
+            layers=self.layers if layers is None else layers)
+        return fig, axes
+
+    def test_a_grid_has_one_map_and_one_colour_bar_per_element(self):
+        fig, (ax, spec_ax) = self.draw("grid")
+        self.assertIsNone(spec_ax)
+        titles = [title_of(a) for a in fig.axes if title_of(a)]
+        self.assertEqual(len(titles), 3)
+        self.assertTrue(titles[0].startswith("C 1s"))
+        self.assertEqual(len(fig.axes), 6)           # three maps, three colour bars
+
+    def test_a_composite_says_which_element_is_which_colour(self):
+        fig, (ax, _s) = self.draw("composite")
+        labels = [t.get_text() for t in ax.get_legend().get_texts()]
+        self.assertEqual(len(labels), 3)
+        self.assertTrue(labels[0].startswith("C 1s"))
+        img = ax.images[0].get_array()
+        self.assertEqual(img.shape[-1], 3)
+        # C is brighter on the left, O on the right: red wins left, green right
+        self.assertGreater(img[0, 0, 0], img[0, 0, 1])
+        self.assertGreater(img[0, -1, 1], img[0, -1, 0])
+
+    def test_a_ratio_map_is_the_first_over_the_second(self):
+        import numpy as np
+        fig, (ax, _s) = self.draw("ratio")
+        want = snapmapfig.ratio_image(
+            self.pairs[0][1].image(*snapmapfig.snapmap.default_window(
+                self.pairs[0][1])),
+            self.pairs[1][1].image(*snapmapfig.snapmap.default_window(
+                self.pairs[1][1])))
+        got = np.asarray(ax.images[0].get_array(), dtype=float)
+        self.assertTrue(np.allclose(got, want, equal_nan=True))
+        self.assertEqual(title_of(ax), "C 1s / O 1s")
+        self.assertGreater(got[0, 0], got[0, -1])    # C/O falls to the right
+
+    def test_areas_are_outlined_on_the_new_views_too(self):
+        cube = self.pairs[0][1]
+        rois = [snapmapfig.new_roi(snapmapfig.roi_rect_of_pixel(cube, 1, 1))]
+        for mode in ("grid", "composite", "ratio"):
+            fig, (ax, _s) = self.draw(mode, rois=rois)
+            self.assertEqual(len(ax.patches), 1, mode)
+
+    def test_too_few_elements_fall_back_to_the_single_map(self):
+        fig, (ax, spec_ax) = self.draw("composite", layers=self.layers[:1])
+        self.assertIsNotNone(spec_ax)                # the map and spectrum view
+
+    def test_elements_on_other_pixels_are_left_out(self):
+        self.pairs[1][1].dx = 25.0
+        fig, (ax, spec_ax) = self.draw("ratio", layers=self.layers[:2])
+        self.assertIsNotNone(spec_ax)                # only one usable: single map
+
+
 @unittest.skipUnless(HAVE_MPL, "matplotlib / Tk not available")
 class TestFigureInTheApp(unittest.TestCase):
     @classmethod
@@ -494,6 +629,120 @@ class TestFigureInTheApp(unittest.TestCase):
         fig = self.ws.add_figure("plain")
         self.assertFalse(snapmapfig.is_view(fig["state"]))
         self.assertIn("group_by", fig["state"])
+
+
+@unittest.skipUnless(HAVE_MPL, "matplotlib / Tk not available")
+class TestModesInTheApp(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        try:
+            cls.root = tk.Tk()
+        except tk.TclError:
+            raise unittest.SkipTest("no display")
+        cls.root.withdraw()
+        cls.rc = dict(ee.matplotlib.rcParams)
+        cls.regions = [cube_region(c, n, "S1") for n, c in element_cubes()]
+        cls.parser = doc("e.vms", cls.regions)
+        cls._load = ee.load_file
+        ee.load_file = lambda p: cls.parser
+        cls.ws = ee.Workspace(cls.root)
+        cls.ws._add_file("e.vms", file_id="e", refresh=False)
+        cls.ws._finish_adding()
+
+    @classmethod
+    def tearDownClass(cls):
+        ee.load_file = cls._load
+        ee.matplotlib.rcParams.update(cls.rc)
+        cls.root.destroy()
+
+    def setUp(self):
+        self.ws.figures.clear()
+
+    def dialog(self, **kw):
+        import snapmap_ui
+        dlg = snapmap_ui.SnapMapDialog(self.root, self.ws, self.parser,
+                                       self.regions[0], **kw)
+        self.addCleanup(dlg.destroy)
+        return dlg
+
+    def test_each_mode_draws_and_the_rows_follow_the_mode(self):
+        dlg = self.dialog()
+        self.assertEqual(dlg.effective_mode(), "single")
+        dlg.set_mode("composite")
+        self.assertEqual(dlg.effective_mode(), "composite")
+        self.assertEqual([r[0].get() for r in dlg.layer_rows],
+                         ["C 1s", "O 1s", "N 1s"])
+        self.assertIsNone(dlg.ax_spec)               # no spectrum panel
+        dlg.set_mode("ratio")
+        self.assertEqual(dlg._row_count(), 2)
+        self.assertEqual(title_of(dlg.ax_map), "C 1s / O 1s")
+        dlg.set_mode("grid")
+        self.assertEqual(len([a for a in dlg.fig.axes if title_of(a)]), 3)
+        dlg.set_mode("single")
+        self.assertIsNotNone(dlg.ax_spec)
+
+    def test_a_ratio_gets_its_own_area_numbers_and_a_composite_none(self):
+        import numpy as np
+        dlg = self.dialog()
+        dlg.set_mode("ratio")
+        cube = self.regions[0].extra["cube"]
+        dlg.add_roi(snapmapfig.roi_rect_of_pixel(cube, 0, 0))
+        row, = dlg.stats()
+        img = dlg._image()
+        self.assertAlmostEqual(row["mean"], float(img[0, 0]))
+        self.assertEqual(len(dlg.area_tree.get_children()), 1)
+        dlg.set_mode("composite")
+        self.assertEqual(dlg.stats(), [])
+        self.assertEqual(len(dlg.area_tree.get_children()), 0)
+        self.assertIn("single map and the ratio map", dlg.area_note.cget("text"))
+
+    def test_changing_an_element_and_its_window_redraws(self):
+        dlg = self.dialog()
+        dlg.set_mode("ratio")
+        dlg.layer_rows[1][0].set("N 1s")
+        dlg._layer_changed(1)
+        self.assertEqual(title_of(dlg.ax_map), "C 1s / N 1s")
+        before = dlg._image().copy()
+        dlg.layer_rows[0][1].set("296.0")
+        dlg.layer_rows[0][2].set("298.0")
+        dlg._layer_changed()
+        import numpy as np
+        self.assertFalse(np.allclose(dlg._image(), before, equal_nan=True))
+        spec = dlg.view_spec()
+        self.assertEqual(spec["layers"][0]["window"], [296.0, 298.0])
+
+    def test_a_mode_is_saved_in_the_figure_and_comes_back(self):
+        dlg = self.dialog()
+        dlg.set_mode("composite")
+        dlg.layer_rows[2][0].set("—")                 # only red and green
+        dlg._layer_changed()
+        fig = dlg.save_as_figure("rg")
+        st = fig["state"]
+        self.assertEqual(st["mode"], "composite")
+        self.assertEqual(len(st["layers"]), 2)
+        self.assertEqual(len(self.ws._figure_pngs(fig, dpi=50)), 1)
+        for mode in ("grid", "ratio"):
+            dlg.set_mode(mode)
+            f = dlg.save_as_figure(mode)
+            self.assertEqual(len(self.ws._deck_images(1, f)), 1, mode)
+        again = self.dialog(view=st)
+        self.assertEqual(again.effective_mode(), "composite")
+        self.assertEqual(again.layer_rows[1][0].get(), "O 1s")
+        path = os.path.join(tempfile.gettempdir(), "snapmap_modes.png")
+        self.assertTrue(again.save_picture(path, spectrum=False))
+        self.addCleanup(os.remove, path)
+
+    def test_a_mosaic_and_a_mode_exclude_each_other(self):
+        dlg = self.dialog()
+        dlg.set_mode("grid")
+        dlg.choose_tiles([(self.parser, self.regions[1])])
+        self.assertEqual(dlg.mode.get(), "single")
+        self.assertEqual(dlg.view_spec()["layers"], [])
+        dlg.choose_tiles([])
+        dlg.set_mode("grid")
+        self.assertEqual(dlg.effective_mode(), "grid")
+        dlg.choose_tiles([(self.parser, self.regions[1])])
+        self.assertEqual(dlg.effective_mode(), "single")
 
 
 if __name__ == "__main__":
