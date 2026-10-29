@@ -4344,25 +4344,110 @@ class Workspace:
         self._schedule_render()
         self._update_title()
 
-    def _panel_menu(self, event):
-        """Right-click on a panel: its own view, normalisation, offset, z
-        axis, order and fit layers (all optional; the page's controls stay
-        the default for panels that don't set them)."""
-        key = self._axmap.get(event.inaxes)
-        if key is None:
-            return
+    # -- right-click menus: Spectrum / Fit and peaks / Layout / Save --------
+    @staticmethod
+    def _mark(on, text):
+        return ("✓ " if on else "    ") + text
+
+    def _popup_menus(self, attr, names):
+        """The popup menus ``names`` (made once, coloured for the theme, kept
+        in ``self.<attr>``), each emptied for a fresh fill."""
+        menus = getattr(self, attr, None)
+        if menus is None:
+            menus = {n: self._menu(self.root) for n in names}
+            setattr(self, attr, menus)
+        for m in menus.values():
+            m.delete(0, "end")
+        return menus
+
+    def _fill_layout_menu(self, menus, key=None):
+        """The Layout section: the order of the panels, the page layout (the
+        shape and size of each position, which a panel moved there takes on)
+        and the page's columns and shape. ``key`` is the clicked panel; the
+        background menu passes None and gets only the page-wide entries."""
+        lay, mark = menus["layout"], self._mark
+        reset_order = dict(
+            label="Reset panel order",
+            state="normal" if self.panel_order else "disabled",
+            command=self.reset_panel_order)
+        reset_layout = dict(
+            label="Reset page layout",
+            state="normal" if self.panel_slots else "disabled",
+            command=self.reset_page_layout)
+        if key is not None:
+            shown = [k for k, _ in self._groups()]
+            pos = shown.index(key) if key in shown else 0
+            for label, how, off in (
+                    ("Move panel to first", "first", pos == 0),
+                    ("Move panel earlier", "earlier", pos == 0),
+                    ("Move panel later", "later", pos >= len(shown) - 1),
+                    ("Move panel to last", "last", pos >= len(shown) - 1)):
+                lay.add_command(
+                    label=label, state="disabled" if off else "normal",
+                    command=lambda how=how: self.move_panel(key, how))
+            lay.add_command(**reset_order)
+            lay.add_separator()
+            # the layout belongs to positions on the page: a panel moved
+            # here takes on this position's shape and size
+            slot_i = pos - self.panel_start
+            slot = panelview.slot_at(self.panel_slots, slot_i)
+            lay.add_command(label=f"Page layout, position {slot_i + 1}",
+                            state="disabled")
+            menus["shape"].add_command(
+                label=mark("shape" not in slot, "Page setting"),
+                command=lambda: self._set_slot(slot_i, "shape", None))
+            for sub, name, values, current in (
+                    (menus["shape"], "shape", list(panelview.SHAPES),
+                     slot.get("shape")),
+                    (menus["span"], "span", list(panelview.SPANS),
+                     slot.get("span", "1 × 1"))):
+                for v in values:
+                    sub.add_command(
+                        label=mark(v == current, v),
+                        command=lambda v=v, name=name: self._set_slot(
+                            slot_i, name, v))
+            lay.add_cascade(label="Shape of this position",
+                            menu=menus["shape"])
+            lay.add_cascade(label="Size of this position", menu=menus["span"])
+            lay.add_command(**reset_layout)
+        else:
+            lay.add_command(**reset_order)
+            lay.add_command(**reset_layout)
+        lay.add_separator()
+        for sub, label, var, values, fresh in (
+                (menus["cols"], "Columns", self.cols_var,
+                 self.COLUMN_CHOICES, True),
+                (menus["pshape"], "Page shape", self.shape_var,
+                 list(self.SHAPE_CHOICES), False)):
+            for v in values:
+                sub.add_radiobutton(
+                    label=v, variable=var, value=v,
+                    command=lambda fresh=fresh: self._schedule_render(
+                        reset_page=fresh))
+            lay.add_cascade(label=label, menu=sub)
+
+    def _fill_save_menu(self, menus, key=None):
+        """The Save section; ``key`` adds saving just the clicked panel."""
+        sv = menus["save"]
+        if key is not None:
+            sv.add_command(label="Save this panel as image…",
+                           command=lambda: self.save_panel_image(key))
+        sv.add_command(label="Save plot image…", command=self.save_plot_image)
+        sv.add_command(label="Save this view as a figure…",
+                       command=self.save_view_as_figure)
+
+    def _build_panel_menu(self, key):
+        """The right-click menu of the panel ``key`` (not shown): its own
+        view, normalisation, offset, z axis and fit layers (all optional; the
+        page's controls stay the default for panels that don't set them),
+        grouped as Spectrum, Fit and peaks, Layout and Save."""
         look = self._look_for(key)
         series = panelview.is_series(look["view"])
-        if getattr(self, "_pmenu", None) is None:
-            self._pmenu = {n: self._menu(self.root) for n in
-                           ("root", "view", "norm", "offset", "z", "fit",
-                            "ident", "shape", "span")}
-        pm = self._pmenu
-        for m in pm.values():
-            m.delete(0, "end")
-
-        def mark(on, text):
-            return ("✓ " if on else "    ") + text
+        pm = self._popup_menus(
+            "_pmenu", ("root", "spectrum", "fitpeaks", "layout", "save",
+                       "view", "norm", "offset", "z", "fit", "ident",
+                       "shape", "span", "cols", "pshape"))
+        mark = self._mark
 
         def fill(sub, values, current, name, to_text=str):
             for v in values:
@@ -4375,24 +4460,6 @@ class Workspace:
              min(self.OFFSET_CHOICES, key=lambda o: abs(o - look["offset"])),
              "offset", lambda o: f"{o:g}×")
         fill(pm["z"], viewdata.Z_MODES, look["z_axis"], "z_axis")
-        shown = [k for k, _ in self._groups()]
-        pos = shown.index(key) if key in shown else 0
-        slot_i = pos - self.panel_start          # position on this page
-        slot = panelview.slot_at(self.panel_slots, slot_i)
-        for sub, name, values, current in (
-                (pm["shape"], "shape", list(panelview.SHAPES),
-                 slot.get("shape", "page")),
-                (pm["span"], "span", list(panelview.SPANS),
-                 slot.get("span", "1 × 1"))):
-            if name == "shape":
-                sub.add_command(
-                    label=mark(current == "page", "Page setting"),
-                    command=lambda: self._set_slot(slot_i, "shape", None))
-            for v in values:
-                sub.add_command(
-                    label=mark(v == current, v),
-                    command=lambda v=v, name=name: self._set_slot(
-                        slot_i, name, v))
         for layer in panelview.FIT_LAYERS:
             on = look["fit_show"].get(layer, True)
             pm["fit"].add_command(
@@ -4411,87 +4478,77 @@ class Workspace:
                 label=mark(on, panelview.IDENT_LABELS[layer]),
                 command=lambda layer=layer, on=on: self._set_panel_view(
                     key, "ident_show", (layer, not on)))
-        root = pm["root"]
-        root.add_command(label=f"Panel: {key}", state="disabled")
-        root.add_separator()
-        root.add_cascade(label="View", menu=pm["view"])
-        root.add_cascade(label="Normalise", menu=pm["norm"])
-        root.add_command(
+        sp = pm["spectrum"]
+        sp.add_cascade(label="View", menu=pm["view"])
+        sp.add_cascade(label="Normalise", menu=pm["norm"])
+        sp.add_command(
             label="Reset Range end points",
             state="normal" if key in self.ranges else "disabled",
             command=lambda: self.reset_range(key))
-        root.add_cascade(label="Offset", menu=pm["offset"],
-                         state="disabled" if series else "normal")
-        root.add_cascade(label="Z axis", menu=pm["z"],
-                         state="normal" if series else "disabled")
-        root.add_command(
+        sp.add_cascade(label="Offset", menu=pm["offset"],
+                       state="disabled" if series else "normal")
+        sp.add_cascade(label="Z axis", menu=pm["z"],
+                       state="normal" if series else "disabled")
+        sp.add_command(
             label=mark(look["reverse"], "Reverse order"),
             state="disabled" if series else "normal",
             command=lambda: self._set_panel_view(key, "reverse",
                                                  not look["reverse"]))
-        root.add_cascade(label="Fit layers", menu=pm["fit"],
+        sp.add_separator()
+        sp.add_command(label="Use the page's view",
+                       state="normal" if key in self.panel_views
+                       else "disabled",
+                       command=lambda: self.reset_panel_views(key))
+        fp = pm["fitpeaks"]
+        fp.add_cascade(label="Fit layers", menu=pm["fit"])
+        fp.add_cascade(label="Other possible lines", menu=pm["ident"])
+        fp.add_command(label="Identify peaks…",
+                       command=lambda: self.identify_panel(key))
+        self._fill_layout_menu(pm, key)
+        self._fill_save_menu(pm, key)
+        root = pm["root"]
+        root.add_command(label=f"Panel: {key}", state="disabled")
+        root.add_separator()
+        root.add_cascade(label="Spectrum", menu=sp)
+        root.add_cascade(label="Fit and peaks", menu=fp,
                          state="disabled" if series else "normal")
-        root.add_cascade(label="Other possible lines", menu=pm["ident"],
-                         state="disabled" if series else "normal")
-        root.add_command(label="Identify peaks…",
-                         state="disabled" if series else "normal",
-                         command=lambda: self.identify_panel(key))
-        root.add_separator()
-        for label, how, off in (
-                ("Move panel to first", "first", pos == 0),
-                ("Move panel earlier", "earlier", pos == 0),
-                ("Move panel later", "later", pos >= len(shown) - 1),
-                ("Move panel to last", "last", pos >= len(shown) - 1)):
-            root.add_command(label=label,
-                             state="disabled" if off else "normal",
-                             command=lambda how=how: self.move_panel(key, how))
-        root.add_command(label="Reset panel order",
-                         state="normal" if self.panel_order else "disabled",
-                         command=self.reset_panel_order)
-        root.add_separator()
-        # the layout belongs to positions on the page: a panel moved here
-        # takes on this position's shape and size
-        root.add_command(label=f"Page layout, position {slot_i + 1}",
-                         state="disabled")
-        root.add_cascade(label="Shape of this position", menu=pm["shape"])
-        root.add_cascade(label="Size of this position", menu=pm["span"])
-        root.add_command(label="Reset page layout",
-                         state="normal" if self.panel_slots else "disabled",
-                         command=self.reset_page_layout)
-        root.add_separator()
-        root.add_command(label="Save this view as a figure…",
-                         command=self.save_view_as_figure)
-        root.add_command(label="Save this panel as image…",
-                         command=lambda: self.save_panel_image(key))
-        root.add_command(label="Save plot image…",
-                         command=self.save_plot_image)
-        root.add_command(label="Use the page's view",
-                         state="normal" if key in self.panel_views
-                         else "disabled",
-                         command=lambda: self.reset_panel_views(key))
+        root.add_cascade(label="Layout", menu=pm["layout"])
+        root.add_cascade(label="Save", menu=pm["save"])
+        return root
+
+    def _panel_menu(self, event):
+        """Right-click on a panel (see ``_build_panel_menu``)."""
+        key = self._axmap.get(event.inaxes)
+        if key is None:
+            return
+        root = self._build_panel_menu(key)
         ev = event.guiEvent
         try:
             root.tk_popup(ev.x_root, ev.y_root)
         finally:
             root.grab_release()
 
+    def _build_figure_menu(self):
+        """The right-click menu of the plot outside every panel: the page-wide
+        Layout entries and Save (the panel menu needs a panel)."""
+        fm = self._popup_menus("_fmenu", ("root", "layout", "save", "cols",
+                                          "pshape"))
+        self._fill_layout_menu(fm)
+        self._fill_save_menu(fm)
+        fm["root"].add_cascade(label="Layout", menu=fm["layout"])
+        fm["root"].add_cascade(label="Save", menu=fm["save"])
+        return fm["root"]
+
     def _figure_menu(self, event):
-        """Right-click on the plot outside every panel: just the figure
-        command (the panel menu needs a panel)."""
+        """Right-click on the plot outside every panel."""
         if not self._groups():
             return
-        if getattr(self, "_fmenu", None) is None:
-            self._fmenu = self._menu(self.root)
-        self._fmenu.delete(0, "end")
-        self._fmenu.add_command(label="Save this view as a figure…",
-                                command=self.save_view_as_figure)
-        self._fmenu.add_command(label="Save plot image…",
-                                command=self.save_plot_image)
+        root = self._build_figure_menu()
         ev = event.guiEvent
         try:
-            self._fmenu.tk_popup(ev.x_root, ev.y_root)
+            root.tk_popup(ev.x_root, ev.y_root)
         finally:
-            self._fmenu.grab_release()
+            root.grab_release()
 
     # -- the current view as a saved figure --------------------------------
     def current_zoom(self):
