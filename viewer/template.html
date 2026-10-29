@@ -56,6 +56,12 @@
           <label class="field" id="issField" hidden title="The x axis of ion scattering spectra: kinetic energy, or the energy ratio E/E0 (needs the beam energy recorded in the file or saved in the app)">ISS axis
             <select id="issaxis"><option value="kinetic">Kinetic</option><option value="ratio">Energy ratio</option></select>
           </label>
+          <label class="field" title="How many plots sit side by side">Columns
+            <select id="cols"><option value="auto">Auto</option><option value="1">1</option><option value="2">2</option><option value="3">3</option><option value="4">4</option></select>
+          </label>
+          <label class="field" title="The shape of each plot">Shape
+            <select id="shape"><option value="auto">Auto</option><option value="p23">Portrait 2:3</option><option value="p34">Portrait 3:4</option><option value="square">Square</option><option value="l43">Landscape 4:3</option></select>
+          </label>
           <button type="button" id="resetzoom" title="Undo zooming on every panel">Reset zoom</button>
           <button type="button" id="csv" title="Download the ticked spectra as CSV">Download CSV</button>
           <button type="button" id="identify" aria-pressed="false" title="Click a peak on a plot to see which element lines lie near it">Identify peaks</button>

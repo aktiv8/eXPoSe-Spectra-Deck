@@ -779,6 +779,11 @@ function near(a, b, msg, tol) {
     check(bundle.every((f) => f.name !== 'quantification_repeat_groups.csv'), 'no quantification, no repeat file');
   }
 
+  // ---- the Columns / Shape boxes (the same shapes as the desktop's) ----
+  check(V.gridColumns('auto') === '' && V.gridColumns('0') === '' && V.gridColumns('9') === '', 'auto columns leave the CSS alone');
+  check(V.gridColumns('2') === 'repeat(2, minmax(0, 1fr))', 'two columns');
+  check(V.PANEL_SHAPES.p34 === 4 / 3 && V.PANEL_SHAPES.p23 === 1.5 && V.PANEL_SHAPES.square === 1 && V.PANEL_SHAPES.l43 === 0.75 && V.PANEL_SHAPES.auto === null, 'panel shapes');
+
   // ---- hostile text stays text: nothing in the pure half builds HTML ----
   const src = fs.readFileSync(path.join(__dirname, '..', 'viewer', 'viewer.js'), 'utf8');
   check(src.indexOf('innerHTML') < 0, 'viewer never uses innerHTML');

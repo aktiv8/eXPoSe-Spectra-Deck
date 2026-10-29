@@ -319,7 +319,11 @@ def group_regions(regions, mode="name"):
     return list(by_name.values())
 
 
-def _grid_dims(n):
+def _grid_dims(n, cols=None):
+    """(rows, columns) for ``n`` panels; ``cols`` forces the column count."""
+    if cols:
+        cols = max(1, min(int(cols), max(1, n)))
+        return math.ceil(max(1, n) / cols), cols
     cols = min(4, max(1, math.ceil(math.sqrt(n))))
     rows = min(4, math.ceil(n / cols))
     return rows, cols
@@ -633,6 +637,10 @@ class Workspace:
     x-range) are stacked with a y offset on one panel."""
 
     PANEL_CHOICES = ["Auto", "1", "2", "4", "6", "9", "12", "16"]
+    COLUMN_CHOICES = ["Auto", "1", "2", "3", "4"]
+    # panel shape as height / width (None = whatever the grid gives)
+    SHAPE_CHOICES = {"Auto": None, "Portrait 2:3": 1.5, "Portrait 3:4": 4 / 3,
+                     "Square": 1.0, "Landscape 4:3": 0.75}
     TRACE_CHOICES = ["All", "1", "3", "5", "10", "20", "50", "100"]
     IDENT_NEARBY_WINDOW = 2.0        # eV, matches xpslines.candidates' default
     NORM_MODES = list(panelview.NORMS)
@@ -1314,6 +1322,8 @@ class Workspace:
         cfg["norm"] = self.norm_var.get()
         cfg["offset"] = float(self.offset_var.get())
         cfg["panels_per_page"] = self.panels_var.get()
+        cfg["panel_columns"] = self.cols_var.get()
+        cfg["panel_shape"] = self.shape_var.get()
         cfg["traces_per_panel"] = self.traces_var.get()
         cfg["plot_style"] = plotstyle.changed(self.plot_style)
         cfg["plot_presets"] = dict(self.plot_presets)
@@ -1688,6 +1698,30 @@ class Workspace:
                 lambda e: self._schedule_render(reset_page=True))
         tip(pb, "How many panels to show at once. The mouse wheel scrolls "
                 "through the rest.")
+        self.footer.add(grp)
+
+        grp = ttk.Frame(self.footer)
+        ttk.Label(grp, text="Columns").pack(side="left")
+        cv = cfg.get("panel_columns", "Auto")
+        self.cols_var = tk.StringVar(
+            value=cv if cv in self.COLUMN_CHOICES else "Auto")
+        cb = ttk.Combobox(grp, textvariable=self.cols_var, width=5,
+                          state="readonly", values=self.COLUMN_CHOICES)
+        cb.pack(side="left", padx=(6, 0))
+        cb.bind("<<ComboboxSelected>>",
+                lambda e: self._schedule_render(reset_page=True))
+        tip(cb, "How many panels sit side by side. Auto picks a grid that "
+                "suits the number of panels.")
+        ttk.Label(grp, text="Shape").pack(side="left", padx=(10, 0))
+        sv = cfg.get("panel_shape", "Auto")
+        self.shape_var = tk.StringVar(
+            value=sv if sv in self.SHAPE_CHOICES else "Auto")
+        sb = ttk.Combobox(grp, textvariable=self.shape_var, width=13,
+                          state="readonly", values=list(self.SHAPE_CHOICES))
+        sb.pack(side="left", padx=(6, 0))
+        sb.bind("<<ComboboxSelected>>", lambda e: self._schedule_render())
+        tip(sb, "The shape of each panel. Portrait gives tall panels, e.g. "
+                "two columns of portrait spectra; Auto fills the space.")
         self.footer.add(grp)
 
         grp = ttk.Frame(self.footer)
@@ -3695,8 +3729,13 @@ class Workspace:
         if self._render_job is None:
             self._render_job = self.root.after_idle(self._render)
 
+    def _forced_cols(self):
+        v = str(self.cols_var.get()).strip()
+        return int(v) if v.isdigit() and int(v) > 0 else None
+
     def _cols(self, n_groups):
-        return _grid_dims(self._panels_per_page(n_groups))[1]
+        return _grid_dims(self._panels_per_page(n_groups),
+                          self._forced_cols())[1]
 
     def _jump(self, idx):
         self.panel_start = max(0, idx)           # clamped (and row-aligned)
@@ -3879,7 +3918,7 @@ class Workspace:
         n_groups = len(groups)
         n_spec = sum(len(rs) for _k, rs in groups)
         npp = self._panels_per_page(n_groups)
-        cols = _grid_dims(npp)[1]
+        cols = _grid_dims(npp, self._forced_cols())[1]
         max_start = max(0, n_groups - npp)
         self.panel_start = max(0, min(self.panel_start, max_start))
         self.panel_start -= self.panel_start % cols       # row-aligned
@@ -3955,7 +3994,7 @@ class Workspace:
         colours (PDFs pass the white 'print' palette)."""
         base = pal or self.palette          # theme colours (trace colours)
         pal, axis_note = self._plot_palette(base, paper=pal is not None)
-        rows, cols = _grid_dims(len(chunk))
+        rows, cols = _grid_dims(len(chunk), self._forced_cols())
         multi = len(self.docs) > 1
         defaults = self._page_defaults()
         scale = self.scale_var.get()
@@ -4120,6 +4159,11 @@ class Workspace:
             self._axe0 = axe0
             self._axinfo = axinfo
             self._zoom_sig = zoom_sig
+        shape = self.SHAPE_CHOICES.get(self.shape_var.get())
+        if shape:                       # a fixed panel shape (2D panels)
+            for ax in axmap:
+                if not hasattr(ax, "get_zlim"):
+                    ax.set_box_aspect(shape)
         if rect is not None:            # leave room for a heading / caption
             fig.tight_layout(rect=rect)
         else:
@@ -4782,6 +4826,13 @@ class Workspace:
                 return
             self.status.config(text=f"Plot saved to {path}")
 
+        npanels = 1
+        if panel_key is None:
+            groups = self._groups()
+            npanels = len(groups[self.panel_start:self.panel_start
+                                 + self._panels_per_page(len(groups))])
+        r, c = _grid_dims(npanels, self._forced_cols())
+        self.save_grid = (r, c, self.SHAPE_CHOICES.get(self.shape_var.get()))
         workbook_ui.ImageOptionsDialog(self.root, self, go)
 
     # -- experiment workbook (.xpscontainer) --------------------------------
@@ -4826,6 +4877,8 @@ class Workspace:
             "axis_colour": self.axis_choice,
             "axis_colour_custom": self.axis_custom,
             "panels_per_page": self.panels_var.get(),
+            "panel_columns": self.cols_var.get(),
+            "panel_shape": self.shape_var.get(),
             "traces_per_panel": self.traces_var.get(),
             "panel_start": int(self.panel_start),
             "trace_start": int(self.trace_start),
@@ -4862,6 +4915,14 @@ class Workspace:
         self.iss_axis_var.set(st.get("iss_axis")
                               if st.get("iss_axis") in viewdata.ISS_AXES
                               else viewdata.ISS_AXES[0])
+        # a figure saved before the grid choices existed used the automatic
+        # grid: a missing key is Auto, never whatever the live window has
+        self.cols_var.set(st.get("panel_columns")
+                          if st.get("panel_columns") in self.COLUMN_CHOICES
+                          else "Auto")
+        self.shape_var.set(st.get("panel_shape")
+                           if st.get("panel_shape") in self.SHAPE_CHOICES
+                           else "Auto")
         try:
             self.offset_var.set(max(0.0, min(3.0, float(st["offset"]))))
             self.offset_lbl.config(text=f"{self.offset_var.get():.1f}×")
@@ -5302,7 +5363,7 @@ class Workspace:
             groups = self._groups()
             if not groups:
                 return out
-            per = self._pdf_per_page()
+            per = self._pdf_per_page(size, rect)
             limit, start = self._traces_limit(), self.trace_start
             pages = (len(groups) + per - 1) // per
             paper = self._plot_palette(PRINT, paper=True)[0]
@@ -6009,11 +6070,23 @@ class Workspace:
                                   "experiment_report.pdf", keep_page=True)
 
     # -- PDF output: shared builder, save, and in-app preview --------------
-    def _pdf_per_page(self):
+    def _pdf_per_page(self, size=None, rect=None):
+        """Panels on a report / slide figure page. A number in the Panels box
+        is kept. With Auto, a set Columns and Shape fill the page: as many
+        rows of panels of that shape as the page height holds (at least
+        one); otherwise 6."""
         try:
             return max(1, min(16, int(self.panels_var.get())))
         except ValueError:
-            return 6
+            pass
+        cols, shape = self._forced_cols(), self.SHAPE_CHOICES.get(
+            self.shape_var.get())
+        if size and cols and shape:
+            usable = size[1] * ((rect[3] - rect[1]) if rect else 1.0)
+            cell_h = (size[0] / cols) * shape
+            rows = max(1, int(usable / cell_h + 0.15))
+            return max(1, min(16, rows * cols))
+        return 6
 
     def build_spectra_pdf(self, path, per_page, landscape=True,
                           windowed=False):

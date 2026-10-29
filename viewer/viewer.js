@@ -160,6 +160,14 @@
   };
 
   /* --------------------------------------------------------------- axes */
+  /* panel grid: the number of columns ('auto' = as many as fit) and the shape of a panel (height / width,
+     the same choices as the desktop's Shape box; 'auto' = the page's own heights) */
+  V.PANEL_SHAPES = { auto: null, p23: 1.5, p34: 4 / 3, square: 1, l43: 0.75 };
+  V.gridColumns = function (cols) {
+    var n = parseInt(cols, 10);
+    return n >= 1 && n <= 4 ? 'repeat(' + n + ', minmax(0, 1fr))' : '';
+  };
+
   /* iss: 'kinetic' (the default) or 'ratio'. An ion scattering spectrum (reg.iss) is drawn as
      E / E0, scattered over beam energy, ascending, when asked and its beam energy is known;
      without it the kinetic axis is kept and ok is false. Every other spectrum is not affected. */
@@ -1516,6 +1524,7 @@
 
   /* ============================================================ the page */
   var S = { data: null, order: [], specs: [], byId: {}, ticked: new Set(), selected: null, mode: 'stack',
+            cols: 'auto', shape: 'auto',
             norm: 'none', offset: 0.6, scale: 'Binding', iss: 'kinetic', levelOn: false, levelIdx: 0, levels: [],
             panels: new Map(), theme: 'auto', printing: false, nodes: [], holderIdx: 0,
             holderHot: null, tab: 'plot', filter: '', camIdx: 0, camView: {}, mapById: {}, camById: {},
@@ -1762,7 +1771,9 @@
       p.group = g;
       if (host.children[i] !== p.wrap) host.insertBefore(p.wrap, host.children[i] || null);
     });
-    host.classList.toggle('one', groups.length === 1);
+    host.classList.toggle('one', groups.length === 1 && S.cols === 'auto');
+    host.style.gridTemplateColumns = V.gridColumns(S.cols);
+    if (V.PANEL_SHAPES[S.shape]) host.setAttribute('data-shape', S.shape); else host.removeAttribute('data-shape');
     $('empty').hidden = groups.length > 0;
     $('offsetField').style.display = S.mode === 'stack' ? '' : 'none';
     var bar = $('levelbar'), many = S.levels.length > 1;
@@ -3786,6 +3797,8 @@
       S.panels.forEach(function (p) { p.zoom = null; });
       requestRender();
     });
+    $('cols').addEventListener('change', function (e) { S.cols = e.target.value; requestRender(); });
+    $('shape').addEventListener('change', function (e) { S.shape = e.target.value; requestRender(); });
     $('resetzoom').addEventListener('click', function () { S.panels.forEach(function (p) { p.zoom = null; }); requestRender(); });
     $('csv').addEventListener('click', downloadCsv);
     $('identify').addEventListener('click', function () {

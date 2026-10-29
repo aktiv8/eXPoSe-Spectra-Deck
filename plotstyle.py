@@ -285,6 +285,29 @@ def matching_preset(style, user_presets=None):
 
 
 # -- export size --------------------------------------------------------------------------
+# image sizes in inches (width, height) for Save plot image
+SIZE_PRESETS = {
+    "Single column (85 mm)": (3.35, 2.7),
+    "1.5 columns (120 mm)": (4.72, 3.5),
+    "Double column (180 mm)": (7.09, 4.5),
+    "A4 portrait": (8.27, 11.69),
+    "A4 landscape": (11.69, 8.27),
+    "Slide 16:9": (13.33, 7.5),
+    "Square": (6.0, 6.0),
+}
+
+
+def fit_height(width, rows, cols, aspect):
+    """Image height (inches) that gives panels of ``aspect`` (height / width)
+    in a ``rows`` x ``cols`` grid on an image ``width`` inches wide; None
+    when the panel shape is free. Each cell is ``width / cols`` wide and
+    ``aspect`` times that tall (axis labels and titles come out of the
+    cell), clamped to the 1-40 in the dialog accepts."""
+    if not aspect:
+        return None
+    return max(1.0, min(40.0, rows * (width / max(1, cols)) * aspect))
+
+
 def export_size(style, default=(8.0, 5.0)):
     """``(width_in, height_in, dpi)`` for Save plot image."""
     s = resolve(style)

@@ -778,29 +778,69 @@ class ImageOptionsDialog(tk.Toplevel):
                      values=["Paper (white)", "Current theme"]).grid(
             row=0, column=1, sticky="w", pady=3)
         self.vars = {}
+        self.grid_info = getattr(app, "save_grid", None)  # (rows, cols, shape)
         w0, h0, dpi0 = plotstyle.export_size(app.plot_style)
+        ttk.Label(body, text="Size preset").grid(row=1, column=0, sticky="w",
+                                                 pady=3, padx=(0, 12))
+        self.preset = tk.StringVar(value="Custom")
+        pc = ttk.Combobox(body, textvariable=self.preset, state="readonly",
+                          width=22,
+                          values=["Custom"] + list(plotstyle.SIZE_PRESETS))
+        pc.grid(row=1, column=1, sticky="w", pady=3)
+        pc.bind("<<ComboboxSelected>>", lambda e: self.apply_preset())
         for r, (key, label, init) in enumerate((
                 ("w", "Width (inches)", f"{w0:g}"),
                 ("h", "Height (inches)", f"{h0:g}"),
-                ("dpi", "Resolution (dpi)", str(dpi0))), start=1):
+                ("dpi", "Resolution (dpi)", str(dpi0))), start=2):
             ttk.Label(body, text=label).grid(row=r, column=0, sticky="w",
                                              pady=3, padx=(0, 12))
             self.vars[key] = tk.StringVar(value=init)
             ttk.Entry(body, textvariable=self.vars[key], width=8).grid(
                 row=r, column=1, sticky="w", pady=3)
+        self.fit_btn = ttk.Button(body, text="Fit height to the panel grid",
+                                  command=self.fit_to_grid)
+        self.fit_btn.grid(row=5, column=0, columnspan=2, sticky="w", pady=3)
+        if not (self.grid_info and self.grid_info[2]):
+            self.fit_btn.state(["disabled"])
         ttk.Label(body, style="Muted.TLabel", wraplength=300,
                   text="Saves the panels currently shown (PNG, SVG or PDF, "
                        "chosen next). Fonts, lines and ticks follow the plot "
-                       "style; its image size is the starting point here.").grid(row=4, column=0, columnspan=2,
-                                             sticky="w", pady=(6, 0))
+                       "style; its image size is the starting point here. "
+                       "'Fit height' needs a panel Shape (not Auto) and sets "
+                       "the height from the width, columns and shape."
+                  ).grid(row=6, column=0, columnspan=2, sticky="w",
+                         pady=(6, 0))
         bar = ttk.Frame(body)
-        bar.grid(row=5, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        bar.grid(row=7, column=0, columnspan=2, sticky="e", pady=(12, 0))
         ttk.Button(bar, text="Cancel", command=self.destroy).pack(side="right")
         ttk.Button(bar, text="Next…", command=self._ok).pack(
             side="right", padx=(0, 6))
         self.bind("<Escape>", lambda e: self.destroy())
         self.bind("<Return>", lambda e: self._ok())
-        _finish(self, app, 380, 260)
+        _finish(self, app, 380, 340)
+
+    def apply_preset(self, name=None):
+        """Put a named size in the width / height boxes."""
+        name = name or self.preset.get()
+        if name in plotstyle.SIZE_PRESETS:
+            self.preset.set(name)
+            w, h = plotstyle.SIZE_PRESETS[name]
+            self.vars["w"].set(f"{w:g}")
+            self.vars["h"].set(f"{h:g}")
+
+    def fit_to_grid(self):
+        """Set the height from the width, the grid and the panel shape."""
+        if not (self.grid_info and self.grid_info[2]):
+            return
+        rows, cols, shape = self.grid_info
+        try:
+            w = float(self.vars["w"].get())
+        except ValueError:
+            return
+        h = plotstyle.fit_height(w, rows, cols, shape)
+        if h:
+            self.vars["h"].set(f"{h:.2f}".rstrip("0").rstrip("."))
+            self.preset.set("Custom")
 
     def _ok(self):
         try:
