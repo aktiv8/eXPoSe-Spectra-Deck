@@ -204,6 +204,7 @@ class TestPanelGridInApp(unittest.TestCase):
         ws.panel_views = {}
         ws.panel_order = []
         ws.panel_slots = []
+        ws.set_plot_style(ee.plotstyle.sanitise(None), save=False)
         ws.trace_start = 0
         for p in self.docs:
             ws._add_file(p, file_id=p[:-4], refresh=False)
@@ -367,6 +368,69 @@ class TestPanelGridInApp(unittest.TestCase):
             {"span": "Wide (2 columns)", "shape": "Landscape 4:3"}]})
         self.assertIn("Page layout: position 1: wide (2 columns), "
                       "landscape 4:3", text)
+
+    def set_style(self, **kw):
+        self.ws.set_plot_style({**self.ws.plot_style, **kw}, save=False)
+
+    def test_spacing_changes_the_gaps_and_zero_leaves_it_alone(self):
+        ws = self.ws
+        ws.cols_var.set("2")
+        keys = [k for k, _ in ws._groups()]          # 4 panels, 2 x 2
+
+        def geometry():
+            self.axes()
+            pos = {ws._axmap[a]: a.get_position(original=True)
+                   for a in ws.fig.axes if a in ws._axmap}
+            p = [pos[k] for k in keys]
+            return (p[1].x0 - p[0].x1,               # across
+                    p[0].y0 - p[2].y1,               # down
+                    min(q.x0 for q in p), max(q.x1 for q in p))
+        auto = geometry()
+        self.set_style(gap_x=0.0, gap_y=0.0, margin=0.0)
+        self.assertEqual(geometry(), auto)            # 0 = untouched
+        self.set_style(gap_x=0.6)
+        wide = geometry()
+        self.assertGreater(wide[0], auto[0] + 0.02)   # wider across
+        self.assertAlmostEqual(wide[1], auto[1], places=3)   # not down
+        self.set_style(gap_x=0.0, gap_y=0.6)
+        tall = geometry()
+        self.assertGreater(tall[1], auto[1] + 0.02)
+        self.assertAlmostEqual(tall[0], auto[0], places=3)
+        self.set_style(gap_y=0.0, margin=0.2)
+        marg = geometry()
+        self.assertAlmostEqual(marg[2], 0.2, places=2)        # left margin
+        self.assertAlmostEqual(marg[3], 0.8, places=2)        # right margin
+
+    def test_spacing_is_saved_with_the_look(self):
+        ws = self.ws
+        self.set_style(gap_x=0.3, margin=0.1)
+        st = ws.capture_state()
+        self.assertEqual((st["plot_style"]["gap_x"], st["plot_style"]["margin"]),
+                         (0.3, 0.1))
+        self.set_style(gap_x=0.0, margin=0.0)
+        ws.apply_state(st, render=False)
+        self.assertEqual(ws.plot_style["gap_x"], 0.3)
+        old = {k: v for k, v in st.items() if k != "plot_style"}
+        self.set_style(gap_x=0.0, margin=0.0)
+        ws.apply_state(old, render=False)             # no style: live kept
+        self.assertEqual(ws.plot_style["gap_x"], 0.0)
+
+    def test_slider_in_the_dialog_sets_the_spacing(self):
+        ws = self.ws
+        dlg = ee.plotstyle_ui.PlotStyleDialog(self.root, ws, tab="Spacing")
+        try:
+            self.assertEqual(dlg.nb.tab(dlg.nb.select(), "text"), "Spacing")
+            scale, readout = dlg.sliders["gap_x"]
+            self.assertEqual(readout.cget("text"), "auto")
+            scale.set(0.5)                       # a drag: the command fires
+            self.assertEqual(ws.plot_style["gap_x"], 0.5)
+            self.assertEqual(readout.cget("text"), "0.50")
+            ws.set_plot_style({**ws.plot_style, "gap_x": 0.0}, save=False)
+            dlg._sync()                          # restoring must not re-commit
+            self.assertEqual(ws.plot_style["gap_x"], 0.0)
+            self.assertEqual(readout.cget("text"), "auto")
+        finally:
+            dlg.destroy()
 
     def test_report_per_page_follows_grid(self):
         ws = self.ws

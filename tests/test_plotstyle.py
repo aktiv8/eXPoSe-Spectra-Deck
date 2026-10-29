@@ -47,6 +47,25 @@ class TestFields(unittest.TestCase):
                 self.assertTrue(f.lo <= f.default <= f.hi, f.key)
                 self.assertTrue(f.step, f.key)
 
+    def test_spacing_fields_and_adjust_arguments(self):
+        self.assertEqual(ps.spacing(None), {})                  # automatic
+        self.assertEqual(ps.spacing({"gap_x": 0.3, "gap_y": 0.2}),
+                         {"wspace": 0.3, "hspace": 0.2})
+        m = ps.spacing({"margin": 0.1})
+        self.assertEqual((m["left"], m["right"], m["bottom"], m["top"]),
+                         (0.1, 0.9, 0.1, 0.9))
+        # inside the part of a report page left for the panels
+        m = ps.spacing({"margin": 0.1}, (0.0, 0.17, 1.0, 0.94))
+        self.assertAlmostEqual(m["bottom"], 0.17 + 0.1 * 0.77)
+        self.assertAlmostEqual(m["top"], 0.94 - 0.1 * 0.77)
+        # a tiny margin is raised, an out-of-range one clamped
+        self.assertEqual(ps.spacing({"margin": 0.001})["left"], ps.MIN_MARGIN)
+        self.assertEqual(ps.sanitise({"margin": 5})["margin"], 0.3)
+        self.assertEqual(ps.sanitise({"gap_x": -1})["gap_x"], 0.0)
+        self.assertEqual(ps.sanitise({"gap_x": 7})["gap_x"], 1.0)
+        # a style that never had them draws as before
+        self.assertEqual(ps.spacing({"font_size": 9}), {})
+
     def test_groups_keep_field_order(self):
         self.assertEqual(ps.GROUPS[0], "Text")
         self.assertEqual(set(ps.GROUPS), {f.group for f in ps.FIELDS})

@@ -140,7 +140,8 @@ class TestPlotMenus(unittest.TestCase):
                      "Move panel later", "Move panel to last",
                      "Reset panel order", "Shape of this position",
                      "Size of this position", "Reset page layout",
-                     "Columns", "Page shape", "Save this panel as image…",
+                     "Columns", "Page shape", "Spacing…",
+                     "Save this panel as image…",
                      "Save plot image…", "Save this view as a figure…",
                      "Stack", "Heatmap", "Components", "Page setting",
                      "Tall (2 rows)", "Landscape 4:3"):

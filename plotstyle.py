@@ -39,6 +39,7 @@ class Field:
     hi: float | None = None
     step: float | None = None    # spinbox increment
     unit: str = ""
+    slider: bool = False         # a float shown as a slider, not a spin box
 
 
 LINE_STYLES = {"Solid": "-", "Dashed": "--", "Dotted": ":",
@@ -139,7 +140,21 @@ FIELDS: tuple[Field, ...] = (
           "0 = 5 in.", lo=0.0, hi=40.0, step=0.5, unit="in"),
     Field("fig_dpi", "Image resolution", "int", 300, "Figure",
           lo=50, hi=1200, step=50, unit="dpi"),
+    # -- spacing of the panels (0 = automatic, fitted to the labels) ------------
+    Field("gap_x", "Gap across", "float", 0.0, "Spacing",
+          "Space between panels side by side, as a fraction of a panel's "
+          "width. 0 = automatic (fitted to the axis labels).",
+          lo=0.0, hi=1.0, step=0.01, slider=True),
+    Field("gap_y", "Gap down", "float", 0.0, "Spacing",
+          "Space between panels above one another, as a fraction of a "
+          "panel's height. 0 = automatic.",
+          lo=0.0, hi=1.0, step=0.01, slider=True),
+    Field("margin", "Page margin", "float", 0.0, "Spacing",
+          "Space round the panels on every side, as a fraction of the page. "
+          "0 = automatic. Small margins can cut off axis labels.",
+          lo=0.0, hi=0.3, step=0.01, slider=True),
 )
+MIN_MARGIN = 0.02                # a margin below this (but above 0) is raised
 
 BY_KEY = {f.key: f for f in FIELDS}
 GROUPS = tuple(dict.fromkeys(f.group for f in FIELDS))
@@ -306,6 +321,26 @@ def fit_height(width, rows, cols, aspect):
     if not aspect:
         return None
     return max(1.0, min(40.0, rows * (width / max(1, cols)) * aspect))
+
+
+def spacing(style, rect=None):
+    """The ``Figure.subplots_adjust`` arguments for the style's spacing
+    fields (only those that are set: 0 leaves the automatic fit alone).
+    ``rect`` = (left, bottom, right, top), the part of the figure the panels
+    may use (a report page leaves room for a heading and a caption); a margin
+    is a fraction of it."""
+    s = resolve(style)
+    out = {}
+    if s["gap_x"] > 0:
+        out["wspace"] = s["gap_x"]
+    if s["gap_y"] > 0:
+        out["hspace"] = s["gap_y"]
+    if s["margin"] > 0:
+        m = max(MIN_MARGIN, s["margin"])
+        x0, y0, x1, y1 = rect or (0.0, 0.0, 1.0, 1.0)
+        out.update(left=x0 + m * (x1 - x0), right=x1 - m * (x1 - x0),
+                   bottom=y0 + m * (y1 - y0), top=y1 - m * (y1 - y0))
+    return out
 
 
 def export_size(style, default=(8.0, 5.0)):

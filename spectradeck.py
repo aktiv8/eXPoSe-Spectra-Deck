@@ -1167,8 +1167,10 @@ class Workspace:
         self.plot_presets = plotstyle.clean_presets(presets)
         self.cfg["plot_presets"] = dict(self.plot_presets)
 
-    def edit_plot_style(self):
-        plotstyle_ui.PlotStyleDialog(self.root, self)
+    def edit_plot_style(self, tab=None):
+        """The Plot style dialog, on the tab ``tab`` (a ``plotstyle`` group
+        such as "Spacing") when given."""
+        plotstyle_ui.PlotStyleDialog(self.root, self, tab=tab)
 
     def set_theme(self, name, save=True):
         """Switch the colour theme live (widgets, tick boxes, plots)."""
@@ -4189,6 +4191,9 @@ class Workspace:
             fig.tight_layout(rect=rect)
         else:
             fig.tight_layout()
+        gaps = plotstyle.spacing(style, rect)      # the user's own spacing
+        if gaps:
+            fig.subplots_adjust(**gaps)
         # make room for the end-of-trace labels to the right of stacked axes
         gutter = plotstyle.label_gutter_points(style) / 72.0 / fig.get_figwidth()
         for ax in stacked_axes:
@@ -4425,6 +4430,8 @@ class Workspace:
                     command=lambda fresh=fresh: self._schedule_render(
                         reset_page=fresh))
             lay.add_cascade(label=label, menu=sub)
+        lay.add_command(label="Spacing…",
+                        command=lambda: self.edit_plot_style("Spacing"))
 
     def _fill_save_menu(self, menus, key=None):
         """The Save section; ``key`` adds saving just the clicked panel."""

@@ -20,12 +20,15 @@ from workbook_ui import _finish
 class PlotStyleDialog(tk.Toplevel):
     MODIFIED = "(modified)"
 
-    def __init__(self, master, app):
+    def __init__(self, master, app, tab=None):
         super().__init__(master)
         self.app = app
+        want_tab = tab                 # (the loop below reuses the name "tab")
         self.title("Plot style")
         self.transient(master)
         self.vars = {}
+        self.sliders = {}              # field key -> (ttk.Scale, value label)
+        self._syncing = False
         body = ttk.Frame(self, padding=12)
         body.pack(fill="both", expand=True)
         body.columnconfigure(1, weight=1)
@@ -57,6 +60,8 @@ class PlotStyleDialog(tk.Toplevel):
             for f in (x for x in plotstyle.FIELDS if x.group == group):
                 self._add_field(tab, row, f)
                 row += 1
+        if want_tab in plotstyle.GROUPS:   # open on the named tab
+            self.nb.select(plotstyle.GROUPS.index(want_tab))
         ttk.Label(body, style="Muted.TLabel", wraplength=420, justify="left",
                   text="Changes apply to the plot at once, and to PDFs, "
                        "slides and saved images. The style is saved with "
@@ -84,6 +89,16 @@ class PlotStyleDialog(tk.Toplevel):
                              width=22, values=list(f.choices))
             w.bind("<<ComboboxSelected>>",
                    lambda e: self._commit(f.key, var.get()))
+        elif f.kind == "float" and f.slider:
+            var = tk.StringVar()
+            w = ttk.Frame(parent)
+            scale = ttk.Scale(w, from_=f.lo, to=f.hi, length=190,
+                              command=lambda v: self._slide(f, v))
+            scale.pack(side="left")
+            readout = ttk.Label(w, width=6, anchor="e",
+                                style="Muted.TLabel")
+            readout.pack(side="left", padx=(8, 0))
+            self.sliders[f.key] = (scale, readout)
         elif f.kind in ("float", "int"):
             var = tk.StringVar()
             w = ttk.Spinbox(parent, textvariable=var, width=9,
@@ -93,7 +108,7 @@ class PlotStyleDialog(tk.Toplevel):
             var = tk.StringVar()
             w = ttk.Entry(parent, textvariable=var,
                           width=28 if f.kind == "text" else 9)
-        if f.kind in ("float", "int", "text", "optfloat"):
+        if f.kind in ("float", "int", "text", "optfloat") and not f.slider:
             w.bind("<Return>", lambda e: self._commit_text(f))
             w.bind("<FocusOut>", lambda e: self._commit_text(f))
         w.grid(row=row, column=1, sticky="w", pady=3)
@@ -120,6 +135,15 @@ class PlotStyleDialog(tk.Toplevel):
         style = self.app.plot_style
         for f in plotstyle.FIELDS:
             self.vars[f.key].set(self._shown(f, style[f.key]))
+        self._syncing = True            # moving a slider must not re-commit
+        try:
+            for key, (scale, readout) in self.sliders.items():
+                value = float(style[key])
+                scale.set(value)
+                readout.configure(text="auto" if value <= 0
+                                  else f"{value:.2f}")
+        finally:
+            self._syncing = False
         names = plotstyle.preset_names(self.app.plot_presets)
         self.preset_cb.configure(values=names)
         self.preset.set(plotstyle.matching_preset(
@@ -145,6 +169,14 @@ class PlotStyleDialog(tk.Toplevel):
         new = {**self.app.plot_style, **self._pending(), key: value}
         self.app.set_plot_style(new)
         self._sync()
+
+    def _slide(self, f, raw):
+        """A slider moved: apply the value (rounded to the field's step)."""
+        if self._syncing:
+            return
+        value = round(round(float(raw) / f.step) * f.step, 4)
+        if value != self.app.plot_style[f.key]:
+            self._commit(f.key, value)
 
     def _commit_text(self, f):
         try:
