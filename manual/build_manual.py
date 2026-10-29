@@ -619,14 +619,49 @@ def build_chapters(doc):
     h2(doc, "Different views on one page")
     para(doc,
         "The view row sets the default for every panel, but any panel can "
-        "differ: right-click it and choose View, Normalise, Offset, Z axis, "
-        "Fit layers or Other possible lines for that panel alone, so one page can hold "
-        "a waterfall, a stack and a fitted spectrum. Identify peaks… is on the "
-        "same menu, “Use the page’s view” takes a panel back to the default, and "
+        "differ: right-click it and the menu has four sections. Spectrum holds "
+        "View, Normalise, Offset, Z axis and Reverse order, which act on that "
+        "panel alone, so one page can hold a waterfall, a stack and a fitted "
+        "spectrum. Fit and peaks holds Fit layers, Other possible lines and "
+        "Identify peaks…, Layout holds the order and shape of the panels "
+        "(below) and Save holds the image and figure commands. “Use the page’s "
+        "view”, in Spectrum, takes a panel back to the default, and "
         "View → Reset panel views clears every override. A panel is identified "
         "by its group label, so use “Element, per sample” grouping to give two "
         "samples’ C 1s different views. Panel views are saved in the workbook "
         "and in each saved figure, so reports show them as you set them."
+    )
+    h2(doc, "Columns, panel shape and the page layout")
+    para(doc,
+        "Two boxes beside Panels shape the grid. Columns (Auto, 1 to 4) sets how "
+        "many panels sit side by side; Shape (Portrait 2:3, Portrait 3:4, Square "
+        "or Landscape 4:3) gives every panel that proportion, so two columns of "
+        "portrait spectra are Columns 2 and Shape Portrait 3:4. Auto leaves "
+        "both to the program. Both are also in the right-click menu, under "
+        "Layout, and they apply to the plot, Save plot image…, the PDF, slides "
+        "and Word figure pages and the data browser page."
+    )
+    para(doc,
+        "For a page that is not a plain grid, give a position its own shape "
+        "and size: right-click a panel and choose Layout, then Shape of this "
+        "position or Size of this position (Tall, Wide or Large, which take two "
+        "rows, two columns or both). The layout belongs to the positions on "
+        "the page, not to the panels: a wide survey above two high-resolution "
+        "regions stays that way when you move another panel to the first "
+        "position, and that panel takes on the wide format. Use Move panel (or "
+        "drag a panel's heading strip onto another) to change who sits where; "
+        "Reset page layout returns to the plain grid. The same layout repeats on "
+        "every page of a long set and is saved in the workbook and in each saved "
+        "figure; the data browser page follows Columns and Shape but not a "
+        "position layout."
+    )
+    add_figure(doc, "A page layout: the first position is Wide, so the survey "
+               "spans both columns above the Al 2p and O 1s panels.",
+              image_path=os.path.join(FIGDIR, "fig_layout.png"))
+    para(doc,
+        "Layout ▸ Spacing… opens the Plot style dialog on its Spacing tab, "
+        "where three sliders set the gap across, the gap down and the page "
+        "margin (Chapter 17)."
     )
     h2(doc, "Zooming, and saving what you see as a figure")
     para(doc,
@@ -662,7 +697,9 @@ def build_chapters(doc):
         "Panels per page chooses how many panels are shown at once (Auto, 1, 2, 4, "
         "6, 9, 12 or 16); scroll between pages with the mouse wheel, the scrollbar "
         "beside the plot, Page Up / Page Down, Home / End, or the Prev / Next "
-        "buttons."
+        "buttons. Pages turn by whole rows of panels, and the last page always "
+        "reaches the last panel. In a report, with Panels on Auto, a set Columns "
+        "and Shape fill each page with as many rows of that shape as fit."
     )
     para(doc,
         "Traces per panel is either All or a fixed number. For a long stack (say a "
@@ -824,7 +861,17 @@ def build_chapters(doc):
     )
     para(doc,
         "Save plot image… writes the current view as PNG, JPG, SVG or PDF, at "
-        "any size and resolution. Right-click a panel to save just that panel."
+        "any size and resolution. Right-click a panel and choose Save, then "
+        "Save this panel as image…, to save just that panel."
+    )
+    para(doc,
+        "The size dialog has a Size preset (single column 85 mm, 1.5 columns, "
+        "double column 180 mm, A4 portrait or landscape, slide 16:9, square) "
+        "that fills in the width and height, and Fit height to the panel grid, "
+        "which sets the height from the width you entered, the columns and the "
+        "panel shape (it needs a Shape other than Auto). The result is an "
+        "estimate: adjust the height by hand if you want the panels tighter or "
+        "looser."
     )
 
     # 10. Exporting --------------------------------------------------------
@@ -1244,6 +1291,15 @@ def build_chapters(doc):
         "current style is remembered between sessions, saved in the workbook, "
         "and stored with each saved figure, so a figure keeps its own look in "
         "the report even after you change the live plot."
+    )
+    para(doc,
+        "The Spacing tab has three sliders: Gap across and Gap down (the space "
+        "between panels, as a fraction of a panel) and Page margin (the space "
+        "round the panels, as a fraction of the page). Each reads “auto” at "
+        "0, which keeps the automatic fit to the axis labels; a small value "
+        "can cut labels off, so move them until the labels still fit. They "
+        "apply to the plot, saved images, the PDF and the slides, and are "
+        "saved with the style."
     )
     add_figure(doc, "The Plot style dialog.")
 
