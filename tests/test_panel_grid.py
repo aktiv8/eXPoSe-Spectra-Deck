@@ -60,23 +60,50 @@ class TestGridDims(unittest.TestCase):
         self.assertEqual(ee._grid_dims(3, 4), (1, 3))
 
 
-class TestPanelShapeOverride(unittest.TestCase):
-    def test_sanitise_resolve_describe(self):
+class TestSlots(unittest.TestCase):
+    """The page layout: shape and size per position on the page."""
+
+    def test_panel_overrides_no_longer_carry_shape_or_span(self):
         import panelview
-        self.assertEqual(panelview.sanitise({"shape": "Square"}),
-                         {"shape": "Square"})
-        self.assertEqual(panelview.sanitise({"shape": "Round"}), {})
-        defaults = {"view": "Stack", "norm": "None", "offset": 0.6,
-                    "z_axis": "Auto", "reverse": False, "fit_show": {},
-                    "ident_show": {}, "shape": "Auto"}
-        self.assertEqual(panelview.resolve(defaults, {"shape": "Portrait 2:3"}
-                                           )["shape"], "Portrait 2:3")
-        self.assertEqual(panelview.resolve(defaults)["shape"], "Auto")
-        self.assertIn("panel shape Portrait 2:3",
-                      panelview.describe({"shape": "Portrait 2:3"}, defaults))
-        views = panelview.with_value({}, "C 1s", "shape", "Square")
-        self.assertEqual(views, {"C 1s": {"shape": "Square"}})
-        self.assertEqual(panelview.reset(views, "C 1s"), {})
+        self.assertEqual(panelview.sanitise({"shape": "Square",
+                                             "span": "Tall (2 rows)",
+                                             "norm": "Max = 1"}),
+                         {"norm": "Max = 1"})
+
+    def test_sanitise_and_trim(self):
+        import panelview
+        self.assertEqual(panelview.sanitise_slots(None), [])
+        self.assertEqual(panelview.sanitise_slots("x"), [])
+        got = panelview.sanitise_slots([
+            {"span": "Wide (2 columns)", "shape": "Landscape 4:3"},
+            {"span": "1 × 1"}, {"shape": "Round"}, {}, "junk"])
+        self.assertEqual(got, [{"span": "Wide (2 columns)",
+                                "shape": "Landscape 4:3"}])
+        self.assertEqual(len(panelview.sanitise_slots(
+            [{"shape": "Square"}] * 40)), panelview.MAX_SLOTS)
+
+    def test_with_slot_pads_sets_and_clears(self):
+        import panelview
+        s = panelview.with_slot([], 2, "span", "Tall (2 rows)")
+        self.assertEqual(s, [{}, {}, {"span": "Tall (2 rows)"}])
+        s = panelview.with_slot(s, 0, "shape", "Square")
+        self.assertEqual(s[0], {"shape": "Square"})
+        s = panelview.with_slot(s, 2, "span", None)         # trailing: trimmed
+        self.assertEqual(s, [{"shape": "Square"}])
+        self.assertEqual(panelview.with_slot(s, 99, "shape", "Square"), s)
+        self.assertEqual(panelview.with_slot(s, 0, "colour", "red"), s)
+        self.assertEqual(panelview.slot_at(s, 5), {})
+        self.assertEqual(panelview.slot_at(s, -1), {})
+
+    def test_describe(self):
+        import panelview
+        self.assertEqual(panelview.describe_slots([]), "")
+        self.assertEqual(
+            panelview.describe_slots([{"span": "Wide (2 columns)",
+                                       "shape": "Landscape 4:3"}, {},
+                                      {"shape": "Square"}]),
+            "position 1: wide (2 columns), landscape 4:3; "
+            "position 3: square")
 
 
 class TestPlace(unittest.TestCase):
@@ -111,13 +138,6 @@ class TestPlace(unittest.TestCase):
         rows, cells = panelview.place([(1, 2)], 1)      # wider than the grid
         self.assertEqual((cells[0].c0, cells[0].c1), (0, 1))
         self.assertEqual(panelview.place([], 3)[0], 1)
-
-    def test_span_key(self):
-        import panelview
-        self.assertEqual(panelview.sanitise({"span": "Tall (2 rows)"}),
-                         {"span": "Tall (2 rows)"})
-        self.assertEqual(panelview.sanitise({"span": "1 × 1"}), {})
-        self.assertEqual(panelview.sanitise({"span": "huge"}), {})
 
 
 class TestSizePresets(unittest.TestCase):
@@ -183,6 +203,7 @@ class TestPanelGridInApp(unittest.TestCase):
         ws.traces_var.set("All")
         ws.panel_views = {}
         ws.panel_order = []
+        ws.panel_slots = []
         ws.trace_start = 0
         for p in self.docs:
             ws._add_file(p, file_id=p[:-4], refresh=False)
@@ -247,51 +268,105 @@ class TestPanelGridInApp(unittest.TestCase):
         ws.cols_var.set("2")
         self.assertEqual(ws._page_step(10), 6)
 
-    def test_tall_panel_layout_on_the_page(self):
+    def three_panels(self):
         ws = self.ws
         regs = [r for d in ws.docs for r in d.regions]
         ws.checked = {id(r) for r in regs[:3]}
         ws.cols_var.set("2")
-        keys = [k for k, _ in ws._groups()]
-        ws._set_panel_view(keys[0], "span", "Tall (2 rows)")
+        return [k for k, _ in ws._groups()]
+
+    def axes_by_key(self):
         self.axes()
-        by_key = {ws._axmap[a]: a.get_position() for a in ws.fig.axes
-                  if a in ws._axmap}
-        tall, top, bottom = (by_key[k] for k in keys)
+        return {self.ws._axmap[a]: a for a in self.ws.fig.axes
+                if a in self.ws._axmap}
+
+    def test_tall_position_beside_two_stacked(self):
+        ws = self.ws
+        keys = self.three_panels()
+        ws._set_slot(0, "span", "Tall (2 rows)")
+        by_key = self.axes_by_key()
+        tall, top, bottom = (by_key[k].get_position() for k in keys)
         self.assertGreater(tall.height, 1.6 * top.height)   # spans both rows
         self.assertAlmostEqual(top.x0, bottom.x0, places=3)  # stacked
         self.assertGreater(top.x0, tall.x1)                  # to its right
         self.assertGreater(top.y0, bottom.y0)
-        st = ws.capture_state()
-        self.assertEqual(st["panel_views"][keys[0]]["span"], "Tall (2 rows)")
+        self.assertEqual(ws.capture_state()["panel_slots"],
+                         [{"span": "Tall (2 rows)"}])
 
-    def test_one_panel_with_its_own_shape(self):
+    def test_layout_stays_with_the_position_when_a_panel_moves(self):
+        """A wide landscape Survey above two panels: move another panel to
+        the first position and it takes that position's format."""
         ws = self.ws
-        ws.cols_var.set("2")                      # page shape stays Auto
-        keys = [k for k, _ in ws._groups()]
-        ws._set_panel_view(keys[0], "shape", "Portrait 2:3")
-        self.axes()
-        by_key = {ws._axmap[a]: a for a in ws.fig.axes if a in ws._axmap}
-        self.assertAlmostEqual(by_key[keys[0]].get_box_aspect(), 1.5)
-        for k in keys[1:]:
-            self.assertIsNone(by_key[k].get_box_aspect())
-        # saved with the look, and gone with the reset
-        st = ws.capture_state()
-        self.assertEqual(st["panel_views"][keys[0]]["shape"], "Portrait 2:3")
-        ws.reset_panel_views()
-        self.axes()
-        self.assertTrue(all(a.get_box_aspect() is None for a in ws.fig.axes
-                            if a in ws._axmap))
+        keys = self.three_panels()          # [survey, Al 2p, O 1s]
+        ws._set_slot(0, "span", "Wide (2 columns)")
+        ws._set_slot(0, "shape", "Landscape 4:3")
+        def cell(ax):               # the grid cell, before the shape is fitted
+            return ax.get_position(original=True)
 
-    def test_panel_override_beats_the_page_shape(self):
+        by_key = self.axes_by_key()
+        survey = by_key[keys[0]]
+        self.assertGreater(cell(survey).width,
+                           1.6 * cell(by_key[keys[1]]).width)
+        self.assertAlmostEqual(survey.get_box_aspect(), 0.75)
+        self.assertIsNone(by_key[keys[1]].get_box_aspect())
+        ws.move_panel(keys[1], "first")                       # Al 2p to top
+        by_key = self.axes_by_key()
+        al, sv = by_key[keys[1]], by_key[keys[0]]
+        self.assertAlmostEqual(al.get_box_aspect(), 0.75)     # took the slot
+        self.assertGreater(cell(al).width, 1.6 * cell(sv).width)
+        self.assertIsNone(sv.get_box_aspect())                # lost it
+        self.assertLess(cell(sv).y1, cell(al).y0)
+
+    def test_position_shape_beats_the_page_shape(self):
         ws = self.ws
         ws.shape_var.set("Square")
-        keys = [k for k, _ in ws._groups()]
-        ws._set_panel_view(keys[0], "shape", "Auto")     # fill the cell
+        self.three_panels()
+        ws._set_slot(0, "shape", "Auto")                      # fill the cell
+        axs = list(self.axes_by_key().values())
+        self.assertIsNone(axs[0].get_box_aspect())
+        self.assertAlmostEqual(axs[1].get_box_aspect(), 1.0)
+        ws._set_slot(0, "shape", None)                        # page setting
+        axs = list(self.axes_by_key().values())
+        self.assertAlmostEqual(axs[0].get_box_aspect(), 1.0)
+
+    def test_layout_repeats_on_every_page(self):
+        ws = self.ws
+        regs = [r for d in ws.docs for r in d.regions]
+        ws.checked = {id(r) for r in regs}                    # 4 panels
+        ws.cols_var.set("2")
+        ws.panels_var.set("2")
+        ws._set_slot(0, "shape", "Portrait 2:3")
         self.axes()
-        by_key = {ws._axmap[a]: a for a in ws.fig.axes if a in ws._axmap}
-        self.assertIsNone(by_key[keys[0]].get_box_aspect())
-        self.assertAlmostEqual(by_key[keys[1]].get_box_aspect(), 1.0)
+        self.assertAlmostEqual(
+            [a for a in ws.fig.axes if a in ws._axmap][0].get_box_aspect(),
+            1.5)
+        ws.next_page()
+        self.axes()
+        self.assertEqual(ws.panel_start, 2)
+        self.assertAlmostEqual(
+            [a for a in ws.fig.axes if a in ws._axmap][0].get_box_aspect(),
+            1.5)
+
+    def test_layout_saved_reset_and_old_states(self):
+        ws = self.ws
+        self.three_panels()
+        ws._set_slot(1, "span", "Tall (2 rows)")
+        st = ws.capture_state()
+        self.assertEqual(st["panel_slots"], [{}, {"span": "Tall (2 rows)"}])
+        ws.reset_page_layout()
+        self.assertEqual(ws.panel_slots, [])
+        ws.apply_state(st, render=False)
+        self.assertEqual(ws.panel_slots, [{}, {"span": "Tall (2 rows)"}])
+        st.pop("panel_slots")                    # an older look: plain grid
+        ws.apply_state(st, render=False)
+        self.assertEqual(ws.panel_slots, [])
+
+    def test_slide_notes_name_the_layout(self):
+        import pptx_export
+        text = pptx_export.look_notes({"panel_slots": [
+            {"span": "Wide (2 columns)", "shape": "Landscape 4:3"}]})
+        self.assertIn("Page layout: position 1: wide (2 columns), "
+                      "landscape 4:3", text)
 
     def test_report_per_page_follows_grid(self):
         ws = self.ws

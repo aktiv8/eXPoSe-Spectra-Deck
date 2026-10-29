@@ -698,6 +698,7 @@ class Workspace:
         self.ranges = {}            # group key -> "Range" end points (BE pair)
         self.panel_views = {}       # group key -> panelview override
         self.panel_order = []       # group keys in the order the user set
+        self.panel_slots = []       # page layout: shape / span per position
         self._trace_limit_now = None    # window the trace slider describes
         self.calib =holder.sanitise(load_calibration())
         self.casa_quant = None      # casaquant.CasaQuant of the loaded folder
@@ -4008,9 +4009,10 @@ class Workspace:
         defaults = self._page_defaults()
         # panels in reading order; one given more than one cell (its own
         # "Size on grid") is a tall / wide panel beside the others
+        slots = [panelview.slot_at(self.panel_slots, i)
+                 for i in range(len(chunk))]
         rows, cells = panelview.place(
-            [panelview.SPANS.get(self._look_for(k, defaults).get("span"),
-                                 (1, 1)) for k, _rs in chunk], cols)
+            [panelview.SPANS.get(s.get("span"), (1, 1)) for s in slots], cols)
         gs = fig.add_gridspec(rows, cols)
         scale = self.scale_var.get()
         ke_top = bool(self.ke_var.get()) and scale == "Binding"
@@ -4176,9 +4178,11 @@ class Workspace:
             self._axe0 = axe0
             self._axinfo = axinfo
             self._zoom_sig = zoom_sig
+        order = {gkey: i for i, (gkey, _rs) in enumerate(chunk)}
         for ax, gkey in axmap.items():  # a fixed panel shape (2D panels)
+            # the position's own shape, else the page's Shape box
             shape = panelview.SHAPES.get(
-                self._look_for(gkey, defaults).get("shape"))
+                slots[order[gkey]].get("shape", defaults["shape"]))
             if shape and not hasattr(ax, "get_zlim"):
                 ax.set_box_aspect(shape)
         if rect is not None:            # leave room for a heading / caption
@@ -4323,6 +4327,18 @@ class Workspace:
             self.panel_views = panelview.reset(self.panel_views, key)
             self._panel_views_changed()
 
+    def _set_slot(self, i, name, value):
+        """Set the shape or size of position ``i`` of the page layout."""
+        self.panel_slots = panelview.with_slot(self.panel_slots, i, name,
+                                               value)
+        self._panel_views_changed()
+
+    def reset_page_layout(self):
+        """Back to the plain grid (every position one cell, the page shape)."""
+        if self.panel_slots:
+            self.panel_slots = []
+            self._panel_views_changed()
+
     def _panel_views_changed(self):
         self._sync_view_controls()
         self._schedule_render()
@@ -4359,9 +4375,24 @@ class Workspace:
              min(self.OFFSET_CHOICES, key=lambda o: abs(o - look["offset"])),
              "offset", lambda o: f"{o:g}×")
         fill(pm["z"], viewdata.Z_MODES, look["z_axis"], "z_axis")
-        fill(pm["shape"], list(panelview.SHAPES), look["shape"], "shape")
-        fill(pm["span"], list(panelview.SPANS),
-             look.get("span") or "1 × 1", "span")
+        shown = [k for k, _ in self._groups()]
+        pos = shown.index(key) if key in shown else 0
+        slot_i = pos - self.panel_start          # position on this page
+        slot = panelview.slot_at(self.panel_slots, slot_i)
+        for sub, name, values, current in (
+                (pm["shape"], "shape", list(panelview.SHAPES),
+                 slot.get("shape", "page")),
+                (pm["span"], "span", list(panelview.SPANS),
+                 slot.get("span", "1 × 1"))):
+            if name == "shape":
+                sub.add_command(
+                    label=mark(current == "page", "Page setting"),
+                    command=lambda: self._set_slot(slot_i, "shape", None))
+            for v in values:
+                sub.add_command(
+                    label=mark(v == current, v),
+                    command=lambda v=v, name=name: self._set_slot(
+                        slot_i, name, v))
         for layer in panelview.FIT_LAYERS:
             on = look["fit_show"].get(layer, True)
             pm["fit"].add_command(
@@ -4393,9 +4424,6 @@ class Workspace:
                          state="disabled" if series else "normal")
         root.add_cascade(label="Z axis", menu=pm["z"],
                          state="normal" if series else "disabled")
-        root.add_cascade(label="Panel shape", menu=pm["shape"],
-                         state="disabled" if series else "normal")
-        root.add_cascade(label="Size on the page grid", menu=pm["span"])
         root.add_command(
             label=mark(look["reverse"], "Reverse order"),
             state="disabled" if series else "normal",
@@ -4409,8 +4437,6 @@ class Workspace:
                          state="disabled" if series else "normal",
                          command=lambda: self.identify_panel(key))
         root.add_separator()
-        shown = [k for k, _ in self._groups()]
-        pos = shown.index(key) if key in shown else 0
         for label, how, off in (
                 ("Move panel to first", "first", pos == 0),
                 ("Move panel earlier", "earlier", pos == 0),
@@ -4422,6 +4448,16 @@ class Workspace:
         root.add_command(label="Reset panel order",
                          state="normal" if self.panel_order else "disabled",
                          command=self.reset_panel_order)
+        root.add_separator()
+        # the layout belongs to positions on the page: a panel moved here
+        # takes on this position's shape and size
+        root.add_command(label=f"Page layout, position {slot_i + 1}",
+                         state="disabled")
+        root.add_cascade(label="Shape of this position", menu=pm["shape"])
+        root.add_cascade(label="Size of this position", menu=pm["span"])
+        root.add_command(label="Reset page layout",
+                         state="normal" if self.panel_slots else "disabled",
+                         command=self.reset_page_layout)
         root.add_separator()
         root.add_command(label="Save this view as a figure…",
                          command=self.save_view_as_figure)
@@ -4911,6 +4947,7 @@ class Workspace:
                        for k, (a, b) in self.ranges.items()},
             "panel_views": copy.deepcopy(self.panel_views),
             "panel_order": list(self.panel_order),
+            "panel_slots": copy.deepcopy(self.panel_slots),
             "ticked": ticked,
         }
 
@@ -5031,6 +5068,8 @@ class Workspace:
         # (an older figure must not inherit the live window's overrides)
         self.panel_views = panelview.sanitise_all(st.get("panel_views"))
         self.panel_order = panelview.sanitise_order(st.get("panel_order"))
+        # a look without a page layout is the plain grid (not the live one)
+        self.panel_slots = panelview.sanitise_slots(st.get("panel_slots"))
         missing = 0
         if isinstance(st.get("ticked"), list):
             by_file = {self.file_ids.get(id(p)): p.regions for p in self.docs}

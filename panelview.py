@@ -21,15 +21,17 @@ IDENT_LAYERS = ("secondary", "auger")
 # also explain a peak (possibilities), not secondary lines of the same element.
 IDENT_LABELS = {"secondary": "Alternatives", "auger": "Auger"}
 KEYS = ("view", "norm", "offset", "z_axis", "reverse", "fit_show",
-        "fit_merge", "ident_show", "shape", "span")
-# how many grid rows / columns a panel takes (a tall survey beside two stacked
-# regions); a panel with no "span" takes one cell
+        "fit_merge", "ident_show")
+# The page layout (see "slots" below): how many grid rows / columns a position
+# on the page takes (a wide survey above two panels), and its shape.
 SPANS = {"1 × 1": (1, 1), "Tall (2 rows)": (2, 1), "Wide (2 columns)": (1, 2),
          "Large (2 × 2)": (2, 2)}
 # panel shape as height / width (None = whatever the grid cell gives); the
-# page's Shape box and a panel's own override use the same names
+# page's Shape box and a position's own choice use the same names
 SHAPES = {"Auto": None, "Portrait 2:3": 1.5, "Portrait 3:4": 4 / 3,
           "Square": 1.0, "Landscape 4:3": 0.75}
+SLOT_KEYS = ("shape", "span")
+MAX_SLOTS = 16
 OFFSET_RANGE = (0.0, 3.0)
 
 
@@ -53,10 +55,6 @@ def sanitise(d):
         out["reverse"] = d["reverse"]
     if isinstance(d.get("fit_merge"), bool):    # INDEX groups drawn as one
         out["fit_merge"] = d["fit_merge"]
-    if d.get("shape") in SHAPES:                # a panel's own shape
-        out["shape"] = d["shape"]
-    if d.get("span") in SPANS and d["span"] != "1 × 1":
-        out["span"] = d["span"]                 # a panel across grid cells
     v = d.get("offset")
     if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v:
         lo, hi = OFFSET_RANGE
@@ -85,6 +83,71 @@ def sanitise_all(views):
         if d:
             out[str(label)] = d
     return out
+
+
+# -- the page layout: slots ---------------------------------------------------
+# A layout is a list with one entry per *position* on the page (0 = the first
+# panel of a page): ``{"shape": name, "span": name}``, either key optional
+# (no "shape" = the page's Shape box, no "span" = one cell). It belongs to the
+# positions, not to the panels, so moving a panel into a position gives it that
+# position's format; every page of a long set repeats it.
+def sanitise_slot(d):
+    out = {}
+    if isinstance(d, dict):
+        if d.get("shape") in SHAPES:
+            out["shape"] = d["shape"]
+        if d.get("span") in SPANS and d["span"] != "1 × 1":
+            out["span"] = d["span"]
+    return out
+
+
+def _trim(slots):
+    while slots and not slots[-1]:
+        slots.pop()
+    return slots
+
+
+def sanitise_slots(slots):
+    """A layout as a clean list (anything else: empty); at most ``MAX_SLOTS``
+    entries, trailing empty ones dropped."""
+    if not isinstance(slots, (list, tuple)):
+        return []
+    return _trim([sanitise_slot(d) for d in list(slots)[:MAX_SLOTS]])
+
+
+def slot_at(slots, i):
+    """The layout entry for position ``i`` (``{}`` past the end)."""
+    return slots[i] if 0 <= i < len(slots) else {}
+
+
+def with_slot(slots, i, key, value):
+    """A copy of ``slots`` with one key of position ``i`` set. ``value`` None
+    removes it (the page default again)."""
+    if key not in SLOT_KEYS or not 0 <= i < MAX_SLOTS:
+        return sanitise_slots(slots)
+    out = [dict(s) for s in slots]
+    while len(out) <= i:
+        out.append({})
+    if value is None:
+        out[i].pop(key, None)
+    else:
+        out[i][key] = value
+    return sanitise_slots(out)
+
+
+def describe_slots(slots):
+    """The layout in words for slide notes, e.g. "position 1: wide (2
+    columns), landscape 4:3"; "" when there is none."""
+    parts = []
+    for i, s in enumerate(sanitise_slots(slots), 1):
+        bits = []
+        if "span" in s:
+            bits.append(s["span"].lower())
+        if "shape" in s:
+            bits.append(s["shape"].lower())
+        if bits:
+            parts.append(f"position {i}: " + ", ".join(bits))
+    return "; ".join(parts)
 
 
 def sanitise_order(order):
@@ -233,10 +296,6 @@ def describe(override, defaults=None):
         parts.append(f"offset {ov['offset']:g}×")
     if ov.get("reverse"):
         parts.append("reversed")
-    if "shape" in ov:
-        parts.append(f"panel shape {ov['shape']}")
-    if "span" in ov:
-        parts.append(f"panel size {ov['span'].lower()}")
     if "fit_merge" in ov:
         parts.append("INDEX groups merged" if ov["fit_merge"]
                      else "INDEX groups drawn separately")

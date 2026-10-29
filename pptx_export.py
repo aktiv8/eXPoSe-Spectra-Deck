@@ -167,6 +167,9 @@ def look_notes(state):
                  "outline per chemical state).")
     if own:
         text += "\nPanels with their own view: " + "; ".join(own) + "."
+    layout = panelview.describe_slots(st.get("panel_slots"))
+    if layout:
+        text += "\nPage layout: " + layout + "."
     if ticked:
         text += f"\nSpectra shown ({len(ticked)}): {names}."
     return text
