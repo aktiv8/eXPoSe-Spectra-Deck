@@ -3741,13 +3741,19 @@ class Workspace:
         self.panel_start = max(0, idx)           # clamped (and row-aligned)
         self._schedule_render()
 
+    def _page_step(self, n_groups):
+        """Panels a page turn moves by: a whole number of rows, never more
+        than the page shows (so no panel is skipped)."""
+        cols = self._cols(n_groups)
+        return max(cols, self._panels_per_page(n_groups) // cols * cols)
+
     def prev_page(self):
         n = len(self._groups())
-        self._jump(self.panel_start - self._panels_per_page(n))
+        self._jump(self.panel_start - self._page_step(n))
 
     def next_page(self):
         n = len(self._groups())
-        self._jump(self.panel_start + self._panels_per_page(n))
+        self._jump(self.panel_start + self._page_step(n))
 
     def _panel_scroll(self, *args):
         n = len(self._groups())
@@ -3755,7 +3761,7 @@ class Workspace:
         if args[0] == "moveto":
             self.panel_start = int(float(args[1]) * n)
         elif args[0] == "scroll":
-            unit = cols if args[2] == "units" else self._panels_per_page(n)
+            unit = cols if args[2] == "units" else self._page_step(n)
             self.panel_start += int(args[1]) * unit
         self._schedule_render()
 
@@ -3919,7 +3925,10 @@ class Workspace:
         n_spec = sum(len(rs) for _k, rs in groups)
         npp = self._panels_per_page(n_groups)
         cols = _grid_dims(npp, self._forced_cols())[1]
-        max_start = max(0, n_groups - npp)
+        # the last start that still shows the last panel and is row-aligned
+        # (rounding down made the panels past the last whole row unreachable:
+        # 3 panels at 2 a page, 2 columns, never showed the third)
+        max_start = -(-max(0, n_groups - npp) // cols) * cols
         self.panel_start = max(0, min(self.panel_start, max_start))
         self.panel_start -= self.panel_start % cols       # row-aligned
         chunk = groups[self.panel_start:self.panel_start + npp]
@@ -3994,9 +4003,15 @@ class Workspace:
         colours (PDFs pass the white 'print' palette)."""
         base = pal or self.palette          # theme colours (trace colours)
         pal, axis_note = self._plot_palette(base, paper=pal is not None)
-        rows, cols = _grid_dims(len(chunk), self._forced_cols())
+        cols = _grid_dims(len(chunk), self._forced_cols())[1]
         multi = len(self.docs) > 1
         defaults = self._page_defaults()
+        # panels in reading order; one given more than one cell (its own
+        # "Size on grid") is a tall / wide panel beside the others
+        rows, cells = panelview.place(
+            [panelview.SPANS.get(self._look_for(k, defaults).get("span"),
+                                 (1, 1)) for k, _rs in chunk], cols)
+        gs = fig.add_gridspec(rows, cols)
         scale = self.scale_var.get()
         ke_top = bool(self.ke_var.get()) and scale == "Binding"
         selected = ({id(r) for r in self.sel_regions}
@@ -4043,7 +4058,9 @@ class Workspace:
                          == normalise_name(rs[0].name) else key)
                 subtitle = (f"{len(rs)} spectra" if len(vis) == len(rs)
                             else f"{s + 1}–{s + len(vis)} of {len(rs)}")
-            top_row = i < cols
+            cell = cells[i]
+            top_row = cell.top_row
+            slot = gs[cell.r0:cell.r1, cell.c0:cell.c1]
             if panelview.is_series(view):
                 # groups arrive z-sorted (_groups), so this order is the
                 # identity and ``vis`` lines up with the z values
@@ -4057,17 +4074,17 @@ class Workspace:
                 if why:
                     notes.append(f"{key}: {why}")
                 if view == "Heatmap":
-                    ax = fig.add_subplot(rows, cols, i + 1)
+                    ax = fig.add_subplot(slot)
                     axhv[ax] = viewdata.photon_energy(disp)
                     draw_heatmap(fig, ax, disp, zvis, norm,
                                  themes.scale_colourmap(cmap_name, reverse,
                                                         base), title,
-                                 subtitle, first_col=(i % cols == 0),
-                                 bottom_row=(i + cols >= len(chunk)),
+                                 subtitle, first_col=cell.first_col,
+                                 bottom_row=cell.bottom_row,
                                  top_row=top_row, muted=pal["muted"],
                                  scale=pscale, ke_top=ke_top, style=style)
                 else:
-                    ax = fig.add_subplot(rows, cols, i + 1, projection="3d")
+                    ax = fig.add_subplot(slot, projection="3d")
                     draw_waterfall3d(ax, disp, zvis, norm, colours, title,
                                      subtitle, pal, pscale, style=style)
                 axmap[ax] = key
@@ -4075,7 +4092,7 @@ class Workspace:
                               len(disp), zvis.label)
                 zoom_sig[ax] = sig
                 continue
-            ax = fig.add_subplot(rows, cols, i + 1)
+            ax = fig.add_subplot(slot)
             cur = None
             if norm == "At cursor":
                 cur = self.cursors.get(key)
@@ -4137,8 +4154,8 @@ class Workspace:
                 # data keep the first one rather than clash with them
                 colours = [base["cycle"][0]] * len(vis)
             draw_stack(ax, disp, offset, norm, cur, colours, title, subtitle,
-                       selected, multi, first_col=(i % cols == 0),
-                       bottom_row=(i + cols >= len(chunk)),
+                       selected, multi, first_col=cell.first_col,
+                       bottom_row=cell.bottom_row,
                        accent=pal["accent"], muted=pal["muted"],
                        scale=pscale, ke_top=ke_top, top_row=top_row,
                        markers=marks, style=style, fit=fit_arg,
@@ -4323,7 +4340,7 @@ class Workspace:
         if getattr(self, "_pmenu", None) is None:
             self._pmenu = {n: self._menu(self.root) for n in
                            ("root", "view", "norm", "offset", "z", "fit",
-                            "ident", "shape")}
+                            "ident", "shape", "span")}
         pm = self._pmenu
         for m in pm.values():
             m.delete(0, "end")
@@ -4343,6 +4360,8 @@ class Workspace:
              "offset", lambda o: f"{o:g}×")
         fill(pm["z"], viewdata.Z_MODES, look["z_axis"], "z_axis")
         fill(pm["shape"], list(panelview.SHAPES), look["shape"], "shape")
+        fill(pm["span"], list(panelview.SPANS),
+             look.get("span") or "1 × 1", "span")
         for layer in panelview.FIT_LAYERS:
             on = look["fit_show"].get(layer, True)
             pm["fit"].add_command(
@@ -4376,6 +4395,7 @@ class Workspace:
                          state="normal" if series else "disabled")
         root.add_cascade(label="Panel shape", menu=pm["shape"],
                          state="disabled" if series else "normal")
+        root.add_cascade(label="Size on the page grid", menu=pm["span"])
         root.add_command(
             label=mark(look["reverse"], "Reverse order"),
             state="disabled" if series else "normal",

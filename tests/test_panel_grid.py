@@ -79,6 +79,47 @@ class TestPanelShapeOverride(unittest.TestCase):
         self.assertEqual(panelview.reset(views, "C 1s"), {})
 
 
+class TestPlace(unittest.TestCase):
+    def test_plain_grid_is_row_major(self):
+        import panelview
+        rows, cells = panelview.place([(1, 1)] * 5, 2)
+        self.assertEqual(rows, 3)
+        self.assertEqual([(c.r0, c.c0) for c in cells],
+                         [(0, 0), (0, 1), (1, 0), (1, 1), (2, 0)])
+        self.assertEqual([c.bottom_row for c in cells],
+                         [False, False, False, True, True])
+        self.assertEqual([c.first_col for c in cells],
+                         [True, False, True, False, True])
+
+    def test_tall_panel_beside_two_stacked(self):
+        import panelview
+        rows, cells = panelview.place([(2, 1), (1, 1), (1, 1)], 2)
+        self.assertEqual(rows, 2)
+        tall, top, bottom = cells
+        self.assertEqual((tall.r0, tall.r1, tall.c0, tall.c1), (0, 2, 0, 1))
+        self.assertEqual((top.r0, top.c0), (0, 1))
+        self.assertEqual((bottom.r0, bottom.c0), (1, 1))
+        self.assertTrue(tall.bottom_row and bottom.bottom_row)
+        self.assertFalse(top.bottom_row)
+
+    def test_wide_panel_and_clamping(self):
+        import panelview
+        rows, cells = panelview.place([(1, 1), (1, 2), (1, 1)], 2)
+        # the wide one cannot start in column 1, so it goes to the next row
+        self.assertEqual((cells[1].r0, cells[1].c0, cells[1].c1), (1, 0, 2))
+        self.assertEqual(cells[2].r0, 2)
+        rows, cells = panelview.place([(1, 2)], 1)      # wider than the grid
+        self.assertEqual((cells[0].c0, cells[0].c1), (0, 1))
+        self.assertEqual(panelview.place([], 3)[0], 1)
+
+    def test_span_key(self):
+        import panelview
+        self.assertEqual(panelview.sanitise({"span": "Tall (2 rows)"}),
+                         {"span": "Tall (2 rows)"})
+        self.assertEqual(panelview.sanitise({"span": "1 × 1"}), {})
+        self.assertEqual(panelview.sanitise({"span": "huge"}), {})
+
+
 class TestSizePresets(unittest.TestCase):
     def test_presets_inside_dialog_limits(self):
         import plotstyle
@@ -176,6 +217,53 @@ class TestPanelGridInApp(unittest.TestCase):
             p = a.get_position()
             self.assertAlmostEqual((p.height * fh) / (p.width * fw),
                                    4 / 3, places=2)
+
+    def test_every_panel_can_be_reached(self):
+        """3 panels, 2 a page in 2 columns: the third was never shown."""
+        ws = self.ws
+        regs = [r for d in ws.docs for r in d.regions]
+        ws.checked = {id(r) for r in regs[:3]}
+        ws.panels_var.set("2")
+        ws.cols_var.set("2")
+        keys = [k for k, _ in ws._groups()]
+        self.assertEqual(len(keys), 3)
+        ws.panel_start = 99                     # as far as it will go
+        ws._render()
+        self.assertEqual(ws.panel_start, 2)
+        self.assertEqual(list(ws._axmap.values()), keys[2:])
+        ws.prev_page()
+        ws._render()
+        self.assertEqual(ws.panel_start, 0)
+        ws.next_page()
+        ws._render()
+        self.assertEqual(ws.panel_start, 2)
+        self.assertEqual(list(ws._axmap.values()), keys[2:])
+
+    def test_page_turns_never_skip_a_panel(self):
+        ws = self.ws
+        ws.panels_var.set("6")
+        ws.cols_var.set("4")                    # two ragged rows: 4 + 2
+        self.assertEqual(ws._page_step(10), 4)  # not 6: panels 5-6 would skip
+        ws.cols_var.set("2")
+        self.assertEqual(ws._page_step(10), 6)
+
+    def test_tall_panel_layout_on_the_page(self):
+        ws = self.ws
+        regs = [r for d in ws.docs for r in d.regions]
+        ws.checked = {id(r) for r in regs[:3]}
+        ws.cols_var.set("2")
+        keys = [k for k, _ in ws._groups()]
+        ws._set_panel_view(keys[0], "span", "Tall (2 rows)")
+        self.axes()
+        by_key = {ws._axmap[a]: a.get_position() for a in ws.fig.axes
+                  if a in ws._axmap}
+        tall, top, bottom = (by_key[k] for k in keys)
+        self.assertGreater(tall.height, 1.6 * top.height)   # spans both rows
+        self.assertAlmostEqual(top.x0, bottom.x0, places=3)  # stacked
+        self.assertGreater(top.x0, tall.x1)                  # to its right
+        self.assertGreater(top.y0, bottom.y0)
+        st = ws.capture_state()
+        self.assertEqual(st["panel_views"][keys[0]]["span"], "Tall (2 rows)")
 
     def test_one_panel_with_its_own_shape(self):
         ws = self.ws

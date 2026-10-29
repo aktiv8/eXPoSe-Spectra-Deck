@@ -21,7 +21,11 @@ IDENT_LAYERS = ("secondary", "auger")
 # also explain a peak (possibilities), not secondary lines of the same element.
 IDENT_LABELS = {"secondary": "Alternatives", "auger": "Auger"}
 KEYS = ("view", "norm", "offset", "z_axis", "reverse", "fit_show",
-        "fit_merge", "ident_show", "shape")
+        "fit_merge", "ident_show", "shape", "span")
+# how many grid rows / columns a panel takes (a tall survey beside two stacked
+# regions); a panel with no "span" takes one cell
+SPANS = {"1 × 1": (1, 1), "Tall (2 rows)": (2, 1), "Wide (2 columns)": (1, 2),
+         "Large (2 × 2)": (2, 2)}
 # panel shape as height / width (None = whatever the grid cell gives); the
 # page's Shape box and a panel's own override use the same names
 SHAPES = {"Auto": None, "Portrait 2:3": 1.5, "Portrait 3:4": 4 / 3,
@@ -51,6 +55,8 @@ def sanitise(d):
         out["fit_merge"] = d["fit_merge"]
     if d.get("shape") in SHAPES:                # a panel's own shape
         out["shape"] = d["shape"]
+    if d.get("span") in SPANS and d["span"] != "1 × 1":
+        out["span"] = d["span"]                 # a panel across grid cells
     v = d.get("offset")
     if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v:
         lo, hi = OFFSET_RANGE
@@ -124,6 +130,48 @@ def moved_to(keys, key, target):
     return keys
 
 
+class Cell:
+    """Where one panel sits on the page grid: rows ``r0``..``r1`` and columns
+    ``c0``..``c1`` (end exclusive), and whether it is in the first column, the
+    top row, or has no panel directly below it (it carries the x axis label)."""
+    __slots__ = ("r0", "r1", "c0", "c1", "first_col", "top_row", "bottom_row")
+
+    def __init__(self, r0, r1, c0, c1):
+        self.r0, self.r1, self.c0, self.c1 = r0, r1, c0, c1
+        self.first_col = c0 == 0
+        self.top_row = r0 == 0
+        self.bottom_row = True
+
+    def __repr__(self):
+        return f"Cell(rows {self.r0}-{self.r1}, cols {self.c0}-{self.c1})"
+
+
+def place(spans, cols):
+    """Lay panels out on a grid ``cols`` wide, in reading order. ``spans`` is
+    one ``(rows, columns)`` per panel; each goes in the first free place at or
+    after the one before it (a panel never moves in front of an earlier one).
+    Returns ``(rows, [Cell])``. With every span 1 x 1 this is the plain grid:
+    panel ``i`` at row ``i // cols``, column ``i % cols``."""
+    cols = max(1, int(cols))
+    taken, cells, cur = set(), [], 0
+    for rs, cs in spans:
+        rs, cs = max(1, int(rs)), max(1, min(int(cs), cols))
+        while True:
+            r, c = divmod(cur, cols)
+            if c + cs <= cols and not any(
+                    (r + i, c + j) in taken
+                    for i in range(rs) for j in range(cs)):
+                break
+            cur += 1
+        taken.update((r + i, c + j) for i in range(rs) for j in range(cs))
+        cells.append(Cell(r, r + rs, c, c + cs))
+        cur += cs
+    for cell in cells:
+        cell.bottom_row = not any((cell.r1, c) in taken
+                                  for c in range(cell.c0, cell.c1))
+    return max((c.r1 for c in cells), default=1), cells
+
+
 def resolve(defaults, override=None):
     """The full look of a panel: the page default with the override on top."""
     look = dict(defaults)
@@ -187,6 +235,8 @@ def describe(override, defaults=None):
         parts.append("reversed")
     if "shape" in ov:
         parts.append(f"panel shape {ov['shape']}")
+    if "span" in ov:
+        parts.append(f"panel size {ov['span'].lower()}")
     if "fit_merge" in ov:
         parts.append("INDEX groups merged" if ov["fit_merge"]
                      else "INDEX groups drawn separately")
