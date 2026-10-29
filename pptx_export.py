@@ -37,6 +37,20 @@ SLIDE_W, SLIDE_H = 13.333, 7.5          # inches (16:9)
 MARGIN = 0.6
 BODY_W = SLIDE_W - 2 * MARGIN
 FIGURE_SIZE = (12.1, 4.95)              # inches, for the picture on a figure slide
+FIGURE_SIZE_TALL = (12.1, 5.75)         # portrait panels, no caption: ends at
+                                        # 6.9 in, above the footer (BOTTOM)
+TALL_SHAPES = ("Portrait 2:3", "Portrait 3:4", "Square")
+
+
+def figure_size(fig):
+    """The picture size for a saved figure's slide: the taller area (there is
+    no caption under it) when the figure's panels are portrait or square, the
+    usual strip otherwise."""
+    state = fig.get("state") or {}
+    if ((fig.get("caption") or "").strip()
+            or state.get("panel_shape") not in TALL_SHAPES):
+        return FIGURE_SIZE
+    return FIGURE_SIZE_TALL
 GREY = (0x6B, 0x77, 0x85)
 INK = (0x1A, 0x21, 0x27)
 FONT = "Calibri"
@@ -552,7 +566,7 @@ def _figure_slides(deck, figures, render_images):
             if pi:
                 title += " (continued)"
             slide = deck.content_slide(title, None if pi else title)
-            _fit_picture(deck, slide, png)
+            _fit_picture(deck, slide, png, figure_size(fig))
             if caption and pi == 0:
                 deck.text(slide, MARGIN, 6.15, BODY_W, 0.9,
                           paragraphs(caption)[:3], size=13, space_after=3)
@@ -573,10 +587,10 @@ def _image_slides(deck, pages):
         slide.notes_slide.notes_text_frame.text = pg.get("notes", "")
 
 
-def _fit_picture(deck, slide, png):
-    """Place a picture sized ``FIGURE_SIZE`` under the title, centred, and
-    shrink it if it came out taller."""
-    width, height = FIGURE_SIZE
+def _fit_picture(deck, slide, png, size=FIGURE_SIZE):
+    """Place a picture sized ``size`` (``FIGURE_SIZE`` unless given) under the
+    title, centred, and shrink it if it came out taller."""
+    width, height = size
     pic = slide.shapes.add_picture(
         io.BytesIO(png), deck.Inches((SLIDE_W - width) / 2),
         deck.Inches(1.15), width=deck.Inches(width))

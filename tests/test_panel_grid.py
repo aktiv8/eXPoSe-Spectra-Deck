@@ -60,6 +60,25 @@ class TestGridDims(unittest.TestCase):
         self.assertEqual(ee._grid_dims(3, 4), (1, 3))
 
 
+class TestPanelShapeOverride(unittest.TestCase):
+    def test_sanitise_resolve_describe(self):
+        import panelview
+        self.assertEqual(panelview.sanitise({"shape": "Square"}),
+                         {"shape": "Square"})
+        self.assertEqual(panelview.sanitise({"shape": "Round"}), {})
+        defaults = {"view": "Stack", "norm": "None", "offset": 0.6,
+                    "z_axis": "Auto", "reverse": False, "fit_show": {},
+                    "ident_show": {}, "shape": "Auto"}
+        self.assertEqual(panelview.resolve(defaults, {"shape": "Portrait 2:3"}
+                                           )["shape"], "Portrait 2:3")
+        self.assertEqual(panelview.resolve(defaults)["shape"], "Auto")
+        self.assertIn("panel shape Portrait 2:3",
+                      panelview.describe({"shape": "Portrait 2:3"}, defaults))
+        views = panelview.with_value({}, "C 1s", "shape", "Square")
+        self.assertEqual(views, {"C 1s": {"shape": "Square"}})
+        self.assertEqual(panelview.reset(views, "C 1s"), {})
+
+
 class TestSizePresets(unittest.TestCase):
     def test_presets_inside_dialog_limits(self):
         import plotstyle
@@ -157,6 +176,34 @@ class TestPanelGridInApp(unittest.TestCase):
             p = a.get_position()
             self.assertAlmostEqual((p.height * fh) / (p.width * fw),
                                    4 / 3, places=2)
+
+    def test_one_panel_with_its_own_shape(self):
+        ws = self.ws
+        ws.cols_var.set("2")                      # page shape stays Auto
+        keys = [k for k, _ in ws._groups()]
+        ws._set_panel_view(keys[0], "shape", "Portrait 2:3")
+        self.axes()
+        by_key = {ws._axmap[a]: a for a in ws.fig.axes if a in ws._axmap}
+        self.assertAlmostEqual(by_key[keys[0]].get_box_aspect(), 1.5)
+        for k in keys[1:]:
+            self.assertIsNone(by_key[k].get_box_aspect())
+        # saved with the look, and gone with the reset
+        st = ws.capture_state()
+        self.assertEqual(st["panel_views"][keys[0]]["shape"], "Portrait 2:3")
+        ws.reset_panel_views()
+        self.axes()
+        self.assertTrue(all(a.get_box_aspect() is None for a in ws.fig.axes
+                            if a in ws._axmap))
+
+    def test_panel_override_beats_the_page_shape(self):
+        ws = self.ws
+        ws.shape_var.set("Square")
+        keys = [k for k, _ in ws._groups()]
+        ws._set_panel_view(keys[0], "shape", "Auto")     # fill the cell
+        self.axes()
+        by_key = {ws._axmap[a]: a for a in ws.fig.axes if a in ws._axmap}
+        self.assertIsNone(by_key[keys[0]].get_box_aspect())
+        self.assertAlmostEqual(by_key[keys[1]].get_box_aspect(), 1.0)
 
     def test_report_per_page_follows_grid(self):
         ws = self.ws

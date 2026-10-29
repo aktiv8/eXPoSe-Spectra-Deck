@@ -639,8 +639,7 @@ class Workspace:
     PANEL_CHOICES = ["Auto", "1", "2", "4", "6", "9", "12", "16"]
     COLUMN_CHOICES = ["Auto", "1", "2", "3", "4"]
     # panel shape as height / width (None = whatever the grid gives)
-    SHAPE_CHOICES = {"Auto": None, "Portrait 2:3": 1.5, "Portrait 3:4": 4 / 3,
-                     "Square": 1.0, "Landscape 4:3": 0.75}
+    SHAPE_CHOICES = panelview.SHAPES
     TRACE_CHOICES = ["All", "1", "3", "5", "10", "20", "50", "100"]
     IDENT_NEARBY_WINDOW = 2.0        # eV, matches xpslines.candidates' default
     NORM_MODES = list(panelview.NORMS)
@@ -3665,6 +3664,7 @@ class Workspace:
                 "fit_show": {k: bool(v.get())
                              for k, v in self.fit_vars.items()},
                 "fit_merge": bool(self.fit_merge_var.get()),
+                "shape": self.shape_var.get(),
                 "ident_show": {k: bool(v.get())
                               for k, v in self.ident_vars.items()}}
 
@@ -4159,11 +4159,11 @@ class Workspace:
             self._axe0 = axe0
             self._axinfo = axinfo
             self._zoom_sig = zoom_sig
-        shape = self.SHAPE_CHOICES.get(self.shape_var.get())
-        if shape:                       # a fixed panel shape (2D panels)
-            for ax in axmap:
-                if not hasattr(ax, "get_zlim"):
-                    ax.set_box_aspect(shape)
+        for ax, gkey in axmap.items():  # a fixed panel shape (2D panels)
+            shape = panelview.SHAPES.get(
+                self._look_for(gkey, defaults).get("shape"))
+            if shape and not hasattr(ax, "get_zlim"):
+                ax.set_box_aspect(shape)
         if rect is not None:            # leave room for a heading / caption
             fig.tight_layout(rect=rect)
         else:
@@ -4323,7 +4323,7 @@ class Workspace:
         if getattr(self, "_pmenu", None) is None:
             self._pmenu = {n: self._menu(self.root) for n in
                            ("root", "view", "norm", "offset", "z", "fit",
-                            "ident")}
+                            "ident", "shape")}
         pm = self._pmenu
         for m in pm.values():
             m.delete(0, "end")
@@ -4342,6 +4342,7 @@ class Workspace:
              min(self.OFFSET_CHOICES, key=lambda o: abs(o - look["offset"])),
              "offset", lambda o: f"{o:g}×")
         fill(pm["z"], viewdata.Z_MODES, look["z_axis"], "z_axis")
+        fill(pm["shape"], list(panelview.SHAPES), look["shape"], "shape")
         for layer in panelview.FIT_LAYERS:
             on = look["fit_show"].get(layer, True)
             pm["fit"].add_command(
@@ -4373,6 +4374,8 @@ class Workspace:
                          state="disabled" if series else "normal")
         root.add_cascade(label="Z axis", menu=pm["z"],
                          state="normal" if series else "disabled")
+        root.add_cascade(label="Panel shape", menu=pm["shape"],
+                         state="disabled" if series else "normal")
         root.add_command(
             label=mark(look["reverse"], "Reverse order"),
             state="disabled" if series else "normal",
@@ -5887,7 +5890,7 @@ class Workspace:
             page.savefig(buf, format="png", dpi=200)
             return buf.getvalue()
         return self._render_figure_pages(
-            fig, consume, size=pptx_export.FIGURE_SIZE, rect=None,
+            fig, consume, size=pptx_export.figure_size(fig), rect=None,
             decorate=False, number=number)
 
     def _build_deck(self, path, spec=None, notes=None):

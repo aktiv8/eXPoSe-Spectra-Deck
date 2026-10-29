@@ -21,7 +21,11 @@ IDENT_LAYERS = ("secondary", "auger")
 # also explain a peak (possibilities), not secondary lines of the same element.
 IDENT_LABELS = {"secondary": "Alternatives", "auger": "Auger"}
 KEYS = ("view", "norm", "offset", "z_axis", "reverse", "fit_show",
-        "fit_merge", "ident_show")
+        "fit_merge", "ident_show", "shape")
+# panel shape as height / width (None = whatever the grid cell gives); the
+# page's Shape box and a panel's own override use the same names
+SHAPES = {"Auto": None, "Portrait 2:3": 1.5, "Portrait 3:4": 4 / 3,
+          "Square": 1.0, "Landscape 4:3": 0.75}
 OFFSET_RANGE = (0.0, 3.0)
 
 
@@ -45,6 +49,8 @@ def sanitise(d):
         out["reverse"] = d["reverse"]
     if isinstance(d.get("fit_merge"), bool):    # INDEX groups drawn as one
         out["fit_merge"] = d["fit_merge"]
+    if d.get("shape") in SHAPES:                # a panel's own shape
+        out["shape"] = d["shape"]
     v = d.get("offset")
     if isinstance(v, (int, float)) and not isinstance(v, bool) and v == v:
         lo, hi = OFFSET_RANGE
@@ -179,6 +185,8 @@ def describe(override, defaults=None):
         parts.append(f"offset {ov['offset']:g}×")
     if ov.get("reverse"):
         parts.append("reversed")
+    if "shape" in ov:
+        parts.append(f"panel shape {ov['shape']}")
     if "fit_merge" in ov:
         parts.append("INDEX groups merged" if ov["fit_merge"]
                      else "INDEX groups drawn separately")

@@ -204,6 +204,43 @@ class TestDeck(unittest.TestCase):
         for k in range(30):
             self.assertIn(f"{k * 15.0 if k < 20 else k * 20.0:g}", text)
 
+    def test_figure_size_is_taller_only_for_portrait_without_caption(self):
+        fs = pptx_export.figure_size
+        tall, usual = pptx_export.FIGURE_SIZE_TALL, pptx_export.FIGURE_SIZE
+        self.assertEqual(fs({"caption": "", "state": {
+            "panel_shape": "Portrait 3:4"}}), tall)
+        self.assertEqual(fs({"state": {"panel_shape": "Square"}}), tall)
+        self.assertEqual(fs({"caption": "Words", "state": {
+            "panel_shape": "Portrait 3:4"}}), usual)
+        self.assertEqual(fs({"caption": "", "state": {
+            "panel_shape": "Landscape 4:3"}}), usual)
+        self.assertEqual(fs({"caption": "", "state": {}}), usual)    # old
+        self.assertEqual(fs({}), usual)
+        # the taller picture still ends above the footer text
+        self.assertLessEqual(1.15 + tall[1], pptx_export.BOTTOM)
+
+    def test_portrait_figure_without_caption_gets_the_taller_picture(self):
+        from pptx.util import Inches
+        self.figs = [{"name": "P", "caption": "",
+                      "state": {"panel_shape": "Portrait 3:4"}}]
+
+        def png(number, fig):
+            from matplotlib.figure import Figure
+            f = Figure(figsize=pptx_export.figure_size(fig))
+            f.text(0.5, 0.5, "x")
+            buf = io.BytesIO()
+            f.savefig(buf, format="png", dpi=60)
+            return [buf.getvalue()]
+        path = os.path.join(self.tmp.name, "tall.pptx")
+        pptx_export.build_deck(path, self.details, "", self.rows, self.docs,
+                               self.figs, png, ("figures",))
+        from pptx import Presentation
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+        slide = list(Presentation(path).slides)[0]
+        pic = [s for s in slide.shapes
+               if s.shape_type == MSO_SHAPE_TYPE.PICTURE][0]
+        self.assertAlmostEqual(pic.height / Inches(1), 5.75, places=2)
+
     def test_figure_slides_have_picture_caption_and_notes(self):
         _n, prs = self.build(("figures",))
         first = list(prs.slides)[0]
