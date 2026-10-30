@@ -56,12 +56,15 @@ class IssReelsDialog(tk.Toplevel):
         self.iss_tab = ttk.Frame(self.nb, padding=8)
         self.reels_tab = ttk.Frame(self.nb, padding=8)
         self.nb.add(self.iss_tab, text="ISS peaks")
+        self.cal_tab = ttk.Frame(self.nb, padding=8)
+        self.nb.add(self.cal_tab, text="REELS energy scale")
         self.nb.add(self.reels_tab, text="REELS band gap")
         self.loss_tab = ttk.Frame(self.nb, padding=8)
         self.nb.add(self.loss_tab, text="REELS loss peaks / layers")
         self.ratio_tab = ttk.Frame(self.nb, padding=8)
         self.nb.add(self.ratio_tab, text="REELS π / (σ+π) ratio")
         self._build_iss()
+        self._build_cal()
         self._build_reels()
         self._build_loss()
         self._build_ratio()
@@ -405,6 +408,8 @@ class IssReelsDialog(tk.Toplevel):
                    command=self._ratio_sensitivity).pack(side="left", padx=6)
         ttk.Button(b3, text="Save the table (CSV)…",
                    command=self.app.export_reels_csv).pack(side="left")
+        ttk.Button(b3, text="Repeat groups…",
+                   command=self._open_groups).pack(side="left", padx=6)
         self.rt_refs = ttk.Label(t, wraplength=470, justify="left",
                                  font=("", 10, "bold"))
         self.rt_refs.grid(row=9, column=0, columnspan=2, sticky="w",
@@ -412,6 +417,9 @@ class IssReelsDialog(tk.Toplevel):
         self.rt_sens = ttk.Label(t, wraplength=470, justify="left",
                                  font="TkFixedFont")
         self.rt_sens.grid(row=10, column=0, columnspan=2, sticky="w")
+        self.rt_groups = ttk.Label(t, wraplength=470, justify="left")
+        self.rt_groups.grid(row=11, column=0, columnspan=2, sticky="w",
+                            pady=(4, 0))
         ttk.Label(t, style="Muted.TLabel", wraplength=470, justify="left",
                   text="The ratio of the π and σ+π loss areas, each above a "
                        "straight line between its window's limits (the "
@@ -423,8 +431,33 @@ class IssReelsDialog(tk.Toplevel):
                        "them; the references are not published numbers and "
                        "are used only with the windows they were measured "
                        "with. Each spectrum uses its own elastic peak."
-                  ).grid(row=11, column=0, columnspan=2, sticky="w",
+                  ).grid(row=12, column=0, columnspan=2, sticky="w",
                          pady=(6, 0))
+
+    # what the repeat-group editor (quant_ui.RepeatGroupsDialog) asks of its
+    # host: the quantified samples (this dialog has none: the editor adds the
+    # samples with a REELS ratio itself) and a redraw after a change
+    samples = ()
+
+    def refresh(self):
+        try:
+            self._show_ratio()
+        except tk.TclError:
+            pass
+
+    def _open_groups(self):
+        """The repeat-group editor of the Quantification tab, so spectra of the
+        same sample (locations, repeats) can be grouped for the statistics."""
+        import quant_ui
+        d = getattr(self, "_groups_dialog", None)
+        try:
+            if d is not None and d.winfo_exists():
+                d.lift()
+                return d
+        except tk.TclError:
+            pass
+        self._groups_dialog = quant_ui.RepeatGroupsDialog(self, self.app)
+        return self._groups_dialog
 
     def _ratio_settings(self):
         v = self._floats(self.rt_pi_lo, self.rt_pi_hi, self.rt_sp_lo,
@@ -474,7 +507,8 @@ class IssReelsDialog(tk.Toplevel):
         done = skipped = 0
         for r in self.regions:
             ke, counts = self._ke_counts_for(r)
-            el = reels.elastic_peak_refined(ke, counts) if ke else None
+            el = (self._stored_elastic(r) or
+                  reels.elastic_peak_refined(ke, counts)) if ke else None
             res = self._ratio_for(ke, counts, el, settings) if el else None
             if res is None:
                 skipped += 1
@@ -531,6 +565,11 @@ class IssReelsDialog(tk.Toplevel):
         self.rt_refs.config(text=("References: " + "; ".join(bits)) if bits
                             else "No reference yet: the sp² fraction needs "
                                  "a HOPG ratio.")
+        import reelstable
+        lines = reelstable.group_lines(self.app._reels_table())
+        self.rt_groups.config(
+            text=("Repeat groups (mean ± sd):\n" + "\n".join(lines))
+            if lines else "")
 
     def _set_reference(self, which):
         d = self._measure_ratio()       # always with the windows shown now
@@ -850,9 +889,184 @@ class IssReelsDialog(tk.Toplevel):
                     "the spectrum you are analysing.")
         self.hint.config(text=text)
 
+    def _sync_elastic(self):
+        """The Elastic box shows the selected spectrum's own stored peak, or
+        nothing."""
+        stored = self._stored_elastic(self._region())
+        self.elastic.set(f"{stored:.2f}" if stored is not None else "")
+
+    # -- the energy scale: the elastic peak at the primary energy ----------------------------
+    def _build_cal(self):
+        """Move a REELS spectrum's elastic peak to the primary beam energy (see
+        ``reels.calibration``): every kinetic energy shifts by the same amount,
+        and the energy-loss axis then reads 0 eV at the elastic peak."""
+        t = self.cal_tab
+        t.columnconfigure(1, weight=1)
+        self.cal_nominal = tk.StringVar()
+        ttk.Label(t, text="Primary beam energy (eV)").grid(row=0, column=0,
+                                                         sticky="w")
+        ttk.Entry(t, textvariable=self.cal_nominal, width=10).grid(
+            row=0, column=1, sticky="w", padx=6)
+        self.cal_source = ttk.Label(t, style="Muted.TLabel", wraplength=470,
+                                    justify="left")
+        self.cal_source.grid(row=1, column=0, columnspan=2, sticky="w")
+        btns = ttk.Frame(t)
+        btns.grid(row=2, column=0, columnspan=2, sticky="w", pady=8)
+        ttk.Button(btns, text="Move the elastic peak to the primary energy",
+                   command=self._calibrate).pack(side="left")
+        ttk.Button(btns, text="Do every spectrum in the list",
+                   command=self._calibrate_all).pack(side="left", padx=6)
+        ttk.Button(btns, text="Remove", command=self._uncalibrate).pack(
+            side="left")
+        self.cal_status = ttk.Label(t, wraplength=470, justify="left",
+                                    font=("", 11, "bold"))
+        self.cal_status.grid(row=3, column=0, columnspan=2, sticky="w",
+                             pady=(6, 2))
+        self.cal_detail = ttk.Label(t, style="Muted.TLabel", wraplength=470,
+                                    justify="left")
+        self.cal_detail.grid(row=4, column=0, columnspan=2, sticky="w")
+        ttk.Label(t, style="Muted.TLabel", wraplength=470, justify="left",
+                  text="The elastic peak of a REELS spectrum should lie at the "
+                       "primary beam energy, but the energy scale, the work "
+                       "functions and charging move it a few eV. Calibrating "
+                       "shifts the whole kinetic-energy axis of the spectrum "
+                       "by the difference, found from the spectrum's own "
+                       "elastic peak (the parabola-refined maximum), so that "
+                       "peak sits at the primary energy. The REELS axis box of "
+                       "the view row then draws the energy lost from it: 0 eV "
+                       "at the elastic peak, increasing to the right. The data "
+                       "in the file are not changed; the shift is stored with "
+                       "the workbook and written to the metadata, and results "
+                       "already measured keep their loss values."
+                  ).grid(row=5, column=0, columnspan=2, sticky="w",
+                         pady=(10, 0))
+
+    def _file_primary(self, r):
+        return reels.primary_energy(r)
+
+    def _nominal_for(self, r, typed=True):
+        """``(energy, source)``: what is typed in the box (when ``typed``), else
+        what the file records for ``r``; ``(None, None)`` when neither."""
+        file_value = self._file_primary(r)
+        if typed:
+            try:
+                v = float(self.cal_nominal.get())
+            except ValueError:
+                v = None
+            if v is not None and v > 0:
+                return v, ("file" if file_value is not None
+                           and abs(v - file_value) < 1e-9 else "entered")
+        if file_value is not None:
+            return file_value, "file"
+        return None, None
+
+    def _show_cal(self):
+        r = self._region()
+        cal = self.app.reels_cal_get(r)
+        file_value = self._file_primary(r)
+        if cal:
+            self.cal_nominal.set(f"{cal['nominal']:g}")
+        elif file_value is not None:
+            self.cal_nominal.set(f"{file_value:g}")
+        else:
+            self.cal_nominal.set("")
+        self.cal_source.config(
+            text=("From the file." if file_value is not None else
+                  "The file does not record the primary energy: enter it."))
+        if not r.is_reels:
+            self.cal_status.config(text="Not a REELS spectrum")
+            self.cal_detail.config(
+                text=f"Its technique is {r.technique or 'unknown'}; only "
+                     f"spectra recorded as REELS have an energy-loss axis.")
+            return
+        peak, _ke, _y = self.app.reels_measured_peak(r)
+        if cal:
+            self.cal_status.config(
+                text=f"Calibrated: shift {cal['shift']:+.2f} eV")
+            self.cal_detail.config(
+                text=f"The elastic peak was found at {cal['elastic']:.2f} eV "
+                     f"and now lies at {cal['nominal']:g} eV (0 eV of energy "
+                     f"loss). Stored with the workbook.")
+        elif peak is None:
+            self.cal_status.config(text="No elastic peak found")
+            self.cal_detail.config(text="The kinetic energies of this "
+                                        "spectrum are not known.")
+        else:
+            self.cal_status.config(text=f"Elastic peak at {peak:.2f} eV, not "
+                                        f"calibrated")
+            self.cal_detail.config(text="")
+
+    def _calibrate_one(self, r, nominal, source):
+        """Calibrate REELS spectrum ``r`` to ``nominal`` eV; False when it is
+        not REELS or its elastic peak cannot be found."""
+        if not r.is_reels:
+            return False
+        peak, ke, y = self.app.reels_measured_peak(r)
+        cal = reels.calibration(ke, y, nominal) if ke else None
+        if cal is None:
+            return False
+        cal["source"] = source
+        self.app.reels_cal_set(r, cal)
+        return True
+
+    def _calibrate(self):
+        r = self._region()
+        nominal, source = self._nominal_for(r)
+        if nominal is None:
+            self.cal_status.config(text="Enter the primary beam energy")
+            self.cal_detail.config(text="The file does not record it, so "
+                                        "nothing is assumed.")
+            return
+        if not self._calibrate_one(r, nominal, source):
+            self.cal_status.config(text="Could not calibrate this spectrum")
+            self.cal_detail.config(text="It must be a REELS spectrum with "
+                                        "known kinetic energies and an "
+                                        "elastic peak.")
+            return
+        self._after_calibration()
+
+    def _calibrate_all(self):
+        done = skipped = 0
+        for r in self.regions:
+            nominal, source = self._nominal_for(r)
+            if nominal is not None and self._calibrate_one(r, nominal, source):
+                done += 1
+            else:
+                skipped += 1
+        self._after_calibration()
+        if skipped:
+            self.cal_detail.config(
+                text=f"{done} calibrated, {skipped} left out (not REELS, no "
+                     f"primary energy, or no elastic peak).")
+
+    def _uncalibrate(self):
+        self.app.reels_cal_set(self._region(), None)
+        self._after_calibration()
+
+    def _after_calibration(self):
+        """The stored elastic peaks moved with the energy scale: show them."""
+        self._sync_elastic()
+        self._show_cal()
+        self._show_reels()
+
+    def _stored_elastic(self, r):
+        """The elastic peak (eV KE) stored with spectrum ``r`` by any REELS
+        result (band gap, plasmon, loss fit, π / (σ+π) ratio), or None."""
+        for get in (self.app.reels_get, self.app.plasmon_get,
+                    self.app.loss_fit_get, self.app.pi_ratio_get):
+            d = get(r)
+            if d and d.get("elastic") is not None:
+                return d["elastic"]
+        return None
+
     def _region_changed(self):
         r = self._region()
         hv = r.photon_energy
+        # The Elastic box is shared by every spectrum in the list: show this
+        # spectrum's own stored peak, or none, never the last spectrum's (a
+        # stale value would shift this one's loss axis and every result read
+        # from it).
+        self._sync_elastic()
         # what the user saved with this file, else what the file itself
         # records (Avantage), else what the instrument's geometry suggests
         # (a Kratos Axis Ultra: see Workspace.iss_offer), else what was typed
@@ -868,6 +1082,7 @@ class IssReelsDialog(tk.Toplevel):
             self.e0.set(f"{hv:g}" if hv and 50 <= hv <= 10000 else "1000")
         self._iss_status()
         self._refresh_markers()
+        self._show_cal()
         self._show_reels()
         self._set_hint()
 

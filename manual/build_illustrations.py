@@ -494,8 +494,10 @@ def fig_reels():
     result = reels.band_gap(loss_list, y.tolist(), p1, p2)
     reels_dict = {"elastic": elastic, "p1": p1, "p2": p2, **(result or {})}
 
+    import viewdata
     reg = region("REELS", energy_label="Kinetic Energy", technique="REELS",
                 extra_energy=ke.tolist(), extra_counts=y.tolist())
+    reg.extra = dict(reg.extra, reels_zero=elastic)   # 0 eV of energy loss
 
     pal = themes.PALETTES["Light"]
     with matplotlib.rc_context(themes.mpl_rc(pal)):
@@ -505,7 +507,7 @@ def fig_reels():
         subtitle = f"Eg = {gap:.2f} eV" if gap else "band-gap construction"
         plots.draw_stack(ax, [reg], 0, "None", None, ["#0F6B8C"],
                          "REELS loss spectrum", subtitle, (), False,
-                         reels=reels_dict, scale="Kinetic")
+                         reels=reels_dict, scale=viewdata.LOSS)
         fig.tight_layout()
         save_fig(fig, os.path.join(OUT, "fig_reels.png"))
 
@@ -534,17 +536,19 @@ def _loss_spectrum(elastic0=1000.0):
 def _draw_reels_overlay(name, title, subtitle, **overlay):
     import plots
     import themes
+    import viewdata
     ke, y, _loss = _loss_spectrum()
     reg = region("REELS", energy_label="Kinetic Energy", technique="REELS",
                 extra_energy=ke.tolist(), extra_counts=y.tolist())
+    reg.extra = dict(reg.extra, reels_zero=1000.0)    # 0 eV of energy loss
     pal = themes.PALETTES["Light"]
     with matplotlib.rc_context(themes.mpl_rc(pal)):
         fig = Figure(figsize=(9, 5.2), dpi=150)
         ax = fig.add_subplot(111)
         plots.draw_stack(ax, [reg], 0, "None", None, ["#0F6B8C"], title,
-                         subtitle, (), False, scale="Kinetic",
+                         subtitle, (), False, scale=viewdata.LOSS,
                          accent=pal["accent"], **overlay)
-        ax.set_xlim(1000.0 + 1.0, 1000.0 - 55.0)
+        ax.set_xlim(-1.0, 55.0)
         top = float(y[(1000.0 - ke) > 2.0].max())     # the loss region, as
         ax.set_ylim(-0.04 * top, 1.35 * top)          # after a zoom
         fig.tight_layout()

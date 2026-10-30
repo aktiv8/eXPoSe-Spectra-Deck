@@ -263,6 +263,18 @@ def _reels_section(d, table):
             reelstable.WEIGHTS)
     for text in reelstable.paragraphs(table):
         d.paragraph(text, size=8)
+    if table.groups:
+        d.heading("Repeat groups", level=2)
+        d.paragraph(reelstable.REPEAT_INTRO, size=8)
+        for g in table.groups:
+            d.paragraph(f"{g.name} ({g.kind_text}; {len(g.members)} spectra)",
+                        bold=True, size=9)
+            if g.rows:
+                d.table(reelstable.repeat_header(),
+                        reelstable.repeat_report_rows(g),
+                        reelstable.REPEAT_WEIGHTS)
+            for note in g.notes:
+                d.paragraph("• " + note, size=8)
     return True
 
 

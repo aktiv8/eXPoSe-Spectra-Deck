@@ -1541,6 +1541,45 @@ def build_chapters(doc):
     add_figure(doc, "An ISS spectrum with candidate elements marked at their "
               "predicted scattered-ion energies.",
               image_path=os.path.join(FIGDIR, "fig_iss.png"))
+    h2(doc, "REELS energy scale and the energy-loss axis")
+    para(doc,
+        "The elastic peak of a REELS spectrum should lie at the primary beam "
+        "energy, but the energy scale of the spectrometer, the work functions "
+        "and charging move it a few eV: the spectra of one project had it at "
+        "1004.2–1004.4 eV for a 1000 eV beam. The REELS energy scale tab of "
+        "ISS / REELS… moves it. Move the elastic peak to the primary energy "
+        "finds the spectrum’s own elastic peak (the maximum, refined by a "
+        "parabola through it and its neighbours) and shifts every kinetic "
+        "energy of that spectrum by the difference, so the peak sits at the "
+        "primary energy; Do every spectrum in the list does each spectrum "
+        "with its own peak, and Remove undoes it. The primary energy is the "
+        "one the file records (the XPSView reader keeps it as Primary beam "
+        "energy); when the file does not state it, enter it, and the "
+        "calibration is marked as entered. Nothing is assumed."
+    )
+    para(doc,
+        "The shift is stored per spectrum with the workbook and written to "
+        "its metadata (REELS energy calibration); the data in the file are "
+        "never changed. Results already measured keep their loss values: the "
+        "elastic peak stored with a band gap, plasmon, loss fit or π / (σ+π) "
+        "ratio moves with the energy scale, and measuring again on the "
+        "calibrated spectrum gives the same ratio."
+    )
+    para(doc,
+        "The REELS axis box beside the ISS axis box chooses the x axis of REELS "
+        "spectra. Energy loss, the default, plots the energy lost from the "
+        "elastic peak: 0 eV at the peak, increasing to the right, titled "
+        "Energy loss (eV). Kinetic plots the (calibrated) kinetic energy as "
+        "before. Spectra of other techniques on the same page keep their own "
+        "axis, a saved figure remembers the choice (a figure saved before it "
+        "existed was drawn on the kinetic axis and stays so), and the cursor "
+        "read-out gives the loss and the kinetic energy. The overlays of the "
+        "band gap, plasmon energy, loss-region fit and π / (σ+π) ratio are "
+        "drawn on it. The loss is measured from the spectrum’s elastic peak "
+        "(the one stored with its REELS results, else the calibrated or "
+        "refined one). The offline HTML browser has no loss axis; it shows the "
+        "calibrated kinetic energies."
+    )
     h2(doc, "REELS band gap")
     para(doc,
         "Find the elastic peak (automatically, by typing it, or by clicking "
@@ -1737,6 +1776,39 @@ def build_chapters(doc):
         "of HarwellXPS’s reels_pi_sigma_ratio.csv with those columns "
         "added; a value that is not there is blank, never zero, and nothing "
         "is clipped. The hand-over package can include the same CSV."
+    )
+    para(doc,
+        "Repeat groups. Spectra of samples that repeat one another (several "
+        "locations on one sample, a spot measured again) can be grouped, and "
+        "the table then gives the mean, the sample standard deviation (n − 1) "
+        "and n of the ratio, the sp² fraction and the two peak positions for "
+        "each group. The groups are the same ones as the Quantification "
+        "tab’s Groups…; a REELS-only sample has no quantification, so the "
+        "Repeat groups… button of the ratio tab opens the same editor, which "
+        "lists the samples that have a ratio (marked REELS) and can suggest "
+        "groups from their names. The statistics use the values in the table "
+        "and nothing is re-measured; n counts spectra, so a sample with two "
+        "REELS spectra contributes two values. A group measured with "
+        "different windows or end-point channels has no statistics, because "
+        "its ratios cannot be compared, and a spectrum flagged in the table "
+        "is counted and named. A standard deviation needs two spectra."
+    )
+    para(doc,
+        "The groups appear as one line each under the dialog’s table, as a "
+        "Repeat groups subsection of the REELS analysis section in the PDF, "
+        "the slides (a slide per group) and Word, in "
+        "reels/reels_pi_sigma_ratio_repeat_groups.csv in the hand-over "
+        "package, and in a second file written beside the table by "
+        "File → Export REELS ratios → CSV…."
+    )
+    para(doc,
+        "The elastic peak. Every spectrum uses its own elastic peak as the "
+        "loss zero. The Elastic box of the dialog shows the peak stored with "
+        "the selected spectrum, or is empty when it has none, and "
+        "Measure then finds that spectrum’s own maximum; it never carries "
+        "over the value of another spectrum. Measure every spectrum in the "
+        "list keeps a peak you chose for a spectrum and otherwise uses its "
+        "own maximum."
     )
     para(doc,
         "A REELS analysis section in the Report generator puts the table into "

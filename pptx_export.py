@@ -416,6 +416,26 @@ def _reels_slides(deck, table):
         _right_align(deck, shape, 2)
     _text_slides(deck, "REELS π / (σ+π): what the numbers are",
                  reelstable.paragraphs(table), size=13)
+    for g in table.groups:
+        title = f"REELS repeat group – {g.name}"
+        rows = reelstable.repeat_report_rows(g)
+        if rows:
+            slide = deck.content_slide(title)
+            shape = deck.table(slide, MARGIN, TABLE_TOP, BODY_W,
+                               reelstable.REPEAT_WEIGHTS,
+                               reelstable.repeat_header(), rows, size=11)
+            for row in shape.table.rows:             # the numbers, not Values
+                for ci in range(1, 4):
+                    for p in row.cells[ci].text_frame.paragraphs:
+                        p.alignment = deck.ALIGN.RIGHT
+            top = TABLE_TOP + ROW_H * (len(rows) + 1) + 0.3
+            deck.text(slide, MARGIN, top, BODY_W, max(0.5, BOTTOM - top),
+                      [f"{g.kind_text}; {len(g.members)} spectra. "
+                       + reelstable.REPEAT_INTRO] + list(g.notes),
+                      size=11, space_after=6)
+        else:
+            _text_slides(deck, title, [reelstable.REPEAT_INTRO] + list(g.notes),
+                         size=13)
 
 
 def _timing_slides(deck, data):

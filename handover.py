@@ -12,6 +12,8 @@ experiment in one ZIP.
                                of the at % over each repeat group (optional)
     <name>/reels/reels_pi_sigma_ratio.csv  REELS π / (σ+π) ratios and sp²
                                fraction (optional)
+    <name>/reels/reels_pi_sigma_ratio_repeat_groups.csv  their mean, sd and n
+                               over each repeat group (optional)
     <name>/spectra/vamas/<sample>.vms   one VAMAS file per sample
     <name>/spectra/csv/<sample>.csv     the same spectra as CSV
     <name>/spectra/nexus/<sample>.nxs   the same as NeXus NXxps (when h5py is installed)
@@ -219,6 +221,7 @@ def casaquant_parts(raw):
 REPEAT_GROUPS_ARC = "quantification/quantification_repeat_groups.csv"
 QUANT_ARC = "quantification/quantification.csv"
 REELS_ARC = "reels/reels_pi_sigma_ratio.csv"
+REELS_GROUPS_ARC = "reels/reels_pi_sigma_ratio_repeat_groups.csv"
 
 
 def repeat_group_parts(groups):
@@ -246,10 +249,18 @@ def reels_parts(table):
     import reelstable
     if not table:
         return []
-    return [Part(REELS_ARC,
-                 "REELS π / (σ+π) intensity ratio, peak positions and sp² "
-                 "fraction of each measured spectrum",
-                 data=reelstable.csv_bytes(table))]
+    parts = [Part(REELS_ARC,
+                  "REELS π / (σ+π) intensity ratio, peak positions and sp² "
+                  "fraction of each measured spectrum",
+                  data=reelstable.csv_bytes(table))]
+    groups = reelstable.repeat_csv_bytes(table)
+    if groups:
+        parts.append(Part(REELS_GROUPS_ARC,
+                          "mean, standard deviation (n-1) and n of the REELS "
+                          "ratio, sp² fraction and peak positions over each "
+                          "repeat group, with the individual values",
+                          data=groups))
+    return parts
 
 
 def quantification_parts(results, skip=()):
@@ -368,6 +379,19 @@ def readme_text(details, parts, file_rows=(), calibration="", when=None):
                   "if measured, diamond (= 0) of the workbook, and is blank "
                   "where they were",
                   "measured another way. Problems are in the Notes column.",
+                  ""]
+    if any(p.arc == REELS_GROUPS_ARC for p in parts):
+        lines += ["About the REELS repeat groups",
+                  "-----------------------------",
+                  "Each group is a set of samples that repeat one another "
+                  "(the groups of the",
+                  "Quantification tab). For the ratio, the sp² fraction and "
+                  "the two peak",
+                  "positions the CSV gives the mean, the standard deviation "
+                  "(n - 1) and n, then",
+                  "each spectrum's own value taken from the table; nothing is "
+                  "re-measured. A",
+                  "group measured with different windows has no statistics.",
                   ""]
     lines += ["", "About the spectra", "-----------------",
               "Binding energy is photon energy minus kinetic energy and, "

@@ -101,6 +101,7 @@ import viewzoom
 import workbook as wbk
 import annotations
 import appinfo
+import reels
 import nexafs
 import calibration
 import casacsv
@@ -709,6 +710,7 @@ class Workspace:
         self._axmap = {}
         self._axhv = {}
         self._axe0 = {}             # axes drawn as energy ratio -> beam energy
+        self._axloss = {}           # axes drawn as REELS energy loss -> KE at 0
         self._view_notes = []
         self._thumb_imgs = []
         self._view_photo = None
@@ -1321,6 +1323,7 @@ class Workspace:
         cfg["view_mode"] = self.view_var.get()
         cfg["energy_scale"] = self.scale_var.get()
         cfg["iss_axis"] = self.iss_axis_var.get()
+        cfg["reels_axis"] = self.reels_axis_var.get()
         cfg["ke_top"] = bool(self.ke_var.get())
         cfg["z_axis"] = self.z_var.get()
         cfg["group_by"] = self.group_var.get()
@@ -1501,6 +1504,22 @@ class Workspace:
                 "or the energy ratio E/E₀. The ratio needs the beam energy, "
                 "recorded in the file or saved with 'Use for this file' in "
                 "ISS / REELS. Other spectra are not affected.")
+        ctl2.add(grp)
+
+        grp = ttk.Frame(ctl2)
+        ttk.Label(grp, text="REELS axis").pack(side="left")
+        reels_axis = cfg.get("reels_axis", viewdata.REELS_AXES[0])
+        self.reels_axis_var = tk.StringVar(
+            value=reels_axis if reels_axis in viewdata.REELS_AXES
+            else viewdata.REELS_AXES[0])
+        rb = ttk.Combobox(grp, textvariable=self.reels_axis_var, width=11,
+                          state="readonly", values=list(viewdata.REELS_AXES))
+        rb.pack(side="left", padx=(6, 0))
+        rb.bind("<<ComboboxSelected>>", lambda e: self._on_view_changed())
+        tip(rb, "The x axis of REELS spectra: the energy lost, measured from "
+                "the elastic peak (0 eV, which ISS / REELS ▸ REELS energy "
+                "scale can move to the primary beam energy), or the kinetic "
+                "energy. Other spectra are not affected.")
         ctl2.add(grp)
 
         self.ring_cb = ttk.Checkbutton(ctl2, text="Ring-current scaling",
@@ -2552,14 +2571,24 @@ class Workspace:
                  if viewdata.is_binding(r) else 0.0)
         e0 = self._iss_e0(r, fid)       # the ion scattering energy-ratio axis
         nex = self._nexafs_result(r, fid)   # ring-current scaling, edge step
+        kshift = ann.reels_shift_for(fid, r.sample, r.name) \
+            if r.is_reels else 0.0          # the REELS energy calibration
         if (dn == r.name and ds == r.sample and not shift and not e0
-                and nex is None):
+                and nex is None and not kshift and not r.is_reels):
             q = r
         else:
             q = copy.copy(r)
             q.name, q.sample = dn, ds
             if e0:
                 q.extra = dict(r.extra, iss_e0=e0)
+            if r.is_reels:
+                if kshift:                  # every kinetic energy moves by it
+                    sign = -1.0 if viewdata.is_binding(r) else 1.0
+                    q.energy = [e + sign * kshift for e in r.energy]
+                    q.reels_shift_applied = kshift
+                zero = self._reels_zero(r, q, fid)
+                if zero:
+                    q.extra = dict(q.extra, reels_zero=zero)
             if nex is not None:
                 q.counts = nex.counts
                 q.extra = dict(q.extra, ring_norm=nex.mean,
@@ -2577,6 +2606,30 @@ class Workspace:
                     q.photon_energy = r.photon_energy + shift
         self._disp_cache[id(r)] = q
         return q
+
+    def _reels_zero(self, r, q, fid):
+        """The kinetic energy (eV) that is 0 on the energy-loss axis of REELS
+        spectrum ``r`` (``q`` is its display copy, already calibrated): the
+        elastic peak stored with it by a REELS result (keyed by ``r``'s own
+        names, not the display names), else the refined maximum of ``q``'s own
+        kinetic energies (which is the primary energy once calibrated). None
+        when its kinetic energies are not known."""
+        for table in (self.ann.reels, self.ann.plasmon, self.ann.loss_fit,
+                      self.ann.pi_ratio):
+            d = table.get(annotations.region_key(fid, r.sample, r.name))
+            if d and d.get("elastic") is not None:
+                return d["elastic"]
+        return self._reels_peak(q)
+
+    def _reels_peak(self, q):
+        """The refined elastic-peak maximum of ``q``'s kinetic energies."""
+        ax = viewdata.energy_axis(q, "Kinetic")
+        if not ax.ok or not q.counts:
+            return None
+        order = sorted(range(len(ax.x)), key=ax.x.__getitem__)
+        ke = [ax.x[i] for i in order]
+        y = [q.counts[i] for i in order]
+        return reels.elastic_peak_refined(ke, y)
 
     def _nexafs_result(self, r, fid):
         """The ring-current scaling and the saved edge normalisation of a
@@ -2650,6 +2703,9 @@ class Workspace:
         if (self.iss_axis_var.get() == viewdata.RATIO and disp
                 and all(r.is_iss for r in disp)):
             return viewdata.RATIO
+        if (self.reels_axis_var.get() == viewdata.LOSS and disp
+                and all(r.is_reels for r in disp)):
+            return viewdata.LOSS        # REELS: the energy lost from the peak
         return scale
 
     def _zoom_scale(self):
@@ -2658,6 +2714,8 @@ class Workspace:
         scale = self.scale_var.get()
         if self.iss_axis_var.get() == viewdata.RATIO:
             return f"{scale}|{viewdata.RATIO}"
+        if self._axloss:                 # only a page that has one: a zoom of
+            return f"{scale}|{viewdata.LOSS}"      # another page is unchanged
         return scale                     # unchanged, so saved figures still fit
 
     def _ann_changed(self, relabel=True):
@@ -2968,6 +3026,8 @@ class Workspace:
                                                        self.scale_var.get()))
         if ax.e0:                        # an energy-ratio axis: E = ratio x E0
             return float(event.xdata) * ax.e0
+        if ax.zero is not None:          # an energy-loss axis: KE = zero - loss
+            return ax.zero - float(event.xdata)
         if ax.label == "Kinetic Energy":
             return float(event.xdata)
         return (d.photon_energy - float(event.xdata)
@@ -3036,6 +3096,31 @@ class Workspace:
             return {"ion": elements.DEFAULT_ION, "e0": elements.KRATOS_E0,
                     "theta": elements.KRATOS_THETA}
         return {}
+
+    def reels_cal_get(self, r):
+        """The stored energy calibration of REELS spectrum ``r``, or None."""
+        return self.ann.reels_cal_for(*self._marker_key(r))
+
+    def reels_cal_set(self, r, data):
+        """Store (None removes) the energy calibration of REELS spectrum ``r``:
+        every kinetic energy moves by its shift, and the elastic peak stored
+        with any REELS result of it moves with them."""
+        self.ann.set_reels_cal(*self._marker_key(r), data)
+        self._ann_changed(relabel=False)
+        self._update_metadata()
+
+    def reels_measured_peak(self, r):
+        """``(elastic peak, kinetic energies, counts)`` of REELS spectrum ``r``
+        *as the file has it* (before any calibration), the peak being the
+        parabola-refined maximum; ``(None, None, None)`` when its kinetic
+        energies are not known."""
+        ax = viewdata.energy_axis(r, "Kinetic")
+        if not ax.ok or not r.counts:
+            return None, None, None
+        order = sorted(range(len(ax.x)), key=ax.x.__getitem__)
+        ke = [ax.x[i] for i in order]
+        y = [r.counts[i] for i in order]
+        return reels.elastic_peak_refined(ke, y), ke, y
 
     def reels_get(self, r):
         return self.ann.reels_for(*self._marker_key(r))
@@ -4064,7 +4149,7 @@ class Workspace:
         selected = ({id(r) for r in self.sel_regions}
                     | {id(self._display(r)) for r in self.sel_regions})
         axmap, stacked_axes, axhv = {}, [], {}
-        axinfo, axe0 = {}, {}
+        axinfo, axe0, axloss = {}, {}, {}
         zoom_sig = {}
         notes = []
         if fig is self.fig:
@@ -4081,6 +4166,7 @@ class Workspace:
             s = min(start, len(rs) - lim) if lim and len(rs) > lim else 0
             vis = rs[s:s + lim] if lim and len(rs) > lim else rs
             sig = (view, norm, offset, scale, self.iss_axis_var.get(),
+                   self.reels_axis_var.get(),
                    look.get("z_axis"), s, tuple(id(r) for r in vis),
                    self.ranges.get(key) if norm == "Range" else None)
             colours = self.trace_colours(rs, base)[s:s + len(vis)]
@@ -4218,9 +4304,11 @@ class Workspace:
                        rng=self.ranges.get(key))
             axmap[ax] = key
             axhv[ax] = viewdata.photon_energy(disp)
-            e0 = viewdata.energy_axis(disp[0], pscale).e0
-            if e0:
-                axe0[ax] = e0
+            a_first = viewdata.energy_axis(disp[0], pscale)
+            if a_first.e0:
+                axe0[ax] = a_first.e0
+            if a_first.zero is not None:
+                axloss[ax] = a_first.zero
             axinfo[ax] = (axhv[ax], "fit" if view == "Fit" else "stack",
                           len(disp), "")
             zoom_sig[ax] = sig
@@ -4229,6 +4317,7 @@ class Workspace:
         if fig is self.fig:
             self._axhv = axhv
             self._axe0 = axe0
+            self._axloss = axloss
             self._axinfo = axinfo
             self._zoom_sig = zoom_sig
         order = {gkey: i for i, (gkey, _rs) in enumerate(chunk)}
@@ -4317,8 +4406,8 @@ class Workspace:
         info = self._axinfo.get(ax)
         if ax is None or event.xdata is None or info is None:
             return None
-        if ax in self._axe0:             # an energy ratio is not a binding energy
-            return None
+        if ax in self._axe0 or ax in self._axloss:   # a ratio or a loss is not
+            return None                              # a binding energy
         x, hv = float(event.xdata), info[0]
         if self.scale_var.get() == "Kinetic":
             if not hv:
@@ -4357,8 +4446,11 @@ class Workspace:
         hv, kind, n, zlabel = info
         x = float(event.xdata)
         e0 = self._axe0.get(ax)
+        zero = self._axloss.get(ax)
         if e0:
             text = f"E/E₀ {x:.4f}   KE {x * e0:.1f} eV"
+        elif zero is not None:
+            text = f"Loss {x:.2f} eV   KE {zero - x:.2f} eV"
         elif self.scale_var.get() == "Kinetic":
             text = f"KE {x:.2f} eV" + (f"   BE {hv - x:.2f} eV" if hv else "")
         else:
@@ -4906,8 +4998,11 @@ class Workspace:
         x = float(event.xdata)
         hv = self._axhv.get(event.inaxes)
         e0 = self._axe0.get(event.inaxes)
+        zero = self._axloss.get(event.inaxes)
         if e0:
             x = x * e0                  # an ISS cursor is a kinetic energy
+        elif zero is not None:
+            x = zero - x                # so is a REELS one
         elif self.scale_var.get() == "Kinetic" and hv:
             x = hv - x                  # cursors are kept as binding energy
         if look["norm"] == "Range":
@@ -5033,6 +5128,7 @@ class Workspace:
             "view_mode": self.view_var.get(),
             "energy_scale": self.scale_var.get(),
             "iss_axis": self.iss_axis_var.get(),
+            "reels_axis": self.reels_axis_var.get(),
             "ke_top": bool(self.ke_var.get()), "z_axis": self.z_var.get(),
             "colour_scale": self.colscale_var.get(),
             "colour_reverse": bool(self.colrev_var.get()),
@@ -5090,6 +5186,11 @@ class Workspace:
         self.iss_axis_var.set(st.get("iss_axis")
                               if st.get("iss_axis") in viewdata.ISS_AXES
                               else viewdata.ISS_AXES[0])
+        # likewise REELS: a look saved before the loss axis existed drew the
+        # kinetic energy, so a missing key is Kinetic, never the live choice
+        self.reels_axis_var.set(st.get("reels_axis")
+                                if st.get("reels_axis") in viewdata.REELS_AXES
+                                else "Kinetic")
         # a figure saved before the grid choices existed used the automatic
         # grid: a missing key is Auto, never whatever the live window has
         self.cols_var.set(st.get("panel_columns")
@@ -5713,8 +5814,12 @@ class Workspace:
                 items.append({"file": os.path.basename(doc.path or ""),
                               "sample": d.sample, "spectrum": d.name,
                               "unit": getattr(d, "count_units", ""),
+                              # the key of a repeat group's member, as the
+                              # Quantification tab builds it
+                              "key": f"{reportspec.doc_key(doc)}/{d.sample}",
                               "res": res})
-        return reelstable.collect(items, self.ann.reels_refs)
+        return reelstable.collect(items, self.ann.reels_refs,
+                                  self.ann.repeat_groups)
 
     def report_inventory(self):
         """What the loaded data can put in a report (sections with content,
@@ -7203,14 +7308,23 @@ class Workspace:
             initialfile="reels_pi_sigma_ratio.csv")
         if not path:
             return
+        written = [path]
         try:
             with open(path, "wb") as fh:
                 fh.write(reelstable.csv_bytes(table))
+            groups = reelstable.repeat_csv_bytes(table)
+            if groups:                       # the statistics, beside it
+                stem, ext = os.path.splitext(path)
+                other = f"{stem}_repeat_groups{ext or '.csv'}"
+                with open(other, "wb") as fh:
+                    fh.write(groups)
+                written.append(other)
         except OSError as exc:
             messagebox.showerror("Export failed", str(exc))
             return
-        messagebox.showinfo("Exported", f"Wrote the ratios of {len(table)} "
-                                        f"spectrum(s) to:\n{path}")
+        messagebox.showinfo(
+            "Exported", f"Wrote the ratios of {len(table)} spectrum(s) to:\n"
+            + "\n".join(written))
 
     def export_meta_pdf(self):
         parser = self._metadata_doc()

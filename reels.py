@@ -477,6 +477,64 @@ def elastic_peak_refined(ke, counts):
     return float(e)
 
 
+# -- the energy scale of a REELS spectrum ------------------------------------------------
+# The elastic peak of a REELS spectrum sits at the primary beam energy (1000 eV in
+# the author's data), but a spectrometer's energy scale, the work functions and
+# any charging put it a few eV away (1004.2-1004.4 eV there). Calibrating moves
+# the whole kinetic-energy axis so that the elastic peak lies at the primary energy,
+# which then is 0 eV of energy loss. The shift is per spectrum (each spectrum's own
+# elastic peak) and is stored beside the data (Annotations.reels_cal): the readers'
+# arrays are never changed.
+PRIMARY_KEYS = ("Primary beam energy (eV)", "Primary energy (eV)")
+
+
+def primary_energy(region):
+    """The primary beam energy (eV) a file records for a REELS spectrum (the
+    "Primary beam energy (eV)" row of the XPSView reader, or
+    ``extra["primary_energy"]``), or None when it does not say."""
+    extra = getattr(region, "extra", None) or {}
+    candidates = [extra.get("primary_energy")]
+    meta = extra.get("acq_metadata") or {}
+    candidates += [meta.get(k) for k in PRIMARY_KEYS]
+    for v in candidates:
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            continue
+        if math.isfinite(v) and v > 0:
+            return v
+    return None
+
+
+def calibration(ke, counts, nominal):
+    """``{elastic, nominal, shift}`` moving the elastic peak of the spectrum
+    (``ke``, ``counts`` as measured) to ``nominal`` eV: ``elastic`` is its
+    parabola-refined maximum and ``shift`` = nominal - elastic (add it to every
+    kinetic energy). None when the peak cannot be found or ``nominal`` is not a
+    positive number."""
+    try:
+        nominal = float(nominal)
+    except (TypeError, ValueError):
+        return None
+    if not (math.isfinite(nominal) and nominal > 0):
+        return None
+    elastic = elastic_peak_refined(list(ke or ()), list(counts or ()))
+    if elastic is None or not math.isfinite(elastic):
+        return None
+    return {"elastic": float(elastic), "nominal": nominal,
+            "shift": nominal - float(elastic)}
+
+
+def calibration_text(cal):
+    """One sentence for the metadata and the methods."""
+    how = {"file": "recorded in the file", "entered": "entered by the user"}
+    src = how.get(cal.get("source"))
+    return (f"kinetic energies shifted by {cal['shift']:+.2f} eV so that the "
+            f"elastic peak, found at {cal['elastic']:.2f} eV, lies at the "
+            f"primary energy of {cal['nominal']:g} eV"
+            + (f" ({src})" if src else "") + " (0 eV of energy loss)")
+
+
 def _window_area(x, v, window, avg):
     """``(area, loss, background)`` of ``v`` above the straight line between the
     window's first and last points, by the trapezoid rule, or None when the

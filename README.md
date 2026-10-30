@@ -385,12 +385,16 @@ workbook. Sections, in the default results-first order:
   only written when the files record it. It can be ticked off like any other
   section (PDF, slides and Word follow together); a report saved before it
   existed keeps it off.
+* **REELS energy scale** — ISS / REELS ▸ *REELS energy scale* moves each REELS spectrum's elastic peak to the primary beam energy (the file's, or typed), and the *REELS axis* box draws the energy lost from it: 0 eV at the peak, increasing to the right (the default for REELS spectra).
 * **REELS analysis** — after the Quantification, when you have measured REELS
   π / (σ+π) ratios (Tools ▸ ISS / REELS…): one table of the ratio, the peak
   positions, the two areas and the sp² fraction against your own HOPG (and
   diamond) reference, with the windows used and the problems marked †. The
   same table is the CSV of *File ▸ Export REELS ratios → CSV…* and of the
-  hand-over package; a report saved before it existed keeps it off.
+  hand-over package; samples that repeat one another (the groups of the
+  Quantification tab, also reachable from the ratio tab) get the mean, sd and
+  n of the ratio, the sp² fraction and the peak positions; a report saved
+  before it existed keeps it off.
 * **Summary**, then **Quantification** — atomic percent from CasaXPS areas and
   sensitivity factors: a table per sample (with chemical states) or, for a depth
   profile, a chart and a table by level. A region fitted in more than one

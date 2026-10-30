@@ -224,6 +224,63 @@ class TestIssDialog(unittest.TestCase):
         dlg._enter_reference()                             # not a number
         self.assertEqual(self.ws.ann.reels_refs["hopg"]["ratio"], 0.32)
 
+    def patch_elastic(self, dlg, el_ke, pi_area=300.0):
+        from test_iss_reels import ratio_spectrum
+        ke, y, _loss = ratio_spectrum(pi_area, 2000.0, el_ke=el_ke)
+        dlg._ke_counts = lambda: (list(ke), list(y))
+        dlg._ke_counts_for = lambda r: (list(ke), list(y))
+
+    def test_a_stale_elastic_peak_from_another_spectrum_is_not_used(self):
+        # the Elastic box is shared between the spectra in the list: selecting
+        # a spectrum with nothing stored must not keep the last one's value,
+        # or the loss axis (and the ratio) would be shifted
+        dlg = self.dialog()
+        self.patch_elastic(dlg, 1000.0)
+        dlg.elastic.set("")
+        first = dlg._measure_ratio()
+        self.assertAlmostEqual(first["elastic"], 1000.0, delta=0.05)
+        dlg._clear_ratio()                              # nothing stored now
+        self.patch_elastic(dlg, 1004.3)                 # another spectrum
+        dlg._region_changed()
+        self.assertEqual(dlg.elastic.get(), "")         # not 1000.00
+        second = dlg._measure_ratio()
+        self.assertAlmostEqual(second["elastic"], 1004.3, delta=0.05)
+        # the same spectrum with the correct peak gives the same ratio
+        self.patch_elastic(dlg, 1000.0)
+        dlg._clear_ratio()
+        dlg._region_changed()
+        again = dlg._measure_ratio()
+        self.assertAlmostEqual(again["ratio"], first["ratio"], 9)
+        self.assertAlmostEqual(second["ratio"], first["ratio"], delta=1e-3)
+
+    def test_a_stored_elastic_peak_comes_back_with_its_spectrum(self):
+        dlg = self.dialog()
+        self.patch_elastic(dlg, 1000.0)
+        dlg.elastic.set("")
+        dlg._measure_ratio()
+        dlg.elastic.set("5")                            # something else typed
+        dlg._region_changed()
+        self.assertAlmostEqual(float(dlg.elastic.get()), 1000.0, delta=0.05)
+
+    def test_the_batch_uses_a_spectrums_stored_elastic_peak(self):
+        # a peak the user chose for a spectrum (the band gap tab) is kept by
+        # the batch; a spectrum with none gets its own refined maximum
+        dlg = self.dialog()
+        self.patch_elastic(dlg, 1000.0)
+        self.ws.reels_set(self.region, {"elastic": 1000.5, "p1": [4.0, 420.0],
+                                         "p2": [5.0, 820.0]})
+        dlg._measure_ratio_all()
+        self.assertAlmostEqual(self.ws.pi_ratio_get(self.region)["elastic"],
+                               1000.5, 9)
+        dlg._measure_ratio_all()                        # re-measuring keeps it
+        self.assertAlmostEqual(self.ws.pi_ratio_get(self.region)["elastic"],
+                               1000.5, 9)
+        self.ws.reels_set(self.region, None)
+        dlg._clear_ratio()                              # nothing stored now
+        dlg._measure_ratio_all()
+        self.assertAlmostEqual(self.ws.pi_ratio_get(self.region)["elastic"],
+                               1000.0, delta=0.05)
+
     def test_a_reference_measured_with_other_windows_is_not_used(self):
         dlg = self.dialog()
         self.patch_spectrum(dlg, 300.0)
@@ -341,6 +398,69 @@ class TestIssDialog(unittest.TestCase):
         parts, notes = self.ws.handover_parts({"reels"})
         self.assertEqual(parts, [])
         self.assertTrue(any("REELS" in n for n in notes))
+
+    def test_a_reels_only_sample_can_be_grouped_and_gets_statistics(self):
+        dlg = self.measured()
+        table = self.ws._reels_table()
+        key = table.rows[0].key
+        import reportspec
+        self.assertEqual(key, f"{reportspec.doc_key(self.ws.docs[0])}/"
+                              f"{self.ws._display(self.region).sample}")
+        editor = dlg._open_groups()                 # from the REELS dialog
+        self.addCleanup(lambda: editor.winfo_exists() and editor.destroy())
+        self.assertIs(dlg._open_groups(), editor)   # one window at a time
+        cands = {k: (label, ok) for k, label, ok in editor.candidates()}
+        self.assertIn(key, cands)                   # no fit needed
+        self.assertTrue(cands[key][1])
+        self.assertIn("(REELS)", cands[key][0])
+        name = editor.new_group("Locations")
+        self.assertTrue(editor.toggle_sample(key))
+        self.assertEqual(self.ws.ann.repeat_groups[name]["samples"], [key])
+        groups = self.ws._reels_table().groups
+        self.assertEqual([g.name for g in groups], [name])
+        self.assertEqual(groups[0].rows[0].n, 1)
+        dlg.refresh()                               # the editor's redraw
+        self.assertIn(name, dlg.rt_groups.cget("text"))
+        self.assertIn("1 spectra", dlg.rt_groups.cget("text"))
+
+    def test_the_group_suggestions_include_reels_samples(self):
+        dlg = self.measured()
+        editor = dlg._open_groups()
+        self.addCleanup(lambda: editor.winfo_exists() and editor.destroy())
+        added = editor.suggest()
+        sample = self.ws._display(self.region).sample
+        # a single sample is no group (two are needed), but nothing breaks
+        self.assertEqual(added, [] if "location" not in sample else added)
+
+    def test_the_csv_export_writes_the_statistics_beside_it(self):
+        import csv
+        dlg = self.measured()
+        key = self.ws._reels_table().rows[0].key
+        self.ws.ann.set_repeat_group("Locations", "locations", [key])
+        self.ws._ann_changed(relabel=False)
+        path = os.path.join(self.__class__.dir, "r.csv")
+        saved = ee.filedialog.asksaveasfilename
+        ee.filedialog.asksaveasfilename = lambda **k: path
+        try:
+            self.ws.export_reels_csv()
+        finally:
+            ee.filedialog.asksaveasfilename = saved
+        other = os.path.join(self.__class__.dir, "r_repeat_groups.csv")
+        self.assertTrue(os.path.exists(path))
+        self.assertTrue(os.path.exists(other))
+        with open(other, encoding="utf-8-sig", newline="") as fh:
+            rows = list(csv.reader(fh))
+        self.assertEqual(rows[0][:3], ["Group", "Kind", "Quantity"])
+        self.assertEqual(rows[1][0], "Locations")
+
+    def test_the_handover_has_the_statistics_when_a_group_has_a_ratio(self):
+        self.measured()
+        key = self.ws._reels_table().rows[0].key
+        self.ws.ann.set_repeat_group("Locations", "locations", [key])
+        parts, _notes = self.ws.handover_parts({"reels"})
+        self.assertEqual([p.arc for p in parts],
+                         ["reels/reels_pi_sigma_ratio.csv",
+                          "reels/reels_pi_sigma_ratio_repeat_groups.csv"])
 
     def test_tpp2m_fills_the_mean_free_path(self):
         dlg = self.dialog()

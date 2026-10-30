@@ -14,6 +14,9 @@ import sputter
 
 RATIO = "Energy ratio"           # ISS: scattered energy / beam energy, E/E0
 RATIO_UNITS = "E/E$_0$"          # mathtext, so any plot font draws the 0
+LOSS = "Energy loss"             # REELS: the elastic peak at 0, losses above it
+REELS_AXES = (LOSS, "Kinetic")   # the x axis of REELS spectra; the first is the
+                                 # default (see Workspace)
 ENERGY_SCALES = ("Binding", "Kinetic")
 ISS_AXES = ("Kinetic", RATIO)     # the x axis of ion scattering spectra; the
                                   # first is the default (see Workspace)
@@ -30,6 +33,7 @@ class Axis(NamedTuple):
     invert: bool        # binding-energy axes are drawn high -> low
     ok: bool            # False: kinetic was asked for but hν is unknown
     e0: float = None    # the beam energy of an energy-ratio axis, else None
+    zero: float = None  # the kinetic energy at 0 of an energy-loss axis, else None
 
 
 def is_binding(region) -> bool:
@@ -44,6 +48,12 @@ def energy_axis(region, scale="Binding") -> Axis:
     native axis is kept and ``ok`` is False. A region that is natively
     kinetic (no hν, so it was never converted) is left alone either way.
 
+    ``scale=LOSS`` applies to REELS spectra only: the energy lost, ``zero`` -
+    kinetic energy, where ``zero`` (the elastic peak) is what the workspace puts
+    on the region it draws as ``extra["reels_zero"]``; losses grow towards the
+    side the kinetic energy falls. Without it the kinetic axis is kept and
+    ``ok`` is False; any other spectrum keeps its own axis.
+
     ``scale=RATIO`` applies to ion scattering spectra only: kinetic energy
     over the beam energy ``E0``, which the workspace puts on the region it
     draws as ``extra["iss_e0"]`` (what was saved or recorded, never a
@@ -51,6 +61,13 @@ def energy_axis(region, scale="Binding") -> Axis:
     any other spectrum keeps its own axis."""
     native = Axis(list(region.energy), region.energy_label,
                   region.energy_units, is_binding(region), True)
+    if scale == LOSS and getattr(region, "is_reels", False):
+        zero = (region.extra or {}).get("reels_zero")
+        ke = energy_axis(region, "Kinetic")
+        if not zero or not ke.ok:
+            return native._replace(ok=False)
+        return Axis([zero - k for k in ke.x], LOSS, "eV", False, True, None,
+                    zero)
     if (scale == RATIO and not is_binding(region)
             and getattr(region, "is_iss", False)):
         e0 = (region.extra or {}).get("iss_e0")

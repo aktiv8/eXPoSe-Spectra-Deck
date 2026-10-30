@@ -514,7 +514,7 @@ def reels_story(table, look=None, sid="reels"):
     with it (the definition, the references, the caveat and the problems marked
     † in the table). ``table`` is a ``reelstable.Table`` ([] when empty)."""
     from reportlab.lib.units import mm
-    from reportlab.platypus import Paragraph, Spacer
+    from reportlab.platypus import CondPageBreak, Paragraph, Spacer
     import reelstable
 
     if not table:
@@ -530,6 +530,28 @@ def reels_story(table, look=None, sid="reels"):
              Spacer(1, 3 * mm)]
     for text in reelstable.paragraphs(table):
         story += [Paragraph(xml_escape(text), st["small"]), Spacer(1, 1.5 * mm)]
+    groups = [g for g in table.groups]
+    if groups:
+        story += [CondPageBreak(60 * mm),
+                  _mark(Paragraph("Repeat groups", st["h2"]), sid,
+                        "REELS repeat groups"),
+                  Paragraph(xml_escape(reelstable.REPEAT_INTRO), st["small"]),
+                  Spacer(1, 2 * mm)]
+        for g in groups:
+            story += [CondPageBreak(40 * mm),
+                      Paragraph(xml_escape(
+                          f"{g.name} ({g.kind_text}; {len(g.members)} "
+                          f"spectra)"), st["label"])]
+            if g.rows:
+                rows = [[c if i != 4 else Paragraph(xml_escape(c), st["small"])
+                         for i, c in enumerate(r)]
+                        for r in reelstable.repeat_report_rows(g)]
+                story.append(_grid(reelstable.repeat_header(), rows,
+                                   reelstable.REPEAT_WEIGHTS, look,
+                                   right_from=1))
+            for note in g.notes:
+                story.append(Paragraph("• " + xml_escape(note), st["small"]))
+            story.append(Spacer(1, 3 * mm))
     return story
 
 

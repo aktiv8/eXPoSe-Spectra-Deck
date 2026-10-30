@@ -203,6 +203,21 @@ def _clean_pi_ratio(d):
     return out
 
 
+def _clean_reels_cal(d):
+    """A valid REELS energy calibration ``{elastic, nominal, shift, source}``
+    or None: the elastic peak as measured, the primary energy it was moved to
+    and the shift (kinetic energy added to every point); ``source`` says where
+    the primary energy came from ("file" or "entered")."""
+    if not isinstance(d, dict):
+        return None
+    elastic, nominal, shift = (_finite(d.get(k)) for k in
+                               ("elastic", "nominal", "shift"))
+    if None in (elastic, nominal, shift) or nominal <= 0:
+        return None
+    return {"elastic": elastic, "nominal": nominal, "shift": shift,
+            "source": "file" if d.get("source") == "file" else "entered"}
+
+
 def _clean_reels_ref(d):
     """A valid reference ratio (HOPG or diamond) or None: a ``ratio``, a
     ``label`` and ``kind`` ("spectrum" = measured here, "entered" = typed),
@@ -244,6 +259,7 @@ class Annotations:
     loss_fit: dict = field(default_factory=dict)         # region key -> REELS loss-region fit (reels.decompose)
     pi_ratio: dict = field(default_factory=dict)         # region key -> REELS pi / (sigma+pi) ratio (reels.pi_ratio)
     reels_refs: dict = field(default_factory=dict)       # "hopg" / "diamond" -> the reference ratios of this workbook
+    reels_cal: dict = field(default_factory=dict)        # region key -> REELS energy calibration (reels.calibration)
     instrument: dict = field(default_factory=dict)       # file id -> NeXus settings
     iss: dict = field(default_factory=dict)              # file id -> {ion, e0, theta}
     imports: dict = field(default_factory=dict)          # file id -> how a column-text file is read
@@ -255,7 +271,7 @@ class Annotations:
     # -- samples a reader split into several (Kratos runs) ------------------------
     ADOPTED = ("region_names", "sample_notes", "region_notes", "shifts",
                "markers", "sputter", "reels", "plasmon", "loss_fit",
-               "pi_ratio", "nexafs_edge")
+               "pi_ratio", "reels_cal", "nexafs_edge")
 
     def adopt_aliases(self, fid, aliases):
         """``aliases`` maps a sample the reader made out of a plainer one
@@ -381,6 +397,10 @@ class Annotations:
             out["REELS plasmon method"] = reels.method_text(pl)
             out.setdefault("REELS elastic peak (eV KE)",
                            f"{pl['elastic']:.2f}")
+        rc = self.reels_cal.get(region_key(fid, region.sample, region.name))
+        if rc:
+            import reels
+            out["REELS energy calibration"] = reels.calibration_text(rc)
         lf = self.loss_fit.get(region_key(fid, region.sample, region.name))
         if lf:
             import reels
@@ -502,6 +522,44 @@ class Annotations:
         else:
             self.reels_refs.pop(which, None)
 
+    # -- REELS energy calibration (per spectrum) -------------------------------
+    # Results of the REELS dialog keep the elastic peak they were measured from,
+    # in the frame the spectrum was drawn in. Moving the energy scale moves that
+    # frame, so a stored elastic peak moves with it: the loss coordinates of the
+    # results (a band-gap pick, a window) are unchanged.
+    REELS_RESULTS = ("reels", "plasmon", "loss_fit", "pi_ratio")
+
+    def reels_cal_for(self, fid, sample, name):
+        """The stored REELS energy calibration of a spectrum, or None."""
+        d = self.reels_cal.get(region_key(fid, sample, name))
+        return dict(d) if d else None
+
+    def reels_shift_for(self, fid, sample, name):
+        """The kinetic-energy shift (eV) applied to a REELS spectrum (0 when it
+        is not calibrated)."""
+        d = self.reels_cal.get(region_key(fid, sample, name))
+        return d["shift"] if d else 0.0
+
+    def set_reels_cal(self, fid, sample, name, data):
+        """Store (or, with None, remove) a spectrum's calibration and move the
+        elastic peak of every REELS result stored for it by the change of
+        shift. Returns the change (eV)."""
+        key = region_key(fid, sample, name)
+        old = self.reels_cal.get(key)
+        clean = _clean_reels_cal(data)
+        delta = (clean["shift"] if clean else 0.0) - (
+            old["shift"] if old else 0.0)
+        if clean:
+            self.reels_cal[key] = clean
+        else:
+            self.reels_cal.pop(key, None)
+        if delta:
+            for table in self.REELS_RESULTS:
+                d = getattr(self, table).get(key)
+                if d and d.get("elastic") is not None:
+                    d["elastic"] = d["elastic"] + delta
+        return delta
+
     def remove_marker(self, fid, sample, name, be, label):
         key = region_key(fid, sample, name)
         lst = [m for m in self.markers.get(key, [])
@@ -603,6 +661,7 @@ class Annotations:
                     or self.calibration_statement or self.experiment_notes
                     or self.sputter or self.reels or self.plasmon
                     or self.loss_fit or self.pi_ratio or self.reels_refs
+                    or self.reels_cal
                     or self.instrument
                     or self.iss or self.imports or self.nexafs_ring
                     or self.nexafs_edge or self.repeat_groups)
@@ -616,7 +675,8 @@ class Annotations:
                      "region_notes", "md_edits", "shifts", "calibration",
                      "calibration_statement", "markers", "experiment_notes",
                      "sputter", "reels", "plasmon", "loss_fit", "pi_ratio",
-                     "reels_refs", "instrument", "iss", "imports"):
+                     "reels_refs", "reels_cal", "instrument", "iss",
+                     "imports"):
             d[name] = copy.deepcopy(getattr(self, name))
         if self.nexafs_ring:
             d["nexafs_ring"] = True
@@ -637,7 +697,7 @@ class Annotations:
                  "region_notes", "md_edits", "shifts", "calibration",
                  "calibration_statement", "markers", "experiment_notes",
                  "sputter", "reels", "plasmon", "loss_fit", "pi_ratio",
-                 "reels_refs", "instrument", "iss", "imports",
+                 "reels_refs", "reels_cal", "instrument", "iss", "imports",
                  "nexafs_ring", "nexafs_edge", "repeat_groups"}
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes"):
@@ -694,6 +754,12 @@ class Annotations:
                 clean = _clean_loss_fit(x)
                 if clean:
                     a.loss_fit[str(k)] = clean
+        v = data.get("reels_cal")
+        if isinstance(v, dict):
+            for k, x in v.items():
+                clean = _clean_reels_cal(x)
+                if clean:
+                    a.reels_cal[str(k)] = clean
         v = data.get("pi_ratio")
         if isinstance(v, dict):
             for k, x in v.items():

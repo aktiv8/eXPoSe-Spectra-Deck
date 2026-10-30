@@ -222,6 +222,8 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
     def cursor_x(c):
         if a0.e0:                       # cursors are kept as kinetic energy
             return c / a0.e0
+        if a0.zero is not None:         # on an energy-loss axis too
+            return a0.zero - c
         return r0.photon_energy - c if a0.label == "Kinetic Energy" else c
     if norm == "At cursor" and cursor is not None:
         ax.axvline(cursor_x(cursor), color=accent, ls="--", lw=0.9)
@@ -662,6 +664,24 @@ def _fit_rms_text(ax, curves, muted, stats=("rms",)):
                 fontsize=fs, color=muted)
 
 
+def _loss_x(a0, hv, elastic, prepare=float):
+    """The function that turns an energy loss (eV, from the elastic peak at
+    kinetic energy ``elastic``) into the x value of a panel whose axis is
+    ``a0`` (``viewdata.energy_axis``): on an energy-loss axis the loss measured
+    from that axis' own zero (the two agree when the spectrum was measured from
+    the peak the axis is zeroed on), on a kinetic axis the kinetic energy, on a
+    binding axis hv - KE (None without hv). ``prepare`` converts the argument
+    (``np.asarray`` for arrays)."""
+    def X(loss):
+        ke = elastic - prepare(loss)
+        if a0.zero is not None:
+            return a0.zero - ke
+        if a0.label == "Kinetic Energy":
+            return ke
+        return hv - ke if hv else None
+    return X
+
+
 def draw_loss_fit(ax, a0, hv, fit, scale, muted, accent, note_size=8,
                   offset=0.0):
     """Overlay a REELS loss-region fit (``reels.decompose``) on a
@@ -671,11 +691,7 @@ def draw_loss_fit(ax, a0, hv, fit, scale, muted, accent, note_size=8,
     import numpy as np
     import reels as rl
 
-    def X(loss):                        # loss -> the panel's x value
-        ke = fit["elastic"] - np.asarray(loss, dtype=float)
-        if a0.label == "Kinetic Energy":
-            return ke
-        return hv - ke if hv else None
+    X = _loss_x(a0, hv, fit["elastic"], np.asarray)
     grid = np.linspace(fit["window"][0], fit["window"][1], 400)
     xg = X(grid)
     if xg is None:
@@ -711,11 +727,7 @@ def draw_pi_ratio(ax, a0, hv, res, scale, muted, accent, note_size=8,
     with a reference, ``fraction``) on a single-spectrum panel: the two windows
     shaded, the straight background under each and the ratio. Intensities are
     drawn as ``(y - offset) * scale``."""
-    def X(loss):                        # loss -> the panel's x value
-        ke = res["elastic"] - loss
-        if a0.label == "Kinetic Energy":
-            return ke
-        return hv - ke if hv else None
+    X = _loss_x(a0, hv, res["elastic"])
     for win, bgkey, name in ((res["pi_window"], "bg_pi", "π"),
                              (res["sp_window"], "bg_sp", "σ+π")):
         lo, hi = X(win[0]), X(win[1])
@@ -747,11 +759,7 @@ def draw_plasmon(ax, a0, hv, plasmon, scale, muted, accent, note_size=8,
     energy itself. ``plasmon`` is the stored result (``elastic`` kinetic
     energy, ``ep`` and ``window`` in eV of loss, ``bg`` as ``[loss, level]``
     pairs); intensities are drawn as ``(y - offset) * scale``."""
-    def X(loss):                        # loss -> the panel's x value
-        ke = plasmon["elastic"] - loss
-        if a0.label == "Kinetic Energy":
-            return ke
-        return hv - ke if hv else None
+    X = _loss_x(a0, hv, plasmon["elastic"])
     lo, hi = X(plasmon["window"][0]), X(plasmon["window"][1])
     xe = X(plasmon["ep"])
     if None in (lo, hi, xe):
@@ -779,11 +787,7 @@ def draw_reels(ax, a0, hv, reels, scale, muted, accent, note_size=8,
     ``(y - offset) * scale`` (normalisation)."""
     import reels as rl
 
-    def X(loss):                        # loss -> the panel's x value
-        ke = reels["elastic"] - loss
-        if a0.label == "Kinetic Energy":
-            return ke
-        return hv - ke if hv else None
+    X = _loss_x(a0, hv, reels["elastic"])
     xe = X(0.0)
     if xe is not None:
         ax.axvline(xe, color=muted, lw=0.8, ls=":", zorder=1)

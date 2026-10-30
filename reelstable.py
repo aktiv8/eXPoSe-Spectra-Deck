@@ -21,6 +21,7 @@ import re
 from dataclasses import dataclass, field
 
 import reels
+import repeats
 
 DASH = "–"
 
@@ -49,6 +50,7 @@ class Row:
     pi_window: list
     sp_window: list
     avg: int
+    key: str = ""                                  # the repeat-group key of its sample
     flags: list = field(default_factory=list)      # what is wrong with it
     problem: str = ""                              # why there is no fraction
     notes: list = field(default_factory=list)      # about the fraction
@@ -60,6 +62,7 @@ class Table:
     refs: dict                       # the workbook's {"hopg": ..., "diamond": ...}
     unit: str = ""                   # the intensity unit of the areas ("" = mixed)
     settings: list = field(default_factory=list)   # distinct window sentences
+    groups: list = field(default_factory=list)     # [RepGroup]: the repeat statistics
 
     def __bool__(self):
         return bool(self.rows)
@@ -68,11 +71,15 @@ class Table:
         return len(self.rows)
 
 
-def collect(items, refs=None):
-    """The table of ``items`` = ``[{file, sample, spectrum, unit, res}]``, where
-    ``res`` is a stored ratio result (``reels.pi_ratio`` plus ``elastic``);
-    ``refs`` is ``Annotations.reels_refs``. An item with no result is skipped.
-    Returns a :class:`Table` (falsy when there are no rows)."""
+def collect(items, refs=None, groups=None):
+    """The table of ``items`` = ``[{file, sample, spectrum, unit, res, key}]``,
+    where ``res`` is a stored ratio result (``reels.pi_ratio`` plus
+    ``elastic``) and ``key`` the repeat-group key of the sample
+    (``<file key>/<sample>``, as ``resultspages.Sample.key``); ``refs`` is
+    ``Annotations.reels_refs`` and ``groups`` ``Annotations.repeat_groups``
+    (the repeat statistics are worked out for the groups that have a REELS
+    spectrum). An item with no result is skipped. Returns a :class:`Table`
+    (falsy when there are no rows)."""
     refs = refs or {}
     rows, units, settings = [], set(), []
     for it in items or ():
@@ -87,14 +94,194 @@ def collect(items, refs=None):
             pos_sp=res.get("pos_sp"), i_pi=res["i_pi"], i_sp=res["i_sp"],
             ratio=res.get("ratio"), fraction=sp["fraction"],
             pi_window=list(res["pi_window"]), sp_window=list(res["sp_window"]),
-            avg=res["avg"], flags=reels.ratio_flags(res),
+            avg=res["avg"], key=str(it.get("key") or ""),
+            flags=reels.ratio_flags(res),
             problem=sp["problem"], notes=list(sp["notes"])))
         units.add(str(it.get("unit") or ""))
         text = reels.ratio_text(res)
         if text not in settings:
             settings.append(text)
     unit = units.pop() if len(units) == 1 else ""
-    return Table(rows, refs, unit, settings)
+    table = Table(rows, refs, unit, settings)
+    table.groups = repeat_groups(table, groups)
+    return table
+
+
+# -- repeat groups ------------------------------------------------------------------------
+# The mean, sample standard deviation (n - 1) and n of the ratio, the sp2 fraction
+# and the two peak positions over the spectra of samples that repeat one another.
+# A group is the user's statement (``Annotations.repeat_groups``, the same groups
+# as the Quantification tab's *Groups…*: a name, a kind and sample keys); nothing
+# is re-measured here, each value is the one in the table.
+QUANTITIES = (("Iπ/Iσ+π", "ratio", ".4f"),
+              ("sp² fraction", "fraction", ".2f"),
+              ("π position (eV)", "pos_pi", ".2f"),
+              ("σ+π position (eV)", "pos_sp", ".2f"))
+
+
+@dataclass
+class QRow:
+    """One quantity of one group: its statistics and each spectrum's value."""
+    name: str
+    spec: str                                    # number format
+    mean: float | None
+    sd: float | None
+    n: int
+    values: list = field(default_factory=list)   # [(spectrum label, value)]
+
+
+@dataclass
+class RepGroup:
+    name: str
+    kind: str
+    members: list = field(default_factory=list)  # spectrum labels counted
+    rows: list = field(default_factory=list)     # [QRow]
+    notes: list = field(default_factory=list)
+
+    @property
+    def kind_text(self):
+        return repeats.KINDS.get(self.kind, self.kind)
+
+
+def _setting(r):
+    return (tuple(r.pi_window), tuple(r.sp_window), r.avg)
+
+
+def repeat_groups(table, groups):
+    """``[RepGroup]`` for the saved ``groups`` over the rows of ``table``. A
+    group none of whose samples has a REELS spectrum is about something else
+    (the atomic % of the Quantification tab) and is left out; a member with no
+    ratio is named and left out. A group whose spectra were measured with other
+    windows or end-point channels has no statistics (the ratios are not
+    comparable), and a flagged spectrum is counted as measured and named."""
+    out = []
+    by_key = {}
+    for r in table.rows:
+        by_key.setdefault(r.key, []).append(r)
+    for name, g in (groups or {}).items():
+        keys = list(g.get("samples", []))
+        if not any(k in by_key for k in keys):
+            continue
+        grp = RepGroup(name, g.get("kind", repeats.DEFAULT_KIND))
+        chosen = []
+        for k in keys:
+            rows = by_key.get(k)
+            if not rows:
+                grp.notes.append(f"{k.split('/', 1)[-1]}: no REELS ratio "
+                                 f"measured; left out.")
+                continue
+            for r in rows:
+                label = r.sample if len(rows) == 1 else (
+                    f"{r.sample} / {r.spectrum}")
+                chosen.append((label, r))
+        grp.members = [lab for lab, _r in chosen]
+        if len({_setting(r) for _l, r in chosen}) > 1:
+            grp.notes.append(
+                "The spectra were measured with different windows or "
+                "end-point channels, so their ratios are not comparable: no "
+                "statistics.")
+            out.append(grp)
+            continue
+        for qname, attr, spec in QUANTITIES:
+            vals = [(lab, getattr(r, attr)) for lab, r in chosen
+                    if getattr(r, attr) is not None]
+            mean, sd, n = repeats.stats(v for _l, v in vals)
+            if n:
+                grp.rows.append(QRow(qname, spec, mean, sd, n, vals))
+        if len(chosen) < 2:
+            grp.notes.append("Only one spectrum: there is no spread to "
+                             "report.")
+        marked = [lab for lab, r in chosen if r.flags or r.problem or r.notes]
+        if marked:
+            grp.notes.append("Counted as measured, but flagged in the table: "
+                             + ", ".join(marked) + ".")
+        out.append(grp)
+    return out
+
+
+def group_lines(table):
+    """The groups in one line each, for the dialog: "name (n spectra): ratio
+    0.0414 ± 0.0021, sp² 0.98 ± 0.05"."""
+    lines = []
+    for g in table.groups:
+        parts = []
+        for r in g.rows[:2]:
+            sd = f" ± {format(r.sd, r.spec)}" if r.sd is not None else ""
+            label = "ratio" if r.name.startswith("Iπ") else r.name.split()[0]
+            parts.append(f"{label} {format(r.mean, r.spec)}{sd}")
+        lines.append(f"{g.name} ({len(g.members)} spectra)"
+                     + (": " + ", ".join(parts) if parts else
+                        ": no statistics"))
+    return lines
+
+
+def repeat_header():
+    return ["Quantity", "Mean", "SD (n−1)", "n", "Values"]
+
+
+def repeat_report_rows(group):
+    """One list of strings per quantity; the Values column is each spectrum's
+    value, the labels shortened by ``repeats.short_labels``."""
+    out = []
+    for r in group.rows:
+        labels = repeats.short_labels([lab for lab, _v in r.values])
+        out.append([r.name, format(r.mean, r.spec),
+                    DASH if r.sd is None else format(r.sd, r.spec), str(r.n),
+                    "; ".join(f"{lab}={format(v, r.spec)}"
+                              for lab, (_x, v) in zip(labels, r.values))])
+    return out
+
+
+REPEAT_WEIGHTS = [26, 17, 17, 7, 100]
+REPEAT_INTRO = ("Mean, sample standard deviation (n − 1) and n of each "
+                "quantity over the spectra of samples that repeat one another "
+                "(the groups of the Quantification tab, Groups…). Each value "
+                "is the one in the table above; nothing is re-measured. A "
+                "standard deviation needs two spectra.")
+
+
+def repeat_csv_header():
+    return ["Group", "Kind", "Quantity", "Mean", "SD (n-1)", "n",
+            "Individual values"]
+
+
+def repeat_csv_rows(table):
+    """The repeat statistics as CSV rows (header first), in the layout of the
+    atomic % repeat-group CSV (group, kind, quantity, mean, sd, n, each
+    value); an empty list when no group has statistics."""
+    rows = [repeat_csv_header()]
+    for g in table.groups:
+        for r in g.rows:
+            rows.append([g.name, g.kind_text, r.name, _g(r.mean, ".6g"),
+                         _g(r.sd, ".6g"), str(r.n),
+                         "; ".join(f"{lab}={format(v, '.6g')}"
+                                   for lab, v in r.values)])
+    return rows if len(rows) > 1 else []
+
+
+def repeat_csv_bytes(table):
+    """The repeat-group CSV as UTF-8 with a byte-order mark (b"" when none)."""
+    rows = repeat_csv_rows(table)
+    if not rows:
+        return b""
+    buf = io.StringIO(newline="")
+    csv.writer(buf).writerows(rows)
+    return buf.getvalue().encode("utf-8-sig")
+
+
+def suggest_samples(table):
+    """One stand-in per sample with a ratio, with the attributes
+    ``repeats.suggest`` reads, so the samples of a REELS-only workbook can be
+    grouped by name too."""
+    from types import SimpleNamespace
+    seen, out = set(), []
+    for r in table.rows:
+        if r.key and r.key not in seen:
+            seen.add(r.key)
+            out.append(SimpleNamespace(key=r.key, label=r.sample,
+                                       is_profile=False, kind="regions",
+                                       levels=[1]))
+    return out
 
 
 # -- words ------------------------------------------------------------------------------

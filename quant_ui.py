@@ -487,6 +487,16 @@ class RepeatGroupsDialog(tk.Toplevel):
         workbook_ui.keep_in_front(self, panel.winfo_toplevel())
 
     # -- what can be a member -------------------------------------------------
+    def _reels_samples(self):
+        """The samples with a stored REELS π / (σ+π) ratio (``reelstable``): a
+        REELS-only sample has no quantification, so the Quantification tab's
+        own list never holds it."""
+        import reelstable
+        try:
+            return reelstable.suggest_samples(self.app._reels_table())
+        except AttributeError:                      # an app with no REELS
+            return []
+
     def candidates(self):
         """``[(key, label, usable)]``: the quantified samples, then the keys
         a group names that are no longer there. A depth profile is not a
@@ -494,6 +504,10 @@ class RepeatGroupsDialog(tk.Toplevel):
         out = [(s.key, s.label, bool(s.levels) and not s.is_profile)
                for s in self.panel.samples]
         have = {k for k, _l, _u in out}
+        for s in self._reels_samples():             # REELS spectra, which
+            if s.key not in have:                   # may have no fit at all
+                have.add(s.key)
+                out.append((s.key, f"{s.label} (REELS)", True))
         for g in self.drafts.values():
             for k in g["samples"]:
                 if k not in have:
@@ -570,7 +584,10 @@ class RepeatGroupsDialog(tk.Toplevel):
         """Add the groups the sample names suggest; none that exist already
         and no sample list is changed. Returns the names added."""
         added = []
-        for name, g in repeats.suggest(self.panel.samples).items():
+        have = {s.key for s in self.panel.samples}
+        samples = list(self.panel.samples) + [
+            s for s in self._reels_samples() if s.key not in have]
+        for name, g in repeats.suggest(samples).items():
             if name not in self.drafts:
                 self.drafts[name] = g
                 self._commit(name)

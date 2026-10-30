@@ -91,6 +91,13 @@ def is_iss_region(r) -> bool:
             or is_iss_lens(r.lens_mode))
 
 
+def is_reels_region(r) -> bool:
+    """True for a reflection electron energy loss spectrum: the file says so
+    (technique "REELS"). Its x axis is a kinetic energy whose elastic peak sits
+    at the primary beam energy; the loss axis is measured from that peak."""
+    return (r.technique or "").strip().upper() == "REELS"
+
+
 def is_nexafs_region(r) -> bool:
     """True for a NEXAFS scan: photon energy on the x axis, a current (or
     yield) on y, no analyser."""
@@ -199,6 +206,11 @@ class Region:
     def is_iss(self) -> bool:
         """True for an ion scattering spectrum (see ``is_iss_region``)."""
         return is_iss_region(self)
+
+    @property
+    def is_reels(self) -> bool:
+        """True for a REELS spectrum (see ``is_reels_region``)."""
+        return is_reels_region(self)
 
     def dwell_and_scans(self):
         """(dwell per sweep, sweeps), so that their product is the time each
