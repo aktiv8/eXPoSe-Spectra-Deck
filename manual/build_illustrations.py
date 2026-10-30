@@ -511,6 +511,65 @@ def fig_reels():
 
 
 # ----------------------------------------------------------------------
+# 10b: REELS plasmon energy and loss-region fit (synthetic graphite-like loss)
+# ----------------------------------------------------------------------
+
+def _loss_spectrum(elastic0=1000.0):
+    """Synthetic π + σ loss region: the elastic peak, a π peak and the
+    Gaussians of ``reels.LOSS_COMPONENTS`` on a rising background."""
+    import reels
+    loss = np.arange(0.0, 55.0001, 0.05)
+    area = {"pi": 800.0, "inter": 250.0, "sp2S": 550.0, "sp3S": 650.0,
+            "sp2B": 1600.0, "sp3B": 550.0, "ss35": 120.0, "ss42": 150.0}
+    width = {"pi": 3.0}
+    y = 30.0 + 1.5 * loss + 40000.0 * np.exp(-(loss / 0.3) ** 2)
+    for key, _name, c, _g in reels.LOSS_COMPONENTS:
+        y = y + area[key] * reels.gaussian_unit(loss, c, width.get(key, 7.0))
+    rng = np.random.default_rng(3)
+    y = y + rng.normal(0.0, 1.2, len(loss))
+    ke = elastic0 - loss
+    return ke, y, loss
+
+
+def _draw_reels_overlay(name, title, subtitle, **overlay):
+    import plots
+    import themes
+    ke, y, _loss = _loss_spectrum()
+    reg = region("REELS", energy_label="Kinetic Energy", technique="REELS",
+                extra_energy=ke.tolist(), extra_counts=y.tolist())
+    pal = themes.PALETTES["Light"]
+    with matplotlib.rc_context(themes.mpl_rc(pal)):
+        fig = Figure(figsize=(9, 5.2), dpi=150)
+        ax = fig.add_subplot(111)
+        plots.draw_stack(ax, [reg], 0, "None", None, ["#0F6B8C"], title,
+                         subtitle, (), False, scale="Kinetic",
+                         accent=pal["accent"], **overlay)
+        ax.set_xlim(1000.0 + 1.0, 1000.0 - 55.0)
+        top = float(y[(1000.0 - ke) > 2.0].max())     # the loss region, as
+        ax.set_ylim(-0.04 * top, 1.35 * top)          # after a zoom
+        fig.tight_layout()
+        save_fig(fig, os.path.join(OUT, name))
+
+
+def fig_plasmon():
+    import reels
+    _ke, y, loss = _loss_spectrum()
+    res = reels.plasmon(loss.tolist(), y.tolist(), (12.0, 50.0), "Shirley")
+    _draw_reels_overlay("fig_plasmon.png", "REELS plasmon energy",
+                        "Shirley background, Gaussian above 90 % of the peak",
+                        plasmon={**res, "elastic": 1000.0})
+
+
+def fig_lossfit():
+    import reels
+    _ke, y, loss = _loss_spectrum()
+    res = reels.decompose(loss.tolist(), y.tolist(), (3.0, 50.0), "Linear")
+    _draw_reels_overlay("fig_lossfit.png", "REELS loss region",
+                        "Gaussians at the loss energies of Stobinski et al.",
+                        lossfit={**res, "elastic": 1000.0})
+
+
+# ----------------------------------------------------------------------
 # 11: the interactive HTML data browser (real file; screenshot is separate)
 # ----------------------------------------------------------------------
 
@@ -560,6 +619,8 @@ def main():
     fig_fitstack()
     fig_iss()
     fig_reels()
+    fig_plasmon()
+    fig_lossfit()
     build_demo_browser_html()
 
 

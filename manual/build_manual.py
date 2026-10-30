@@ -1575,6 +1575,9 @@ def build_chapters(doc):
         "metadata as REELS plasmon energy and REELS plasmon method. It is "
         "kept separately from the band gap, so clearing one leaves the other."
     )
+    add_figure(doc, "A REELS plasmon energy: the window (shaded), the Shirley "
+              "background (dashed) and the energy found.",
+              image_path=os.path.join(FIGDIR, "fig_plasmon.png"))
     para(doc,
         "A mass density can be calculated from a bulk plasmon energy for "
         "amorphous carbon (4 valence electrons, effective mass 0.87), which "
@@ -1644,6 +1647,9 @@ def build_chapters(doc):
         "is entered, REELS layers (estimate). A refit keeps the geometry you "
         "entered."
     )
+    add_figure(doc, "A REELS loss region fitted with the Gaussians of "
+              "Stobinski et al.: the two sp² components that make R are filled.",
+              image_path=os.path.join(FIGDIR, "fig_lossfit.png"))
     para(doc,
         "Not included: the ratio of the π peak to the π + σ region as an sp² "
         "fraction against a graphite reference. None of the papers this "
