@@ -3042,6 +3042,14 @@ class Workspace:
         self._ann_changed(relabel=False)
         self._update_metadata()
 
+    def plasmon_get(self, r):
+        return self.ann.plasmon_for(*self._marker_key(r))
+
+    def plasmon_set(self, r, data):
+        self.ann.set_plasmon(*self._marker_key(r), data)
+        self._ann_changed(relabel=False)
+        self._update_metadata()
+
     def open_iss_reels(self):
         if not self.spectrum_regions():
             messagebox.showinfo("ISS / REELS", "Select or tick the ISS or "
@@ -4141,6 +4149,8 @@ class Workspace:
                                 marks.append((pos, lbl, False, tier))
             reels_arg = (self.ann.reels_for(*self._marker_key(vis[0]))
                          if len(vis) == 1 else None)
+            plasmon_arg = (self.ann.plasmon_for(*self._marker_key(vis[0]))
+                           if len(vis) == 1 else None)
             fit_arg = self._fit_overlay(vis, disp, base, notes,
                                         look["fit_show"],
                                         bool(look.get("fit_merge")),
@@ -4163,7 +4173,8 @@ class Workspace:
                        accent=pal["accent"], muted=pal["muted"],
                        scale=pscale, ke_top=ke_top, top_row=top_row,
                        markers=marks, style=style, fit=fit_arg,
-                       reels=reels_arg, auger_colour=pal["cycle"][1],
+                       reels=reels_arg, plasmon=plasmon_arg,
+                       auger_colour=pal["cycle"][1],
                        rng=self.ranges.get(key))
             axmap[ax] = key
             axhv[ax] = viewdata.photon_energy(disp)

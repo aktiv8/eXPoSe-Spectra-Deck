@@ -151,7 +151,7 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
                first_col=True, bottom_row=True, accent="#0F6B8C",
                muted="#56636E", scale="Binding", ke_top=False,
                top_row=False, markers=(), style=None, fit=None,
-               reels=None, auger_colour=None, rng=None):
+               reels=None, auger_colour=None, rng=None, plasmon=None):
     """Draw one panel: a single spectrum plain, several stacked by y offset.
     ``rng`` is the panel's chosen pair of "Range" end-point energies.
 
@@ -269,6 +269,9 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
     if reels and n == 1:               # a REELS band-gap construction
         draw_reels(ax, a0, r0.photon_energy, reels, 1.0 / nf[0], muted,
                    accent, note_size=small, offset=no[0])
+    if plasmon and n == 1:             # a REELS plasmon energy
+        draw_plasmon(ax, a0, r0.photon_energy, plasmon, 1.0 / nf[0], muted,
+                     accent, note_size=small, offset=no[0])
     if markers:      # peak labels: (energy, text[, kinetic?[, tier]])
         lo, hi = ax.get_xlim()
         xtf = ax.get_xaxis_transform()       # x in data, y as axes fraction
@@ -651,6 +654,35 @@ def _fit_rms_text(ax, curves, muted, stats=("rms",)):
         ax.text(0.98, 0.98, "\n".join(lines),
                 transform=ax.transAxes, ha="right", va="top",
                 fontsize=fs, color=muted)
+
+
+def draw_plasmon(ax, a0, hv, plasmon, scale, muted, accent, note_size=8,
+                 offset=0.0):
+    """Overlay a REELS plasmon energy on a single-spectrum panel: the window
+    it was taken from (shaded), the background under it (dashed) and the
+    energy itself. ``plasmon`` is the stored result (``elastic`` kinetic
+    energy, ``ep`` and ``window`` in eV of loss, ``bg`` as ``[loss, level]``
+    pairs); intensities are drawn as ``(y - offset) * scale``."""
+    def X(loss):                        # loss -> the panel's x value
+        ke = plasmon["elastic"] - loss
+        if a0.label == "Kinetic Energy":
+            return ke
+        return hv - ke if hv else None
+    lo, hi = X(plasmon["window"][0]), X(plasmon["window"][1])
+    xe = X(plasmon["ep"])
+    if None in (lo, hi, xe):
+        return
+    ax.axvspan(min(lo, hi), max(lo, hi), color=accent, alpha=0.08, lw=0,
+               zorder=0.5)
+    pts = [(X(a), (b - offset) * scale) for a, b in plasmon.get("bg") or []]
+    if len(pts) > 1 and plasmon.get("background") != "None":
+        ax.plot([p[0] for p in pts], [p[1] for p in pts], color=accent,
+                lw=0.9, ls="--", zorder=3.4)
+    ax.axvline(xe, color=accent, lw=1.1, zorder=3.5)
+    ax.annotate(f"Ep = {plasmon['ep']:.1f} eV", (xe, 1.0),
+                xycoords=("data", "axes fraction"), xytext=(6, -12),
+                textcoords="offset points", color=accent,
+                fontsize=note_size + 1, fontweight="bold")
 
 
 def draw_reels(ax, a0, hv, reels, scale, muted, accent, note_size=8,

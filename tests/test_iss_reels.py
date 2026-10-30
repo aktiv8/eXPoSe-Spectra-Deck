@@ -365,6 +365,229 @@ class TestDrawing(unittest.TestCase):
         self.assertFalse(any("Eg" in t.get_text() for t in ax.texts))
 
 
+def plasmon_spectrum(centre=27.0, sigma=3.0, ramp=0.0, level=0.0, n=1001,
+                     el_ke=1000.0):
+    """Loss spectrum 0..50 eV: elastic peak, a π+σ-like Gaussian and a linear
+    ramp (descending-loss, i.e. ascending-KE order, as the app holds it)."""
+    loss = [i * 0.05 for i in range(n)]
+    y = [level + ramp * x + 1000 * math.exp(-0.5 * ((x - centre) / sigma) ** 2)
+         + 20000 * math.exp(-(x / 0.25) ** 2) for x in loss]
+    return [el_ke - x for x in loss], y, loss
+
+
+class TestPlasmon(unittest.TestCase):
+    def test_gaussian_on_a_linear_background_is_exact(self):
+        ke, y, loss = plasmon_spectrum(ramp=5.0, level=50.0)
+        res = reels.plasmon(loss, y, (10, 50), "Linear")
+        self.assertAlmostEqual(res["ep"], 27.0, delta=0.01)
+        self.assertEqual(res["method"], "gauss")
+        self.assertEqual(res["background"], "Linear")
+        self.assertAlmostEqual(res["fwhm"], 3.0 * reels.FWHM_PER_SIGMA,
+                               delta=0.1)
+
+    def test_a_flat_background_is_recovered_exactly(self):
+        ke, y, loss = plasmon_spectrum(level=100.0)
+        res = reels.plasmon(loss, y, (10, 50), "Linear")
+        self.assertAlmostEqual(res["ep"], 27.0, delta=0.05)
+
+    def test_input_order_does_not_matter(self):
+        ke, y, loss = plasmon_spectrum()
+        a = reels.plasmon(loss, y, (15, 45), "Linear")
+        b = reels.plasmon(loss[::-1], y[::-1], (45, 15), "Linear")
+        self.assertAlmostEqual(a["ep"], b["ep"], 9)
+
+    def test_second_derivative_ignores_a_linear_background(self):
+        _ke, y0, loss = plasmon_spectrum(ramp=0.0)
+        _ke, y1, _l = plasmon_spectrum(ramp=40.0, level=300.0)
+        a = reels.plasmon(loss, y0, (15, 45), "None", "d2", smooth=1.5)
+        b = reels.plasmon(loss, y1, (15, 45), "None", "d2", smooth=1.5)
+        self.assertAlmostEqual(a["ep"], 27.0, delta=0.1)
+        self.assertAlmostEqual(a["ep"], b["ep"], delta=0.02)
+        self.assertIsNone(a["fwhm"])
+        self.assertEqual(a["background"], "None")
+        self.assertEqual(a["bg"], [])
+
+    def test_shirley_moves_a_skewed_peak_the_way_the_paper_finds(self):
+        # a peak with a long high-loss tail on a rising background: the
+        # Shirley background takes more from the high-loss side than a
+        # straight line, so Ep and the width come out smaller (Filippi &
+        # Calliari 2006: 26.2 eV / 14.6 eV against 27.1 eV / 15.6 eV)
+        loss = [i * 0.05 for i in range(1001)]
+        y = []
+        for x in loss:
+            g = 1000 * math.exp(-0.5 * ((x - 27.0) / (5.0 if x < 27 else 8.0)) ** 2)
+            y.append(g + 20000 * math.exp(-(x / 0.25) ** 2))
+        lin = reels.plasmon(loss, y, (12, 48), "Linear")
+        shi = reels.plasmon(loss, y, (12, 48), "Shirley")
+        self.assertIsNotNone(shi)
+        self.assertLess(shi["ep"], lin["ep"])
+        self.assertLess(shi["fwhm"], lin["fwhm"])
+
+    def test_the_background_curve_is_kept_for_drawing(self):
+        _ke, y, loss = plasmon_spectrum(level=100.0)
+        res = reels.plasmon(loss, y, (10, 50), "Linear")
+        self.assertTrue(10 < len(res["bg"]) <= 2 * reels.BG_POINTS)
+        self.assertTrue(all(10 <= a <= 50 for a, _b in res["bg"]))
+        self.assertAlmostEqual(res["bg"][0][1], 100.0, 3)
+
+    def test_refusals(self):
+        _ke, y, loss = plasmon_spectrum()
+        self.assertIsNone(reels.plasmon(loss, y, (15, 15), "Linear"))
+        self.assertIsNone(reels.plasmon(loss, y, (15, float("nan")), "Linear"))
+        self.assertIsNone(reels.plasmon(loss, y, (15, 45), "Cubic"))
+        self.assertIsNone(reels.plasmon(loss, y, (15, 45), "Linear", "x"))
+        self.assertIsNone(reels.plasmon(loss, y, (15, 45), "Linear",
+                                        frac=1.5))
+        self.assertIsNone(reels.plasmon(loss, y, (60, 70), "Linear"))   # no data
+        self.assertIsNone(reels.plasmon([1, 2, 3], [1, 2, 3], (0, 4),
+                                        "Linear"))                      # few
+        self.assertIsNone(reels.plasmon(loss, y[:-1], (15, 45), "Linear"))
+        flat = [5.0] * len(loss)
+        self.assertIsNone(reels.plasmon(loss, flat, (15, 45), "Linear"))
+
+    def test_shirley_with_the_step_the_wrong_way_round_is_refused(self):
+        loss = [i * 0.05 for i in range(1001)]
+        y = [(60 - x) * 10 + 1000 * math.exp(-0.5 * ((x - 27) / 4) ** 2)
+             for x in loss]          # falls with loss: high-loss end is lower
+        self.assertIsNone(reels.plasmon(loss, y, (15, 45), "Shirley"))
+        self.assertIsNotNone(reels.plasmon(loss, y, (15, 45), "Linear"))
+
+    def test_non_finite_points_are_dropped(self):
+        _ke, y, loss = plasmon_spectrum(level=100.0)
+        y = list(y)
+        y[400] = float("nan")
+        res = reels.plasmon(loss, y, (10, 50), "Linear")
+        self.assertAlmostEqual(res["ep"], 27.0, delta=0.05)
+
+    def test_method_text_names_everything_that_moves_the_number(self):
+        _ke, y, loss = plasmon_spectrum()
+        g = reels.method_text(reels.plasmon(
+            loss, [v + 5 * x for v, x in zip(y, loss)], (10, 50), "Shirley"))
+        self.assertIn("90 %", g)
+        self.assertIn("shirley", g)
+        self.assertIn("10–50", g)
+        d = reels.method_text(reels.plasmon(loss, y, (15, 45), "None", "d2",
+                                            smooth=2.0))
+        self.assertIn("second derivative", d)
+        self.assertIn("2", d)
+
+    def test_density_reproduces_the_published_pairs(self):
+        # Yang et al., PCCP 23, 25335 (2021): 25.5 eV -> 2.046 g/cm3 and the
+        # raw REELS peak 27.0 eV -> 2.294 g/cm3 (m* = 0.87 m, 4 electrons)
+        self.assertAlmostEqual(reels.density_from_plasmon(25.5), 2.046,
+                               delta=0.001)
+        self.assertAlmostEqual(reels.density_from_plasmon(27.0), 2.294,
+                               delta=0.001)
+        self.assertIsNone(reels.density_from_plasmon(0))
+        self.assertIsNone(reels.density_from_plasmon(25.5, m_eff=0))
+
+
+class TestPlasmonStorage(unittest.TestCase):
+    def result(self):
+        _ke, y, loss = plasmon_spectrum(level=100.0, ramp=5.0)
+        return {**reels.plasmon(loss, y, (10, 50), "Shirley"),
+                "elastic": 1000.0}
+
+    def test_round_trip_metadata_and_clearing(self):
+        a = annotations.Annotations()
+        self.assertIsNone(a.plasmon_for("f1", "S", "R"))
+        a.set_plasmon("f1", "S", "R", self.result())
+        self.assertFalse(a.is_empty())
+        got = a.plasmon_for("f1", "S", "R")
+        self.assertAlmostEqual(got["ep"], self.result()["ep"], 9)
+        b = annotations.Annotations.from_json(a.to_json())
+        self.assertEqual(b.plasmon_for("f1", "S", "R"), got)
+        r = Region(name="R", index=0, offset=0, sample="S")
+        md = a.apply_metadata("f1", 0, r, {"Sample": "S", "Region": "R"})
+        self.assertEqual(md["REELS plasmon energy (eV)"], f"{got['ep']:.2f}")
+        self.assertIn("shirley", md["REELS plasmon method"])
+        self.assertEqual(md["REELS elastic peak (eV KE)"], "1000.00")
+        a.set_plasmon("f1", "S", "R", None)
+        self.assertTrue(a.is_empty())
+
+    def test_it_is_independent_of_the_band_gap(self):
+        a = annotations.Annotations()
+        a.set_plasmon("f1", "S", "R", self.result())
+        a.set_reels("f1", "S", "R", None)                 # clearing the gap
+        self.assertIsNotNone(a.plasmon_for("f1", "S", "R"))
+        a.set_reels("f1", "S", "R", {"elastic": 1000.0, "p1": [4, 420],
+                                     "p2": [5, 820], "gap": 3.2})
+        r = Region(name="R", index=0, offset=0, sample="S")
+        md = a.apply_metadata("f1", 0, r, {"Sample": "S"})
+        self.assertIn("REELS band gap (eV)", md)
+        self.assertIn("REELS plasmon energy (eV)", md)
+
+    def test_loading_is_tolerant(self):
+        good = self.result()
+        b = annotations.Annotations.from_json({"plasmon": {
+            "ok": good, "junk": "x", "nowin": {**good, "window": [1]},
+            "badm": {**good, "method": "fft"},
+            "badbg": {**good, "background": "Spline"},
+            "nan": {**good, "ep": float("nan")},
+            "noel": {k: v for k, v in good.items() if k != "elastic"}}})
+        self.assertEqual(list(b.plasmon), ["ok"])
+        self.assertEqual(annotations.Annotations.from_json(
+            {"plasmon": [1]}).plasmon, {})
+        c = annotations.Annotations.from_json({"plasmon": {"k": {
+            **good, "bg": [[1, 2], ["x", 3], [4]], "fwhm": "bad"}}})
+        self.assertEqual(c.plasmon["k"]["bg"], [[1.0, 2.0]])
+        self.assertIsNone(c.plasmon["k"]["fwhm"])
+
+
+@unittest.skipUnless(HAVE_MPL, "matplotlib not installed")
+class TestPlasmonDrawing(unittest.TestCase):
+    def setUp(self):
+        ke, y, _loss = plasmon_spectrum(level=100.0)
+        self.region = Region(name="REELS", index=0, offset=0, energy=ke,
+                             counts=y, decodable=True, sample="S",
+                             photon_energy=1000.0,
+                             energy_label="Kinetic Energy")
+        _k, _y, loss = plasmon_spectrum(level=100.0)
+        self.pl = {**reels.plasmon(loss, y, (10, 50), "Linear"),
+                   "elastic": 1000.0}
+
+    def draw(self, regions, norm="None", scale="Kinetic"):
+        import plots
+        fig = Figure(figsize=(6, 4))
+        ax = fig.add_subplot(111)
+        plots.draw_stack(ax, regions, 0.6, norm, None,
+                         ["#1f77b4"] * len(regions), "R", "", (), False,
+                         plasmon=self.pl, scale=scale)
+        fig.canvas.draw()
+        return ax
+
+    def lines(self, ax, style):
+        return [ln for ln in ax.lines if ln.get_linestyle() == style]
+
+    def test_the_energy_the_window_and_the_background_are_drawn(self):
+        ax = self.draw([self.region])
+        self.assertTrue(any("Ep = 27.0 eV" in t.get_text() for t in ax.texts))
+        xs = [ln.get_xdata()[0] for ln in ax.lines
+              if len(ln.get_xdata()) == 2 and ln.get_linestyle() == "-"]
+        self.assertTrue(any(abs(x - (1000.0 - 27.0)) < 0.2 for x in xs))
+        self.assertTrue(self.lines(ax, "--"))              # the background
+        self.assertTrue(ax.patches or ax.collections)      # the shaded window
+
+    def test_it_follows_a_binding_axis(self):
+        r = Region(name="REELS", index=0, offset=0,
+                   energy=[1000.0 - k for k in self.region.energy],
+                   counts=self.region.counts, decodable=True, sample="S",
+                   photon_energy=1000.0, energy_label="Binding Energy")
+        ax = self.draw([r], scale="Binding")
+        xs = [ln.get_xdata()[0] for ln in ax.lines
+              if len(ln.get_xdata()) == 2 and ln.get_linestyle() == "-"]
+        self.assertTrue(any(abs(x - 27.0) < 0.2 for x in xs))
+
+    def test_the_background_scales_with_normalisation(self):
+        ax = self.draw([self.region], norm="Max = 1")
+        bg = self.lines(ax, "--")[-1]
+        self.assertLess(max(bg.get_ydata()), 5.0)
+
+    def test_no_overlay_on_a_stack(self):
+        ax = self.draw([self.region, self.region])
+        self.assertFalse(any("Ep =" in t.get_text() for t in ax.texts))
+
+
 class TestBrowserPayload(unittest.TestCase):
     def test_kinetic_markers_are_flagged_and_not_shifted(self):
         import htmlbrowser

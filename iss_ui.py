@@ -178,6 +178,153 @@ class IssReelsDialog(tk.Toplevel):
         ttk.Button(t, text="Clear the band gap",
                    command=self._clear_reels).grid(row=6, column=0,
                                                    sticky="w", pady=(10, 0))
+        self._build_plasmon(t, 7)
+
+    def _build_plasmon(self, t, row):
+        """The plasmon-energy group: a feature, its loss window, the background
+        taken under it and how the energy is read (see ``reels.plasmon``)."""
+        ttk.Separator(t).grid(row=row, column=0, columnspan=2, sticky="ew",
+                              pady=10)
+        ttk.Label(t, text="Plasmon energy", font=("", 11, "bold")).grid(
+            row=row + 1, column=0, columnspan=2, sticky="w")
+        box = ttk.Frame(t)
+        box.grid(row=row + 2, column=0, columnspan=2, sticky="w", pady=4)
+        self.pl_feature = tk.StringVar(value="π+σ")
+        self.pl_lo = tk.StringVar()
+        self.pl_hi = tk.StringVar()
+        self.pl_bg = tk.StringVar(value="Linear")
+        self.pl_method = tk.StringVar(value=self.PL_METHODS[0])
+        self.pl_smooth = tk.StringVar(value="1.0")
+        ttk.Label(box, text="Feature").grid(row=0, column=0, sticky="w")
+        cb = ttk.Combobox(box, textvariable=self.pl_feature, width=10,
+                          state="readonly",
+                          values=tuple(reels.FEATURES) + ("Custom",))
+        cb.grid(row=0, column=1, sticky="w", padx=6)
+        cb.bind("<<ComboboxSelected>>", lambda ev: self._plasmon_feature())
+        ttk.Label(box, text="Loss window (eV)").grid(row=0, column=2,
+                                                     sticky="w", padx=(12, 0))
+        ttk.Entry(box, textvariable=self.pl_lo, width=6).grid(row=0, column=3,
+                                                              padx=4)
+        ttk.Label(box, text="to").grid(row=0, column=4)
+        ttk.Entry(box, textvariable=self.pl_hi, width=6).grid(row=0, column=5,
+                                                              padx=4)
+        ttk.Label(box, text="Background").grid(row=1, column=0, sticky="w",
+                                               pady=(6, 0))
+        ttk.Combobox(box, textvariable=self.pl_bg, width=10, state="readonly",
+                     values=reels.BACKGROUNDS).grid(row=1, column=1,
+                                                    sticky="w", padx=6,
+                                                    pady=(6, 0))
+        ttk.Label(box, text="Method").grid(row=1, column=2, sticky="w",
+                                           padx=(12, 0), pady=(6, 0))
+        ttk.Combobox(box, textvariable=self.pl_method, width=22,
+                     state="readonly", values=self.PL_METHODS).grid(
+            row=1, column=3, columnspan=3, sticky="w", padx=4, pady=(6, 0))
+        ttk.Label(box, text="Smoothing (eV, second derivative)").grid(
+            row=2, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Entry(box, textvariable=self.pl_smooth, width=6).grid(
+            row=2, column=3, padx=4, pady=(6, 0))
+        self._plasmon_feature()
+        btns = ttk.Frame(t)
+        btns.grid(row=row + 3, column=0, columnspan=2, sticky="w")
+        ttk.Button(btns, text="Measure", command=self._measure_plasmon
+                   ).pack(side="left")
+        ttk.Button(btns, text="Clear", command=self._clear_plasmon).pack(
+            side="left", padx=6)
+        self.pl_result = ttk.Label(t, wraplength=470, justify="left",
+                                   font=("", 11, "bold"))
+        self.pl_result.grid(row=row + 4, column=0, columnspan=2, sticky="w",
+                            pady=(8, 2))
+        self.pl_detail = ttk.Label(t, style="Muted.TLabel", wraplength=470,
+                                   justify="left")
+        self.pl_detail.grid(row=row + 5, column=0, columnspan=2, sticky="w")
+        ttk.Label(t, style="Muted.TLabel", wraplength=470, justify="left",
+                  text="The energy depends on the background taken under the "
+                       "peak: for graphite 27.1 eV with a linear background "
+                       "and 26.2 eV with a Shirley one; the second derivative "
+                       "needs none (26.9 eV). The method is stored with the "
+                       "number. Filippi & Calliari, Surf. Interface Anal. 38, "
+                       "595 (2006).").grid(row=row + 6, column=0,
+                                           columnspan=2, sticky="w",
+                                           pady=(6, 0))
+
+    PL_METHODS = ("Gaussian above 90 % of the peak", "Second derivative",
+                  "Both (Gaussian is stored)")
+
+    def _plasmon_feature(self):
+        win = reels.FEATURES.get(self.pl_feature.get())
+        if win:
+            self.pl_lo.set(f"{win[0]:g}")
+            self.pl_hi.set(f"{win[1]:g}")
+
+    def _plasmon_window(self):
+        try:
+            return float(self.pl_lo.get()), float(self.pl_hi.get())
+        except ValueError:
+            return None
+
+    def _measure_plasmon(self):
+        win = self._plasmon_window()
+        if win is None or not win[1] > win[0]:
+            self.pl_result.config(text="Give the loss window as two numbers")
+            self.pl_detail.config(text="")
+            return
+        if self._elastic() is None:
+            self._auto_elastic()
+            if self._elastic() is None:
+                return
+        el = self._elastic()
+        ke, counts = self._ke_counts()
+        if ke is None:
+            return
+        loss = reels.loss_axis(ke, el)
+        try:
+            smooth = float(self.pl_smooth.get())
+        except ValueError:
+            smooth = 1.0
+        choice = self.PL_METHODS.index(self.pl_method.get())
+        bg = self.pl_bg.get()
+        gauss = (reels.plasmon(loss, counts, win, bg, "gauss")
+                 if choice != 1 else None)
+        d2 = (reels.plasmon(loss, counts, win, "None", "d2", smooth=smooth)
+              if choice != 0 else None)
+        res = gauss or d2
+        if res is None:
+            self.pl_result.config(text="No peak found in that window")
+            self.pl_detail.config(
+                text="It needs at least five points and a peak above the "
+                     "background; a Shirley background needs the high-loss "
+                     "end of the window to be the higher one.")
+            return
+        self._compare = d2 if (gauss and d2) else None
+        self.app.plasmon_set(self._region(), {**res, "elastic": el})
+        self._show_plasmon()
+
+    def _show_plasmon(self):
+        d = self.app.plasmon_get(self._region())
+        if not d:
+            self.pl_result.config(text="No plasmon energy yet")
+            self.pl_detail.config(text="")
+            return
+        self.elastic.set(f"{d['elastic']:.2f}")
+        self.pl_lo.set(f"{d['window'][0]:g}")
+        self.pl_hi.set(f"{d['window'][1]:g}")
+        self.pl_bg.set(d["background"] if d["method"] == "gauss"
+                       else self.pl_bg.get())
+        self.pl_result.config(text=f"Plasmon energy  Ep = {d['ep']:.2f} eV")
+        text = reels.method_text(d) + "."
+        if d.get("fwhm"):
+            text += f" FWHM {d['fwhm']:.1f} eV."
+        other = getattr(self, "_compare", None)
+        if other:
+            text += (f" Second derivative: {other['ep']:.2f} eV (no "
+                     f"background).")
+        self.pl_detail.config(text=text + " Drawn on the plot and stored "
+                                          "with the workbook.")
+
+    def _clear_plasmon(self):
+        self._compare = None
+        self.app.plasmon_set(self._region(), None)
+        self._show_plasmon()
 
     # -- shared -----------------------------------------------------------------------
     def _detach(self):
@@ -470,6 +617,7 @@ class IssReelsDialog(tk.Toplevel):
         self._show_reels()
 
     def _show_reels(self):
+        self._show_plasmon()
         d = self.app.reels_get(self._region())
         if not d:
             self.result.config(text="No band gap yet")

@@ -23,6 +23,7 @@ except Exception:                                   # pragma: no cover
     tk, ee, HAVE_MPL = None, None, False
 
 from test_iss_kratos import iss_object  # noqa: E402
+from test_iss_reels import plasmon_spectrum  # noqa: E402
 
 
 @unittest.skipUnless(HAVE_MPL, "matplotlib / Tk not available")
@@ -102,6 +103,35 @@ class TestIssDialog(unittest.TestCase):
         syms = [c["symbol"] for c in dlg.cands]
         self.assertIn("Au", syms)
         self.assertEqual(syms[0], "Au")                    # nearest first
+
+    def test_measuring_a_plasmon_stores_it_and_clearing_removes_it(self):
+        dlg = self.dialog()
+        ke, y, _loss = plasmon_spectrum(level=100.0, ramp=5.0)
+        dlg._ke_counts = lambda: (list(ke), list(y))
+        dlg.elastic.set("1000")
+        dlg.pl_feature.set("Custom")
+        dlg.pl_lo.set("10")
+        dlg.pl_hi.set("50")
+        dlg.pl_bg.set("Shirley")
+        dlg._measure_plasmon()
+        got = self.ws.plasmon_get(self.region)
+        self.assertAlmostEqual(got["ep"], 27.0, delta=0.5)
+        self.assertEqual(got["background"], "Shirley")
+        self.assertIn("Ep = 26.", dlg.pl_result.cget("text"))
+        self.assertIsNone(self.ws.reels_get(self.region))   # band gap untouched
+        # both methods: the Gaussian is stored, the second derivative shown
+        dlg.pl_method.set(dlg.PL_METHODS[2])
+        dlg._measure_plasmon()
+        self.assertEqual(self.ws.plasmon_get(self.region)["method"], "gauss")
+        self.assertIn("Second derivative", dlg.pl_detail.cget("text"))
+        dlg._clear_plasmon()
+        self.assertIsNone(self.ws.plasmon_get(self.region))
+
+    def test_a_window_that_is_not_two_numbers_stores_nothing(self):
+        dlg = self.dialog()
+        dlg.pl_lo.set("x")
+        dlg._measure_plasmon()
+        self.assertIsNone(self.ws.plasmon_get(self.region))
 
 
 if __name__ == "__main__":
