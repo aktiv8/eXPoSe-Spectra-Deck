@@ -403,6 +403,8 @@ class IssReelsDialog(tk.Toplevel):
                    command=self._clear_references).pack(side="left")
         ttk.Button(b3, text="How much do the windows matter?",
                    command=self._ratio_sensitivity).pack(side="left", padx=6)
+        ttk.Button(b3, text="Save the table (CSV)…",
+                   command=self.app.export_reels_csv).pack(side="left")
         self.rt_refs = ttk.Label(t, wraplength=470, justify="left",
                                  font=("", 10, "bold"))
         self.rt_refs.grid(row=9, column=0, columnspan=2, sticky="w",

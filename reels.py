@@ -457,6 +457,7 @@ EDGE_AVG = 3
 SCALE_LIMITS = (0.0, 1.15)     # a fraction outside this is flagged, never clipped
 ELASTIC_TOL = 0.01             # relative difference in elastic-peak energy that is noted
 SENSITIVITY_SHIFT = 0.5        # eV a window limit is moved by window_sensitivity
+DIP_FLAG = 0.20                # a curve this far (of its peak height) below its line is flagged
 
 
 def elastic_peak_refined(ke, counts):
@@ -504,7 +505,29 @@ def _window_area(x, v, window, avg):
     lo_y, hi_y = level(i0), level(i1)
     bg = lo_y + (hi_y - lo_y) * (xs - xs[0]) / (xs[-1] - xs[0])
     d = ys - bg
-    return float(np.sum((d[1:] + d[:-1]) * np.diff(xs)) / 2.0), xs, bg
+    return float(np.sum((d[1:] + d[:-1]) * np.diff(xs)) / 2.0), xs, bg, d
+
+
+def _peak_of(xs, d):
+    """``(position, dip, edge)`` of the background-subtracted curve ``d`` over
+    ``xs``: the position of its maximum refined by a parabola through the
+    maximum and its two neighbours; ``dip`` how far, as a fraction of the peak
+    height, the curve falls below zero anywhere in the window; ``edge`` whether
+    the maximum is the first or last point (the window, not the feature, then
+    sets the position). Position and dip are None when the curve has no
+    positive maximum."""
+    import numpy as np
+    i = int(np.argmax(d))
+    if not d[i] > 0:
+        return None, None, False
+    pos = float(xs[i])
+    if 0 < i < len(d) - 1:
+        a, b, c = d[i - 1], d[i], d[i + 1]
+        den = a - 2 * b + c
+        if den < 0:
+            pos = float(xs[i] + 0.5 * (xs[i + 1] - xs[i - 1]) / 2.0
+                        * (a - c) / den)
+    return pos, float(max(0.0, -d.min()) / d[i]), i in (0, len(d) - 1)
 
 
 def pi_ratio(loss, y, pi_window=PI_WINDOW, sp_window=SP_WINDOW,
@@ -531,11 +554,15 @@ def pi_ratio(loss, y, pi_window=PI_WINDOW, sp_window=SP_WINDOW,
     b = _window_area(x, v, sp_window, avg)
     if a is None or b is None:
         return None
+    pa, da, ea = _peak_of(a[1], a[3])
+    pb, db, eb = _peak_of(b[1], b[3])
     step = lambda n: max(1, n // BG_POINTS)
     return {"pi_window": [float(min(pi_window)), float(max(pi_window))],
             "sp_window": [float(min(sp_window)), float(max(sp_window))],
             "avg": avg, "i_pi": a[0], "i_sp": b[0],
             "ratio": a[0] / b[0] if b[0] > 0 else None,
+            "pos_pi": pa, "pos_sp": pb, "dip_pi": da, "dip_sp": db,
+            "edge_pi": ea, "edge_sp": eb,
             "bg_pi": [[float(p), float(q)] for p, q in
                       zip(a[1][::step(len(a[1]))], a[2][::step(len(a[2]))])],
             "bg_sp": [[float(p), float(q)] for p, q in
@@ -544,13 +571,26 @@ def pi_ratio(loss, y, pi_window=PI_WINDOW, sp_window=SP_WINDOW,
 
 def ratio_flags(res):
     """What is wrong with a measured ratio, in words (an empty list when
-    nothing is): a negative π area or a σ+π area that is not positive."""
+    nothing is): a negative π area, a σ+π area that is not positive, a curve
+    that dips well below its straight line (the line may be in the wrong place)
+    or a maximum that sits on the edge of its window. The last two are
+    HarwellXPS's own warnings, reproduced on its six REELS spectra."""
     out = []
     if res.get("i_pi") is not None and \
             res["i_pi"] < -1e-9 * max(abs(res.get("i_sp") or 0.0), 1.0):
         out.append("the π area is negative (no peak above the background)")
     if res.get("i_sp") is not None and res["i_sp"] <= 0:
         out.append("the σ+π area is not positive, so there is no ratio")
+    for name, k in (("π", "pi"), ("σ+π", "sp")):
+        dip = res.get(f"dip_{k}")
+        if dip is not None and dip > DIP_FLAG:
+            out.append(f"the {name} curve dips {dip * 100:.0f} % of its peak "
+                       f"height below the background (the straight line may "
+                       f"be in the wrong place)")
+        if res.get(f"edge_{k}"):
+            out.append(f"the {name} maximum sits on the edge of its window, "
+                       f"so the window rather than the feature sets its "
+                       f"position")
     return out
 
 

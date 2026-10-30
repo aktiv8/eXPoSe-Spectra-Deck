@@ -400,6 +400,24 @@ def _glance_slides(deck, pairs):
         _kv_table(deck, slide, TABLE_TOP, rows[i:i + per], 2)
 
 
+def _reels_slides(deck, table):
+    """The REELS π / (σ+π) ratios as a table over as many slides as it needs,
+    then the definition, the references and the problems as one text slide."""
+    import reelstable
+    rows = reelstable.report_rows(table)
+    per = int((BOTTOM - TABLE_TOP) / ROW_H) - 1
+    for i in range(0, len(rows), per):
+        slide = deck.content_slide(
+            "REELS π / (σ+π) intensity ratio"
+            + (" (continued)" if i else ""))
+        shape = deck.table(slide, MARGIN, TABLE_TOP, BODY_W,
+                           reelstable.WEIGHTS, reelstable.header(table),
+                           rows[i:i + per], size=10)
+        _right_align(deck, shape, 2)
+    _text_slides(deck, "REELS π / (σ+π): what the numbers are",
+                 reelstable.paragraphs(table), size=13)
+
+
 def _timing_slides(deck, data):
     """The Timing rows (and what the files do not record) on one slide, then
     the counting time of each sample as a table over as many slides as it
@@ -934,7 +952,7 @@ def _assemble(deck, dividers="auto"):
 def build_deck(path, details, logo, file_rows, docs, figures, render_images,
                sections=SECTIONS, image_pages=None, spec=None,
                cover_data=None, notes=None, results=None, glance=None,
-               timing=None):
+               timing=None, reels=None):
     """Write the .pptx to ``path``; returns the number of slides.
 
     ``spec`` (see ``reportspec``) says which sections go in, in which order,
@@ -948,7 +966,8 @@ def build_deck(path, details, logo, file_rows, docs, figures, render_images,
     and SnapMap slides as ``[{"title", "png", "notes"}]`` (None: none).
     ``results`` is the ``resultspages.Results`` of the Quantification slides.
     ``glance`` is the list of ``(label, value)`` facts of "At a glance" and
-    ``timing`` the ``glance.Timing`` of "Timing" (None: left out)."""
+    ``timing`` the ``glance.Timing`` of "Timing" (None: left out). ``reels``
+    is the ``reelstable.Table`` of the "REELS analysis" slides."""
     if spec is None:
         spec = reportspec.spec_from_sections(sections, "deck")
     items = reportspec.active(spec)
@@ -981,6 +1000,8 @@ def build_deck(path, details, logo, file_rows, docs, figures, render_images,
         elif sid == "results":
             _results_slides(deck, results, skip)
             _repeat_slides(deck, results, skip)
+        elif sid == "reels" and reels:
+            _reels_slides(deck, reels)
         elif sid == "methods":
             _text_slides(deck, "Methods", paragraphs(methods), size=14)
         elif sid == "timing" and timing:

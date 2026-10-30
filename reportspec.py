@@ -43,6 +43,7 @@ SECTION_DEFS = (
     ("glance", "At a glance", "Key facts in one place"),
     ("summary", "Summary", "Your summary text"),
     ("results", "Quantification", "Atomic percent from the fits"),
+    ("reels", "REELS analysis", "The π / (σ+π) ratio and the sp² fraction"),
     ("figures", "Figures", "The saved figures"),
     ("images", "Camera pictures, SnapMaps and image maps", "Photos, map sites and image maps"),
     ("methods", "Methods", "How the data were acquired"),
@@ -53,7 +54,8 @@ SECTION_DEFS = (
 )
 SECTION_IDS = tuple(s[0] for s in SECTION_DEFS)
 SHORT = {"cover": "Cover", "contents": "Contents", "glance": "At a glance",
-         "summary": "Summary", "results": "Results", "figures": "Figures",
+         "summary": "Summary", "results": "Results", "reels": "REELS",
+         "figures": "Figures",
          "images": "Pictures", "methods": "Methods", "timing": "Timing",
          "calibration": "Calibration", "metadata": "Metadata",
          "files": "Files"}
@@ -66,11 +68,11 @@ CHILD_KINDS = {"figures": "figure", "metadata": "file", "results": "sample",
 # sections but predates one gets it switched OFF (a report made last month
 # does not suddenly grow pages), while a new default spec, "Everything" and
 # an input with no sections at all (garbage) have it on.
-NEW_OFF = frozenset({"glance", "timing"})
+NEW_OFF = frozenset({"glance", "timing", "reels"})
 
 # The order the reports had before there was a choice; used for ``sections=``.
-LEGACY_ORDER = ("cover", "contents", "glance", "summary", "results", "methods",
-                "timing", "calibration", "files", "metadata", "images",
+LEGACY_ORDER = ("cover", "contents", "glance", "summary", "results", "reels",
+                "methods", "timing", "calibration", "files", "metadata", "images",
                 "figures")
 # What each old section name switched on, per output.
 LEGACY_PDF = {"cover": ("cover", "summary", "methods", "calibration", "files"),
@@ -308,10 +310,10 @@ def _preset(order, on):
 BUILTIN_PRESETS = {
     "Everything": default_spec(),
     "Customer report": _preset(
-        ("cover", "contents", "glance", "summary", "results", "figures",
-         "images", "methods", "calibration"),
-        {"cover", "contents", "glance", "summary", "results", "figures",
-         "images", "methods", "calibration"}),
+        ("cover", "contents", "glance", "summary", "results", "reels",
+         "figures", "images", "methods", "calibration"),
+        {"cover", "contents", "glance", "summary", "results", "reels",
+         "figures", "images", "methods", "calibration"}),
     "Quick look": _preset(("cover", "figures"), {"cover", "figures"}),
     "Audit trail": _preset(
         ("cover", "contents", "methods", "timing", "calibration", "metadata",
@@ -394,6 +396,8 @@ class Inventory:
             return f"{n} file{'s' if n != 1 else ''}"
         if sid == "results":
             return f"{n} sample{'s' if n != 1 else ''}"
+        if sid == "reels":
+            return f"{n} spectrum" if n == 1 else f"{n} spectra"
         if sid == "images" and n:
             return f"{n} picture{'s' if n != 1 else ''} and map{'s' if n != 1 else ''}"
         return ""
@@ -401,7 +405,7 @@ class Inventory:
 
 def inventory(details, methods_text, calibration, file_rows, docs, figures,
               has_images, have_mpl=True, results=(), image_items=(),
-              glance=None, timing=None):
+              glance=None, timing=None, reels=None):
     """Build the ``Inventory`` from what the workspace holds. ``figures`` are
     the saved figures (or the single 'current view' the reports fall back to);
     ``results`` is ``[(sample key, label)]`` of the samples with a quantification
@@ -409,7 +413,9 @@ def inventory(details, methods_text, calibration, file_rows, docs, figures,
     pictures and SnapMap sites (see ``imagepages.items``). ``glance`` is the
     list of facts for "At a glance" and ``timing`` the ``glance.Timing`` of
     the files (both from the ``glance`` module); a caller that passes neither
-    gets "At a glance" whenever there are files and no "Timing"."""
+    gets "At a glance" whenever there are files and no "Timing". ``reels`` is
+    the ``reelstable.Table`` of the REELS ratios (None or empty: none
+    measured)."""
     inv = Inventory()
 
     def put(sid, ok, why="", n=None):
@@ -424,6 +430,8 @@ def inventory(details, methods_text, calibration, file_rows, docs, figures,
     put("glance", (glance if glance is not None else (file_rows or docs)),
         "nothing recorded to summarise")
     put("timing", timing, "no acquisition times recorded in these files")
+    put("reels", reels, "no REELS π / (σ+π) ratio measured (Tools ▸ ISS / "
+        "REELS…)", len(reels or ()))
     put("summary", (details.get("summary") or "").strip(),
         "no summary written (Details ▸ Summary)")
     put("methods", (methods_text or "").strip(), "no methods text")

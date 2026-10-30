@@ -98,9 +98,10 @@ class TestOldSpecs(unittest.TestCase):
                             ("summary", "cover", "figures", "images", "methods",
                              "calibration", "metadata", "files")]}
         s = rs.sanitise(old)
-        self.assertEqual(rs.order(s)[:4],
-                         ["summary", "results", "cover", "contents"])
+        self.assertEqual(rs.order(s)[:5],
+                         ["summary", "results", "reels", "cover", "contents"])
         self.assertTrue(rs.is_on(s, "contents"))
+        self.assertFalse(rs.is_on(s, "reels"))      # newer than the spec
         self.assertEqual(rs.order(rs.sanitise({"sections": []})),
                          list(rs.SECTION_IDS))
 

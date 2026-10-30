@@ -609,6 +609,7 @@ FILE_NEEDS_DATA = frozenset((
     "Export ticked spectra → NeXus…",
     "Export spectra (choose regions/levels)…",
     "Export metadata → CSV…", "Export metadata → PDF…",
+    "Export REELS ratios → CSV…",
     "Preview spectra PDF…", "Save spectra as PDF…",
     "Preview metadata PDF…"))
 WORKBOOK_NEEDS_DATA = frozenset((
@@ -816,6 +817,8 @@ class Workspace:
                           command=self.export_meta_csv)
         filem.add_command(label="Export metadata → PDF…",
                           command=self.export_meta_pdf)
+        filem.add_command(label="Export REELS ratios → CSV…",
+                          command=self.export_reels_csv)
         filem.add_separator()
         filem.add_command(label="Preview spectra PDF…",
                           command=self.preview_spectra)
@@ -5695,6 +5698,24 @@ class Workspace:
             else 0)
         return facts, glance.timing_section(self.docs, summary)
 
+    def _reels_table(self):
+        """The ``reelstable.Table`` of every stored REELS π / (σ+π) ratio of the
+        loaded files (the "REELS analysis" section, the hand-over CSV and
+        *Export REELS ratios*), with display names applied."""
+        import reelstable
+        items = []
+        for doc in self.docs:
+            for r in doc.regions:
+                res = self.ann.pi_ratio_for(*self._marker_key(r))
+                if not res:
+                    continue
+                d = self._display(r)
+                items.append({"file": os.path.basename(doc.path or ""),
+                              "sample": d.sample, "spectrum": d.name,
+                              "unit": getattr(d, "count_units", ""),
+                              "res": res})
+        return reelstable.collect(items, self.ann.reels_refs)
+
     def report_inventory(self):
         """What the loaded data can put in a report (sections with content,
         figures, files): the Report generator's list."""
@@ -5704,7 +5725,8 @@ class Workspace:
             d, d.get("methods", ""), d.get("calibration", ""),
             self._report_file_rows(), self.docs, self._report_figures(),
             self._has_image_pages(), HAVE_MPL, self._results().children(),
-            self._image_items(), glance=facts, timing=timing_data)
+            self._image_items(), glance=facts, timing=timing_data,
+            reels=self._reels_table())
 
     def set_report_spec(self, spec):
         """Remember what the reports contain (config, workbook, the preview's
@@ -5814,7 +5836,8 @@ class Workspace:
                                 pdf, left_out, mosaics))
                            if self._has_image_pages() else None),
             cover_data=self.cover_data(), notes=notes,
-            results=self._results(), glance=facts, timing=timing_data)
+            results=self._results(), glance=facts, timing=timing_data,
+            reels=self._reels_table())
 
     def _report_ready(self):
         if not self.docs:
@@ -5977,6 +6000,12 @@ class Workspace:
             if not table:
                 notes.append("quantification: no sample has a CasaXPS fit, "
                              "so there is no atomic % table")
+        if "reels" in sections:
+            table = self._reels_table()
+            parts += handover.reels_parts(table)
+            if not table:
+                notes.append("REELS: no π / (σ+π) ratio has been measured "
+                             "(Tools ▸ ISS / REELS…)")
         if "figures" in sections and HAVE_MPL:
             figs = self._report_figures()
             pages = [self._figure_pngs(f) for f in figs]
@@ -6050,6 +6079,7 @@ class Workspace:
              ("metadata", "Acquisition metadata (CSV)"),
              ("quantification",
               "Quantification: atomic % and repeat groups (CSV)"),
+             ("reels", "REELS: π / (σ+π) ratios and sp² fraction (CSV)"),
              ("figures", "Figures (PNG)"),
              ("browser", "Interactive data browser (HTML, works offline)"),
              ("workbook", "The workbook (.xpscontainer)")], go)
@@ -6077,7 +6107,8 @@ class Workspace:
                          if self._has_image_pages() else None),
             spec=spec,
             cover_data=self.cover_data(), notes=notes,
-            results=self._results(), glance=facts, timing=timing_data)
+            results=self._results(), glance=facts, timing=timing_data,
+            reels=self._reels_table())
 
     def export_powerpoint(self):
         self.generate_report("pptx")
@@ -6101,7 +6132,8 @@ class Workspace:
                          if self._has_image_pages() else None),
             spec=spec,
             cover_data=self.cover_data(), notes=notes,
-            results=self._results(), glance=facts, timing=timing_data)
+            results=self._results(), glance=facts, timing=timing_data,
+            reels=self._reels_table())
 
     def generate_report(self, kind="pdf"):
         """Write the PDF report, the PowerPoint deck, the Word document, or
@@ -7154,6 +7186,31 @@ class Workspace:
             return
         messagebox.showinfo("Exported", f"Wrote metadata for {n} region(s) "
                                         f"to:\n{path}")
+
+    def export_reels_csv(self):
+        """Write every stored REELS π / (σ+π) ratio of the loaded files as a CSV
+        (``reelstable.csv_rows``)."""
+        import reelstable
+        table = self._reels_table()
+        if not table:
+            messagebox.showinfo(
+                "REELS ratios", "No π / (σ+π) ratio has been measured yet. "
+                                "Tools ▸ ISS / REELS… ▸ REELS π / (σ+π) "
+                                "ratio measures it.")
+            return
+        path = filedialog.asksaveasfilename(
+            defaultextension=".csv", filetypes=[("CSV", "*.csv")],
+            initialfile="reels_pi_sigma_ratio.csv")
+        if not path:
+            return
+        try:
+            with open(path, "wb") as fh:
+                fh.write(reelstable.csv_bytes(table))
+        except OSError as exc:
+            messagebox.showerror("Export failed", str(exc))
+            return
+        messagebox.showinfo("Exported", f"Wrote the ratios of {len(table)} "
+                                        f"spectrum(s) to:\n{path}")
 
     def export_meta_pdf(self):
         parser = self._metadata_doc()

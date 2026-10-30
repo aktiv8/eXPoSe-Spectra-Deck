@@ -359,6 +359,9 @@ REPORT_SECTIONS = [
      "A line is written only when the files record it."),
     ("Summary", "A short written overview of the experiment."),
     ("Quantification", "Atomic percent from CasaXPS fits, by sample and by depth level."),
+    ("REELS analysis", "After the Quantification: the π / (σ+π) intensity ratio of each REELS "
+     "spectrum you measured (peak positions, areas, ratio, sp² fraction), with the windows, "
+     "the references and the problems marked †."),
     ("Figures", "One page (slide) per saved figure, drawn with its caption."),
     ("Camera pictures, SnapMaps and image maps", "Sample-view photos, mosaics, element-map pages and Kratos image maps."),
     ("Methods", "The automatically written methods paragraph."),
@@ -1095,8 +1098,9 @@ def build_chapters(doc):
         "trail) and your own saved presets fill in the ticks in one go. "
         "Sections with many items (figures, pictures, files, samples) open "
         "with a double-click, and All / None ticks every item of the selected "
-        "section. A report saved before At a glance or Timing existed keeps "
-        "them switched off, so an old report does not grow pages."
+        "section. A report saved before At a glance, Timing or REELS analysis "
+        "existed keeps them switched off, so an old report does not grow "
+        "pages."
     )
     para(doc,
         "If you changed which regions count in the Quantification tab, the "
@@ -1214,7 +1218,10 @@ def build_chapters(doc):
         "table of the Quantification tab: one row per fitted region and per "
         "chemical state, each sample and depth level its own total, UTF-8 with a "
         "BOM) and, where repeat groups exist, quantification_repeat_groups.csv; "
-        "CasaXPS’s own Quant_*.txt files stay under metadata/."
+        "CasaXPS’s own Quant_*.txt files stay under metadata/. A REELS section "
+        "adds reels/reels_pi_sigma_ratio.csv, the π / (σ+π) table of the "
+        "REELS ratios you measured (see the REELS chapter), and the README "
+        "explains it."
     )
 
     # 16. HTML browser ---------------------------------------------------------
@@ -1710,6 +1717,37 @@ def build_chapters(doc):
               "background under each, the ratio and the sp² fraction against "
               "a HOPG reference.",
               image_path=os.path.join(FIGDIR, "fig_piratio.png"))
+    para(doc,
+        "Peak positions and warnings. Each result also records where the π "
+        "and the σ + π peak lie (the maximum of the curve above its straight "
+        "line, refined by a parabola through it and its neighbours) and two "
+        "warnings that HarwellXPS gives: the curve dips more than 20 % of "
+        "its peak height below the line, which means the straight line may be "
+        "in the wrong place, and the maximum sits on the edge of its window, "
+        "so the window rather than the feature sets the position. They "
+        "reproduce HarwellXPS’s own warnings on its six REELS spectra."
+    )
+    para(doc,
+        "The table, the CSV and the report. Every spectrum with a measured "
+        "ratio is listed in one table: file, sample, spectrum, elastic peak, "
+        "the two peak positions, the two areas, the ratio, the sp² fraction, "
+        "the windows and end-point channels, the HOPG and diamond ratios used "
+        "and the notes. File → Export REELS ratios → CSV… and the Save the "
+        "table (CSV)… button in the dialog write it as a CSV in the layout "
+        "of HarwellXPS’s reels_pi_sigma_ratio.csv with those columns "
+        "added; a value that is not there is blank, never zero, and nothing "
+        "is clipped. The hand-over package can include the same CSV."
+    )
+    para(doc,
+        "A REELS analysis section in the Report generator puts the table into "
+        "the PDF, the slides and the Word document, after the Quantification. "
+        "A † marks a sample with a problem, and under the table come the "
+        "windows, the references, the reminder that the ratio is not an sp² "
+        "percentage, and one line for each kind of problem naming the "
+        "spectra it applies to. The section appears only once a ratio has "
+        "been measured, is on in the Everything and Customer report presets, "
+        "and is off in a report saved before it existed."
+    )
     para(doc,
         "Not included: published reference values for HOPG or other carbons. "
         "The XPSView data lists graphite 0.145 and amorphous carbon 0.134 "

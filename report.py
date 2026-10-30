@@ -35,8 +35,8 @@ import reportspec
 
 SECTIONS = ("cover", "metadata", "images", "figures")   # the old names
 
-_FLOW = ("cover", "glance", "summary", "results", "methods", "timing",
-         "calibration", "files", "metadata")
+_FLOW = ("cover", "glance", "summary", "results", "reels", "methods",
+         "timing", "calibration", "files", "metadata")
 FOOTER_SIZE = 7.5
 FOOTER_MARGIN = 36                       # points from the page edge
 DIVIDER_MIN = 5                          # report pages in a section that earn
@@ -509,9 +509,33 @@ def timing_story(data, look=None, sid="timing"):
     return story
 
 
+def reels_story(table, look=None, sid="reels"):
+    """The "REELS analysis" heading, the table of π / (σ+π) ratios and what goes
+    with it (the definition, the references, the caveat and the problems marked
+    † in the table). ``table`` is a ``reelstable.Table`` ([] when empty)."""
+    from reportlab.lib.units import mm
+    from reportlab.platypus import Paragraph, Spacer
+    import reelstable
+
+    if not table:
+        return []
+    look = look or pdfstyle.look()
+    st = pdfstyle.styles(look)
+    rows = [[Paragraph(xml_escape(c), st["small"]) if i < 2 else c
+             for i, c in enumerate(r)] for r in reelstable.report_rows(table)]
+    story = [_mark(Paragraph("REELS analysis", st["h1"]), sid),
+             Paragraph("π / (σ+π) intensity ratio", st["h2"]),
+             _grid(reelstable.header(table), rows, reelstable.WEIGHTS, look,
+                   right_from=2),
+             Spacer(1, 3 * mm)]
+    for text in reelstable.paragraphs(table):
+        story += [Paragraph(xml_escape(text), st["small"]), Spacer(1, 1.5 * mm)]
+    return story
+
+
 def _flow_story(items, details, logo, file_rows, docs, sha, art=None,
                 look=None, results=None, audit_first="auto", glance=None,
-                timing_data=None):
+                timing_data=None, reels=None):
     """Flowables of consecutive reportlab sections. ``items`` is
     ``[(section id, skipped child ids)]``; ``art`` the cover picture.
     ``audit_first`` is the id of the first audit section of the *whole*
@@ -555,6 +579,8 @@ def _flow_story(items, details, logo, file_rows, docs, sha, art=None,
             story += text_block("Summary", details.get("summary"), look, sid)
         elif sid == "results":
             story += results_story(results, skip, look, sid)
+        elif sid == "reels":
+            story += reels_story(reels, look, sid)
         elif sid == "methods":
             story += text_block("Methods", methods, look, sid)
         elif sid == "timing":
@@ -868,7 +894,7 @@ def _footer(out, mu, title, sections, look, skip_first, skip_pages=()):
 def build_report(path, details, logo, file_rows, docs, figures,
                  render_figure, sections=SECTIONS, render_images=None,
                  spec=None, cover_data=None, notes=None, results=None,
-                 glance=None, timing=None):
+                 glance=None, timing=None, reels=None):
     """Write the report to ``path``; returns the number of pages.
 
     ``spec`` (see ``reportspec``) says which sections go in, in which order,
@@ -885,7 +911,9 @@ def build_report(path, details, logo, file_rows, docs, figures,
     ``(label, value)`` facts of the "At a glance" section and ``timing`` the
     ``glance.Timing`` of the "Timing" section (None: nothing to show, the
     section is left out). ``results`` is the ``resultspages.Results``
-    the Quantification section is made from (None: there is none)."""
+    the Quantification section is made from (None: there is none). ``reels``
+    is the ``reelstable.Table`` of the "REELS analysis" section (None or empty:
+    left out)."""
     if spec is None:
         spec = reportspec.spec_from_sections(sections, "pdf")
     sha = reportspec.option(spec, "sha")
@@ -932,7 +960,7 @@ def build_report(path, details, logo, file_rows, docs, figures,
             elif kind == "flow":
                 story = _flow_story(run, details, logo, file_rows, docs, sha,
                                     None, look, results, audit_first, glance,
-                                    timing)
+                                    timing, reels)
                 if story:
                     marks = _build_pdf(part, story, details, look, pagesize)
                     add(k, kind, run[0][0], _page_count(mu, part), marks)

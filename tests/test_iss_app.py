@@ -258,6 +258,90 @@ class TestIssDialog(unittest.TestCase):
         self.assertIn("σ+π start", text)
         self.assertEqual(len(text.splitlines()), 9)
 
+    def measured(self, pi_area=300.0):
+        dlg = self.dialog()
+        self.patch_spectrum(dlg, pi_area)
+        dlg._set_reference("hopg")
+        self.patch_spectrum(dlg, pi_area / 2)
+        dlg._measure_ratio()
+        return dlg
+
+    def test_the_workspace_table_has_the_loaded_spectrum_and_its_fraction(self):
+        self.assertFalse(self.ws._reels_table())           # nothing measured
+        self.measured()
+        table = self.ws._reels_table()
+        self.assertEqual(len(table), 1)
+        row = table.rows[0]
+        self.assertEqual(row.file, "iss.kal")
+        self.assertEqual(row.sample, self.ws._display(self.region).sample)
+        self.assertEqual(row.spectrum, self.ws._display(self.region).name)
+        self.assertAlmostEqual(row.fraction, 0.5, delta=0.05)
+        self.assertIn("counts", table.unit)
+
+    def test_a_renamed_sample_shows_its_new_name_in_the_table(self):
+        self.measured()
+        import annotations
+        fid = self.ws._marker_key(self.region)[0]
+        self.ws.ann.set_name("sample_names",
+                             annotations.sample_key(fid, self.region.sample),
+                             "My sample", self.region.sample)
+        self.ws._ann_changed()
+        self.assertEqual(self.ws._reels_table().rows[0].sample, "My sample")
+
+    def test_the_report_inventory_offers_the_section_only_when_measured(self):
+        self.assertNotIn("reels", self.ws.report_inventory().present_ids())
+        self.measured()
+        inv = self.ws.report_inventory()
+        self.assertIn("reels", inv.present_ids())
+        self.assertEqual(inv.summary("reels"), "1 spectrum")
+
+    def test_export_reels_csv_writes_the_table(self):
+        import csv
+        self.measured()
+        path = os.path.join(self.__class__.dir, "reels.csv")
+        saved = ee.filedialog.asksaveasfilename
+        ee.filedialog.asksaveasfilename = lambda **k: path
+        try:
+            self.ws.export_reels_csv()
+        finally:
+            ee.filedialog.asksaveasfilename = saved
+        with open(path, encoding="utf-8-sig", newline="") as fh:
+            rows = list(csv.reader(fh))
+        self.assertEqual(rows[0][:3], ["File", "Sample", "Spectrum"])
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[1][0], "iss.kal")
+        self.assertNotEqual(rows[1][9], "")                # an sp2 fraction
+        self.assertEqual(rows[1][13], f"{self.ws.ann.reels_refs['hopg']['ratio']:.6g}")
+
+    def test_export_reels_csv_with_nothing_measured_writes_nothing(self):
+        path = os.path.join(self.__class__.dir, "none.csv")
+        saved = ee.filedialog.asksaveasfilename
+        ee.filedialog.asksaveasfilename = lambda **k: path
+        try:
+            self.ws.export_reels_csv()
+        finally:
+            ee.filedialog.asksaveasfilename = saved
+        self.assertFalse(os.path.exists(path))
+
+    def test_the_dialog_button_and_the_file_menu_use_the_same_export(self):
+        dlg = self.dialog()
+        self.assertEqual(dlg.app.export_reels_csv.__func__,
+                         ee.Workspace.export_reels_csv)
+        self.assertIn("Export REELS ratios → CSV…", ee.FILE_NEEDS_DATA)
+
+    def test_the_handover_has_the_reels_csv_when_asked(self):
+        self.measured()
+        parts, notes = self.ws.handover_parts({"reels"})
+        self.assertEqual([p.arc for p in parts],
+                         ["reels/reels_pi_sigma_ratio.csv"])
+        self.assertEqual(notes, [])
+        self.ws.ann.reels_refs.clear()
+        empty = self.ws.ann.pi_ratio
+        empty.clear()
+        parts, notes = self.ws.handover_parts({"reels"})
+        self.assertEqual(parts, [])
+        self.assertTrue(any("REELS" in n for n in notes))
+
     def test_tpp2m_fills_the_mean_free_path(self):
         dlg = self.dialog()
         dlg.elastic.set("2000")

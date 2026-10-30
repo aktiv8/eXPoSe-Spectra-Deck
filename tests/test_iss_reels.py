@@ -946,6 +946,47 @@ class TestPiRatio(unittest.TestCase):
         self.assertIsNone(reels.pi_ratio(loss[:30], y[:30]))
         self.assertIsNone(reels.pi_ratio(loss, y, sp_window=(10, float("nan"))))
 
+    def test_the_peak_positions_are_refined_between_the_points(self):
+        _ke, y, loss = ratio_spectrum(300.0, 2000.0)
+        res = reels.pi_ratio(loss, y)
+        self.assertAlmostEqual(res["pos_pi"], 5.8, delta=0.06)
+        self.assertAlmostEqual(res["pos_sp"], 26.0, delta=1.0)
+        self.assertFalse(res["edge_pi"] or res["edge_sp"])
+        self.assertLess(res["dip_pi"], reels.DIP_FLAG)
+        self.assertEqual(reels.ratio_flags(res), [])
+
+    def test_a_curve_that_dips_below_its_line_is_flagged(self):
+        _ke, y, loss = ratio_spectrum(300.0, 2000.0)
+        y = [v - 400.0 * math.exp(-((x - 7.0) / 0.4) ** 2)
+             for v, x in zip(y, loss)]
+        res = reels.pi_ratio(loss, y)
+        self.assertGreater(res["dip_pi"], reels.DIP_FLAG)
+        flags = reels.ratio_flags(res)
+        self.assertTrue(any("π curve dips" in f for f in flags), flags)
+        self.assertFalse(any("σ+π curve dips" in f for f in flags))
+
+    def test_a_maximum_on_the_window_edge_is_flagged(self):
+        # (the real case, NX393-042 of the XPSView project, is checked against
+        # XPSView's own warning in TestPiRatioAgainstXpsView)
+        import numpy as np
+        xs = np.array([3.5, 4.0, 4.5, 5.0])
+        pos, dip, edge = reels._peak_of(xs, np.array([0.0, -1.0, -2.0, 1.0]))
+        self.assertTrue(edge)
+        self.assertEqual(pos, 5.0)                       # no parabola at an end
+        self.assertAlmostEqual(dip, 2.0, 9)              # 2 below, peak of 1
+        flags = reels.ratio_flags({"edge_pi": True, "dip_pi": dip,
+                                   "i_pi": 1.0, "i_sp": 2.0})
+        self.assertTrue(any("edge of its window" in f for f in flags))
+        _p, _d, inner = reels._peak_of(xs, np.array([0.0, 2.0, 1.0, 0.0]))
+        self.assertFalse(inner)
+
+    def test_no_positive_maximum_gives_no_position(self):
+        loss = [i * 0.05 for i in range(1001)]
+        res = reels.pi_ratio(loss, [100.0 - 0.5 * x for x in loss])
+        self.assertIsNone(res["pos_pi"])
+        self.assertIsNone(res["dip_pi"])
+        self.assertFalse(res["edge_pi"])
+
     def test_the_sp2_fraction_scale(self):
         self.assertAlmostEqual(reels.sp2_fraction(0.15, 0.15), 1.0, 12)
         self.assertAlmostEqual(reels.sp2_fraction(0.0, 0.15), 0.0, 12)
@@ -1098,6 +1139,16 @@ class TestPiRatioAgainstXpsView(unittest.TestCase):
                                  (res["ratio"], row["ratio"])):
                 self.assertAlmostEqual(ours, theirs,
                                        delta=2e-5 * max(1.0, abs(theirs)))
+            # the position of each peak (a parabola-refined maximum) and
+            # XPSView's two warnings about it
+            for key, k in (("pi", "pi"), ("sigma_pi", "sp")):
+                self.assertAlmostEqual(res[f"pos_{k}"],
+                                       row[key]["position_eV"], 4)
+                flags = row[key].get("flags", [])
+                self.assertEqual(res[f"dip_{k}"] > reels.DIP_FLAG,
+                                 any("dips" in f for f in flags), (key, row))
+                self.assertEqual(bool(res[f"edge_{k}"]),
+                                 any("edge of the window" in f for f in flags))
             checked += 1
         self.assertEqual(checked, 6)
 
@@ -1184,6 +1235,23 @@ class TestPiRatioStorage(unittest.TestCase):
         self.assertEqual(d.reels_refs["hopg"]["kind"], "spectrum")
         self.assertIsNone(d.reels_refs["hopg"]["avg"])
         self.assertEqual(d.reels_refs["hopg"]["label"], "reference")
+
+    def test_positions_dips_and_edges_survive_storage(self):
+        a = annotations.Annotations()
+        d = {**self.result(), "pos_pi": 6.1, "pos_sp": 25.0, "dip_pi": 0.3,
+             "dip_sp": 0.0, "edge_pi": True, "edge_sp": False}
+        a.set_pi_ratio("f1", "S", "R", d)
+        got = a.pi_ratio_for("f1", "S", "R")
+        self.assertEqual((got["pos_pi"], got["dip_pi"], got["edge_pi"]),
+                         (6.1, 0.3, True))
+        b = annotations.Annotations.from_json(a.to_json())
+        self.assertEqual(b.pi_ratio_for("f1", "S", "R"), got)
+        old = {k: v for k, v in d.items()
+               if not k.startswith(("pos_", "dip_", "edge_"))}   # an older save
+        c = annotations.Annotations()
+        c.set_pi_ratio("f1", "S", "R", old)
+        self.assertIsNone(c.pi_ratio_for("f1", "S", "R")["pos_pi"])
+        self.assertFalse(c.pi_ratio_for("f1", "S", "R")["edge_pi"])
 
     def test_a_split_sample_keeps_its_ratio(self):
         a = annotations.Annotations()

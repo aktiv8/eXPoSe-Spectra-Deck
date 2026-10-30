@@ -186,6 +186,10 @@ def _clean_pi_ratio(d):
         return None
     out = {"pi_window": pw, "sp_window": sw, "avg": avg, "elastic": elastic,
            "i_pi": i_pi, "i_sp": i_sp, "ratio": _finite(d.get("ratio"))}
+    for k in ("pos_pi", "pos_sp", "dip_pi", "dip_sp"):
+        out[k] = _finite(d.get(k))
+    for k in ("edge_pi", "edge_sp"):
+        out[k] = bool(d.get(k))
     for key in ("bg_pi", "bg_sp"):
         pts = []
         for p in d.get(key) or []:

@@ -251,6 +251,21 @@ def _glance_section(d, pairs):
     return True
 
 
+def _reels_section(d, table):
+    """"REELS analysis": the π / (σ+π) table and what goes with it, the same
+    rows as the PDF and the slides."""
+    import reelstable
+    if not table:
+        return False
+    d.heading("REELS analysis", level=1)
+    d.heading("π / (σ+π) intensity ratio", level=2)
+    d.table(reelstable.header(table), reelstable.report_rows(table),
+            reelstable.WEIGHTS)
+    for text in reelstable.paragraphs(table):
+        d.paragraph(text, size=8)
+    return True
+
+
 def _timing_section(d, data):
     """"Timing": the rows, the counting time of each sample when that says
     something, and what the files do not record."""
@@ -432,7 +447,7 @@ def _images_section(d, image_pages):
 def build_document(path, details, logo, file_rows, docs, figures,
                    render_figure, image_pages=None, spec=None,
                    cover_data=None, notes=None, results=None, glance=None,
-                   timing=None):
+                   timing=None, reels=None):
     """Write the .docx to ``path``; returns the number of sections written.
 
     ``spec`` (see ``reportspec``) says which sections go in, in which order,
@@ -447,7 +462,8 @@ def build_document(path, details, logo, file_rows, docs, figures,
     ``[{"title", "png", "notes"}]`` (None: none). ``results`` is the
     ``resultspages.Results`` the Quantification section is made from.
     ``glance`` is the list of ``(label, value)`` facts of "At a glance" and
-    ``timing`` the ``glance.Timing`` of "Timing" (None: left out)."""
+    ``timing`` the ``glance.Timing`` of "Timing" (None: left out). ``reels``
+    is the ``reelstable.Table`` of the "REELS analysis" section."""
     if spec is None:
         spec = reportspec.default_spec()
     items = reportspec.active(spec)
@@ -477,6 +493,8 @@ def build_document(path, details, logo, file_rows, docs, figures,
             written += _text_section(d, "Summary", paras)
         elif sid == "results":
             written += _results_section(d, results, skip)
+        elif sid == "reels":
+            written += _reels_section(d, reels)
         elif sid == "methods":
             written += _text_section(d, "Methods", _paragraphs(methods))
         elif sid == "timing":

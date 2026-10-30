@@ -10,6 +10,8 @@ experiment in one ZIP.
     <name>/metadata/Quant_*.txt CasaXPS's own exported quantification (optional)
     <name>/quantification/quantification_repeat_groups.csv  mean, sd and n
                                of the at % over each repeat group (optional)
+    <name>/reels/reels_pi_sigma_ratio.csv  REELS π / (σ+π) ratios and sp²
+                               fraction (optional)
     <name>/spectra/vamas/<sample>.vms   one VAMAS file per sample
     <name>/spectra/csv/<sample>.csv     the same spectra as CSV
     <name>/spectra/nexus/<sample>.nxs   the same as NeXus NXxps (when h5py is installed)
@@ -216,6 +218,7 @@ def casaquant_parts(raw):
 
 REPEAT_GROUPS_ARC = "quantification/quantification_repeat_groups.csv"
 QUANT_ARC = "quantification/quantification.csv"
+REELS_ARC = "reels/reels_pi_sigma_ratio.csv"
 
 
 def repeat_group_parts(groups):
@@ -234,6 +237,19 @@ def repeat_group_parts(groups):
                  "mean, standard deviation (n-1) and n of the atomic % over "
                  "each repeat group, with the individual values",
                  data=buf.getvalue().encode("utf-8-sig"))]
+
+
+def reels_parts(table):
+    """``reels/reels_pi_sigma_ratio.csv``: the REELS π / (σ+π) ratios of the
+    workbook (``reelstable.csv_rows``, UTF-8 with a byte-order mark); [] when no
+    ratio has been measured."""
+    import reelstable
+    if not table:
+        return []
+    return [Part(REELS_ARC,
+                 "REELS π / (σ+π) intensity ratio, peak positions and sp² "
+                 "fraction of each measured spectrum",
+                 data=reelstable.csv_bytes(table))]
 
 
 def quantification_parts(results, skip=()):
@@ -337,6 +353,22 @@ def readme_text(details, parts, file_rows=(), calibration="", when=None):
                   "over one sample",
                   "has no standard deviation. The values are the atomic % of "
                   "the report.", ""]
+    if any(p.arc == REELS_ARC for p in parts):
+        lines += ["", "About the REELS ratios", "----------------------",
+                  "Each row is a REELS spectrum: the area of the π loss over "
+                  "the area of the",
+                  "σ+π loss, each above a straight line between its window's "
+                  "limits, at the",
+                  "spectrum's own elastic peak (the windows and end-point "
+                  "channels are in the",
+                  "row). The ratio is not an sp² percentage: it depends on the "
+                  "windows, the beam",
+                  "energy and the geometry. The sp² fraction is relative to "
+                  "the HOPG (= 1) and,",
+                  "if measured, diamond (= 0) of the workbook, and is blank "
+                  "where they were",
+                  "measured another way. Problems are in the Notes column.",
+                  ""]
     lines += ["", "About the spectra", "-----------------",
               "Binding energy is photon energy minus kinetic energy and, "
               "unless the",
