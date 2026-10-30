@@ -1545,6 +1545,111 @@ def build_chapters(doc):
     )
     add_figure(doc, "The REELS band-gap construction: elastic peak, tangent and baseline.",
               image_path=os.path.join(FIGDIR, "fig_reels.png"))
+    h2(doc, "REELS plasmon energy")
+    para(doc,
+        "Below the band-gap controls, the Plasmon energy group measures the "
+        "energy of a loss peak. Choose the feature (π + σ, with a default loss "
+        "window of 15–45 eV, π, with 3–12 eV, or your own window), the "
+        "background and the method, then press Measure. The window is in eV of "
+        "energy loss from the elastic peak and is never set for you."
+    )
+    para(doc,
+        "The Gaussian method follows Filippi and Calliari (Surf. Interface "
+        "Anal. 38, 595, 2006): a background is taken from the two ends of the "
+        "window, Linear or Shirley, and the centre of the least-squares "
+        "Gaussian through the data above 90 % of the peak height is the "
+        "energy. A Shirley background needs the high-loss end of the window "
+        "to be the higher one and is refused otherwise. The second-derivative "
+        "method takes the maximum of the negated second derivative of the "
+        "smoothed spectrum (the smoothing width is yours to set) and needs no "
+        "background. Choosing both stores the Gaussian value and shows the "
+        "other beside it."
+    )
+    para(doc,
+        "The number depends on the background, so the method is stored and "
+        "written with it. For graphite at 1 keV the paper finds 27.1 eV with a "
+        "linear background, 26.2 eV with a Shirley one and 26.9 eV by the "
+        "second derivative; the literature spans 26–28 eV. The result is "
+        "drawn on the plot (the window shaded, the background dashed, the "
+        "energy labelled), saved in the workbook and added to the spectrum’s "
+        "metadata as REELS plasmon energy and REELS plasmon method. It is "
+        "kept separately from the band gap, so clearing one leaves the other."
+    )
+    para(doc,
+        "A mass density can be calculated from a bulk plasmon energy for "
+        "amorphous carbon (4 valence electrons, effective mass 0.87), which "
+        "gives 2.046 g/cm³ at 25.5 eV as Yang et al. (Phys. Chem. Chem. Phys. "
+        "23, 25335, 2021) report. The dialog does not offer it: a raw REELS "
+        "peak lies above the bulk-loss peak because of surface excitation and "
+        "multiple scattering (27.0 eV would give 2.294 g/cm³), so it "
+        "overstates the density."
+    )
+    h2(doc, "REELS loss peaks and layers")
+    para(doc,
+        "The REELS loss peaks / layers tab fits the π + σ loss region with the "
+        "Gaussians of Stobinski et al. (J. Electron Spectrosc. Relat. Phenom. "
+        "195, 145, 2014) and, from their ratio, estimates how many graphene "
+        "layers the electrons probed."
+    )
+    add_table(doc, ["Component", "Starting loss (eV)"], [
+        ["π", "6.0"], ["interband", "12.5"], ["C sp² surface", "19.5"],
+        ["C sp³ surface", "23.0"], ["C sp² bulk", "27.0"],
+        ["C sp³ bulk", "33.8"], ["σ → σ*", "35.0 and 42.0"],
+    ], widths_cm=[7.0, 5.0])
+    para(doc,
+        "These energies are an assignment taken from the literature, so they "
+        "are only starting values: each position may move by the tolerance "
+        "you set (1 eV by default; 0 holds it). The π peak has a width of its "
+        "own and the other components share one. The areas are found by "
+        "non-negative least squares, so none is negative. The background is "
+        "taken from the ends of the loss window; the paper does not say which "
+        "it used, so Linear is only a default. The table lists each "
+        "component’s position, width and share, and the residual as a "
+        "fraction of the data range."
+    )
+    para(doc,
+        "R is the area of the C sp² bulk component divided by that of the C "
+        "sp² surface component. Neighbouring Gaussians overlap and trade "
+        "area, so treat R as good to about 10 %, not as a precise number. A "
+        "fit with no sp² surface area gives no R."
+    )
+    para(doc,
+        "Number of layers. The beam geometry and the electron mean free path "
+        "are not recorded in the instrument files, so nothing is assumed: "
+        "enter the mean free path λ (nm) and the angles of the incident beam "
+        "and of the emitted electrons to the surface normal. The button λ "
+        "from TPP-2M at the elastic peak fills in the TPP-2M value for the "
+        "average matrix at the elastic-peak energy; it is not specific to "
+        "carbon and gives 4.1 nm at 2 keV, whereas the 6.5 nm information "
+        "depth of Stobinski et al. at 2 keV, 0° in and 35° out corresponds to "
+        "3.1 nm. The layer distance (0.335 nm), the R of graphite (4.2) and "
+        "the information-depth percentage (99) can also be changed."
+    )
+    para(doc,
+        "The estimate takes one layer to have R = 0 and graphite R = 4.2, with "
+        "the bulk signal growing as 1 − exp(−z / (λ cos α_out)) below the "
+        "first layer, and graphite being the thickness the information depth "
+        "reaches. That closed form is a reading of the curve in Fig. 7 of "
+        "their paper, which they do not write as an equation. With their "
+        "geometry it gives 7.9 and 4.1 layers for their R of 2.72 and 1.55; "
+        "they state 8 and 4. An R at or above the graphite value gives “N "
+        "layers or more”. It is a calibration to one graphite reference and "
+        "one model, so quote it with the geometry used."
+    )
+    para(doc,
+        "The fit is drawn on the plot (the two sp² components filled, the sum "
+        "over the background, R in the corner), stored in the workbook and "
+        "added to the metadata: REELS loss fit, REELS π loss, REELS C sp² "
+        "surface loss, REELS sp² bulk / sp² surface (R) and, once a geometry "
+        "is entered, REELS layers (estimate). A refit keeps the geometry you "
+        "entered."
+    )
+    para(doc,
+        "Not included: the ratio of the π peak to the π + σ region as an sp² "
+        "fraction against a graphite reference. None of the papers this "
+        "chapter follows gives a method or reference value for it, so it "
+        "waits for a citation."
+    )
 
     # 22. Avantage / SnapMap -----------------------------------------------------
     add_page_break(doc)
