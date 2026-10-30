@@ -127,6 +127,42 @@ class TestIssDialog(unittest.TestCase):
         dlg._clear_plasmon()
         self.assertIsNone(self.ws.plasmon_get(self.region))
 
+    def test_the_loss_fit_and_the_layer_estimate(self):
+        from test_iss_reels import loss_spectrum, LAM_6_5
+        dlg = self.dialog()
+        ke, y, _loss = loss_spectrum()
+        dlg._ke_counts = lambda: (list(ke), list(y))
+        dlg.elastic.set("2000")
+        dlg._fit_loss()
+        got = self.ws.loss_fit_get(self.region)
+        self.assertAlmostEqual(got["r"], 3.0, delta=0.5)
+        self.assertIn("R = ", dlg.lf_result.cget("text"))
+        self.assertIn("C sp2 bulk", dlg.lf_table.cget("text"))
+        self.assertNotIn("layers", self.ws.methods_generated())
+        # no geometry yet: nothing is assumed
+        dlg._estimate_layers()
+        self.assertIn("Enter", dlg.ly_result.cget("text"))
+        self.assertNotIn("geometry", self.ws.loss_fit_get(self.region))
+        for key, v in (("lam", f"{LAM_6_5:.4f}"), ("a_in", "0"),
+                       ("a_out", "35")):
+            dlg.ly[key].set(v)
+        dlg._estimate_layers()
+        got = self.ws.loss_fit_get(self.region)
+        self.assertGreater(got["layers"]["n"], 1.0)
+        self.assertIn("layers", dlg.ly_result.cget("text"))
+        # a refit keeps the geometry and recomputes the estimate
+        dlg._fit_loss()
+        self.assertIn("geometry", self.ws.loss_fit_get(self.region))
+        self.assertIn("layers", self.ws.loss_fit_get(self.region))
+        dlg._clear_loss()
+        self.assertIsNone(self.ws.loss_fit_get(self.region))
+
+    def test_tpp2m_fills_the_mean_free_path(self):
+        dlg = self.dialog()
+        dlg.elastic.set("2000")
+        dlg._lam_from_tpp()
+        self.assertAlmostEqual(float(dlg.ly["lam"].get()), 4.06, delta=0.01)
+
     def test_a_window_that_is_not_two_numbers_stores_nothing(self):
         dlg = self.dialog()
         dlg.pl_lo.set("x")

@@ -57,8 +57,11 @@ class IssReelsDialog(tk.Toplevel):
         self.reels_tab = ttk.Frame(self.nb, padding=8)
         self.nb.add(self.iss_tab, text="ISS peaks")
         self.nb.add(self.reels_tab, text="REELS band gap")
+        self.loss_tab = ttk.Frame(self.nb, padding=8)
+        self.nb.add(self.loss_tab, text="REELS loss peaks / layers")
         self._build_iss()
         self._build_reels()
+        self._build_loss()
         self.nb.bind("<<NotebookTabChanged>>", lambda e: self._tab_changed())
         ttk.Button(body, text="Close", command=self.destroy).grid(
             row=3, column=1, sticky="e", pady=(10, 0))
@@ -320,6 +323,224 @@ class IssReelsDialog(tk.Toplevel):
                      f"background).")
         self.pl_detail.config(text=text + " Drawn on the plot and stored "
                                           "with the workbook.")
+
+    # -- loss-region Gaussians and a layer estimate -----------------------------------
+    def _build_loss(self):
+        """Fit the pi+sigma loss region with the Gaussians of Stobinski et al.
+        (see ``reels.decompose``) and, from the sp2 bulk / sp2 surface ratio R
+        and a beam geometry the user enters, estimate a number of layers."""
+        t = self.loss_tab
+        t.columnconfigure(1, weight=1)
+        self.lf_lo = tk.StringVar(value=f"{reels.LOSS_WINDOW[0]:g}")
+        self.lf_hi = tk.StringVar(value=f"{reels.LOSS_WINDOW[1]:g}")
+        self.lf_bg = tk.StringVar(value="Linear")
+        self.lf_tol = tk.StringVar(value=f"{reels.LOSS_TOL:g}")
+        box = ttk.Frame(t)
+        box.grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(box, text="Loss window (eV)").grid(row=0, column=0,
+                                                     sticky="w")
+        ttk.Entry(box, textvariable=self.lf_lo, width=6).grid(row=0, column=1,
+                                                              padx=4)
+        ttk.Label(box, text="to").grid(row=0, column=2)
+        ttk.Entry(box, textvariable=self.lf_hi, width=6).grid(row=0, column=3,
+                                                              padx=4)
+        ttk.Label(box, text="Background").grid(row=0, column=4, padx=(12, 0))
+        ttk.Combobox(box, textvariable=self.lf_bg, width=9, state="readonly",
+                     values=reels.BACKGROUNDS).grid(row=0, column=5, padx=4)
+        ttk.Label(box, text="Positions free within (eV)").grid(
+            row=1, column=0, columnspan=3, sticky="w", pady=(6, 0))
+        ttk.Entry(box, textvariable=self.lf_tol, width=6).grid(
+            row=1, column=3, padx=4, pady=(6, 0))
+        btns = ttk.Frame(t)
+        btns.grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
+        ttk.Button(btns, text="Fit the loss region", command=self._fit_loss
+                   ).pack(side="left")
+        ttk.Button(btns, text="Clear", command=self._clear_loss).pack(
+            side="left", padx=6)
+        self.lf_result = ttk.Label(t, wraplength=470, justify="left",
+                                   font=("", 11, "bold"))
+        self.lf_result.grid(row=2, column=0, columnspan=2, sticky="w")
+        self.lf_table = ttk.Label(t, wraplength=470, justify="left",
+                                  font="TkFixedFont")
+        self.lf_table.grid(row=3, column=0, columnspan=2, sticky="w",
+                           pady=4)
+        ttk.Separator(t).grid(row=4, column=0, columnspan=2, sticky="ew",
+                              pady=8)
+        ttk.Label(t, text="Number of layers", font=("", 11, "bold")).grid(
+            row=5, column=0, columnspan=2, sticky="w")
+        self.ly = {k: tk.StringVar(value=v) for k, v in (
+            ("lam", ""), ("a_in", ""), ("a_out", ""),
+            ("d", f"{reels.LAYER_NM:g}"), ("rg", f"{reels.GRAPHITE_R:g}"),
+            ("p", "99"))}
+        g = ttk.Frame(t)
+        g.grid(row=6, column=0, columnspan=2, sticky="w", pady=4)
+        for i, (label, key) in enumerate((
+                ("Mean free path λ (nm)", "lam"),
+                ("Beam angle in (°)", "a_in"),
+                ("Emission angle out (°)", "a_out"),
+                ("Layer distance (nm)", "d"),
+                ("Graphite R", "rg"), ("Information depth (%)", "p"))):
+            ttk.Label(g, text=label).grid(
+                row=i // 2, column=(i % 2) * 2, sticky="w",
+                padx=(0 if i % 2 == 0 else 14, 4), pady=2)
+            ttk.Entry(g, textvariable=self.ly[key], width=7).grid(
+                row=i // 2, column=(i % 2) * 2 + 1, sticky="w")
+        b2 = ttk.Frame(t)
+        b2.grid(row=7, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Button(b2, text="λ from TPP-2M at the elastic peak",
+                   command=self._lam_from_tpp).pack(side="left")
+        ttk.Button(b2, text="Estimate the layers",
+                   command=self._estimate_layers).pack(side="left", padx=6)
+        self.ly_result = ttk.Label(t, wraplength=470, justify="left",
+                                   font=("", 11, "bold"))
+        self.ly_result.grid(row=8, column=0, columnspan=2, sticky="w",
+                            pady=(6, 2))
+        self.ly_detail = ttk.Label(t, style="Muted.TLabel", wraplength=470,
+                                   justify="left")
+        self.ly_detail.grid(row=9, column=0, columnspan=2, sticky="w")
+        ttk.Label(t, style="Muted.TLabel", wraplength=470, justify="left",
+                  text="Gaussians at the loss energies of Stobinski et al., J. "
+                       "Electron Spectrosc. Relat. Phenom. 195, 145 (2014): an "
+                       "assignment from the literature, so the positions are "
+                       "only starting values and neighbouring components "
+                       "overlap (R is good to about 10 %). The beam geometry "
+                       "is not in the file: enter it. Their λ gives a 6.5 nm "
+                       "information depth at 2 keV, 0° in and 35° out."
+                  ).grid(row=10, column=0, columnspan=2, sticky="w",
+                         pady=(6, 0))
+
+    def _floats(self, *vars_):
+        try:
+            return [float(v.get()) for v in vars_]
+        except ValueError:
+            return None
+
+    def _fit_loss(self):
+        win = self._floats(self.lf_lo, self.lf_hi)
+        tol = self._floats(self.lf_tol)
+        if win is None or tol is None or not win[1] > win[0]:
+            self.lf_result.config(text="Give the window and tolerance as "
+                                       "numbers")
+            return
+        if self._elastic() is None:
+            self._auto_elastic()
+            if self._elastic() is None:
+                return
+        el = self._elastic()
+        ke, counts = self._ke_counts()
+        if ke is None:
+            return
+        res = reels.decompose(reels.loss_axis(ke, el), counts, tuple(win),
+                              self.lf_bg.get(), tol[0])
+        if res is None:
+            self.lf_result.config(text="The loss region could not be fitted")
+            self.lf_table.config(text="")
+            return
+        old = self.app.loss_fit_get(self._region()) or {}
+        data = {**res, "elastic": el}
+        if old.get("geometry"):                   # the geometry survives a refit
+            data["geometry"] = old["geometry"]
+        self.app.loss_fit_set(self._region(), data)
+        self._estimate_layers(quiet=True)
+        self._show_loss()
+
+    def _show_loss(self):
+        d = self.app.loss_fit_get(self._region())
+        if not d:
+            self.lf_result.config(text="No loss-region fit yet")
+            self.lf_table.config(text="")
+            self.ly_result.config(text="")
+            self.ly_detail.config(text="")
+            return
+        self.elastic.set(f"{d['elastic']:.2f}")
+        self.lf_lo.set(f"{d['window'][0]:g}")
+        self.lf_hi.set(f"{d['window'][1]:g}")
+        self.lf_bg.set(d["background"])
+        self.lf_tol.set(f"{d['tol']:g}")
+        total = sum(c["area"] for c in d["components"]) or 1.0
+        self.lf_result.config(
+            text="sp2 bulk / sp2 surface  R = "
+                 + (f"{d['r']:.2f}" if d.get("r") is not None else "–"))
+        rows = [f"{'component':<15}{'loss':>7}{'FWHM':>7}{'share':>8}"]
+        for c in d["components"]:
+            rows.append(f"{c['name']:<15}{c['loss']:>7.2f}{c['fwhm']:>7.2f}"
+                        f"{100 * c['area'] / total:>7.1f}%")
+        if d.get("rms") is not None:
+            rows.append(f"residual {100 * d['rms']:.1f} % of the range")
+        self.lf_table.config(text="\n".join(rows))
+        g, ly = d.get("geometry"), d.get("layers")
+        if g:
+            for key, name in (("lam", "lam"), ("a_in", "a_in"),
+                              ("a_out", "a_out"), ("d", "d"),
+                              ("rg", "r_graphite"), ("p", "p")):
+                self.ly[key].set(f"{g[name]:g}")
+        self._show_layers(g, ly)
+
+    def _show_layers(self, g, ly):
+        if not (g and ly):
+            self.ly_result.config(text="")
+            self.ly_detail.config(text="")
+            return
+        if ly.get("n") is not None:
+            self.ly_result.config(text=f"About {ly['n']:.1f} layers")
+        else:
+            self.ly_result.config(
+                text=f"{ly['at_least']:.0f} layers or more (R is at the "
+                     f"graphite value)")
+        self.ly_detail.config(
+            text=f"Information depth {ly['id']:.1f} nm for {g['p']:g} % "
+                 f"({ly['n_graphite']:.0f} layers of {g['d']:g} nm). A "
+                 f"calibration to one graphite reference and one model, with "
+                 f"the geometry you entered; stored with the workbook.")
+
+    def _lam_from_tpp(self):
+        import imfp
+        e0 = self._elastic()
+        lam = imfp.imfp_nm(e0) if e0 else None
+        if lam is None:
+            messagebox.showinfo("REELS", "The elastic peak is outside the "
+                                         "50-2000 eV range of TPP-2M.",
+                                parent=self)
+            return
+        self.ly["lam"].set(f"{lam:.2f}")
+        self.ly_detail.config(
+            text="TPP-2M in the average matrix, not carbon-specific, at the "
+                 "elastic-peak energy; at 2 keV that is 4.1 nm, against the "
+                 "3.1 nm that gives the 6.5 nm depth of Stobinski et al.")
+
+    def _estimate_layers(self, quiet=False):
+        d = self.app.loss_fit_get(self._region())
+        if not d or d.get("r") is None:
+            if not quiet:
+                self.ly_result.config(text="Fit the loss region first (it "
+                                           "needs an sp2 surface component)")
+            return
+        v = self._floats(*(self.ly[k] for k in ("lam", "a_in", "a_out", "d",
+                                                 "rg", "p")))
+        if v is None:
+            if not quiet:
+                self.ly_result.config(text="Enter λ and both angles")
+                self.ly_detail.config(text="They are not in the file, so "
+                                           "nothing is assumed.")
+            return
+        lam, a_in, a_out, dist, rg, p = v
+        res = reels.layers(d["r"], lam, a_in, a_out, dist, rg, p)
+        if res is None:
+            if not quiet:
+                self.ly_result.config(text="The geometry gives no estimate")
+                self.ly_detail.config(text="Angles must be under 90°, λ "
+                                           "positive and the information "
+                                           "depth more than one layer.")
+            return
+        d["geometry"] = {"lam": lam, "a_in": a_in, "a_out": a_out, "d": dist,
+                         "r_graphite": rg, "p": p}
+        d["layers"] = res
+        self.app.loss_fit_set(self._region(), d)
+        self._show_layers(d["geometry"], res)
+
+    def _clear_loss(self):
+        self.app.loss_fit_set(self._region(), None)
+        self._show_loss()
 
     def _clear_plasmon(self):
         self._compare = None
@@ -618,6 +839,7 @@ class IssReelsDialog(tk.Toplevel):
 
     def _show_reels(self):
         self._show_plasmon()
+        self._show_loss()
         d = self.app.reels_get(self._region())
         if not d:
             self.result.config(text="No band gap yet")

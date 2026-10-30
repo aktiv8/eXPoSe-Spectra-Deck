@@ -287,6 +287,240 @@ def density_from_plasmon(ep, z_valence=4, a=12.011, m_eff=0.87):
     return ep * ep * a * m_eff / (z_valence * PLASMA_EV ** 2)
 
 
+# -- the pi+sigma loss region as Gaussians, and a layer count from it ------------------------
+# Stobinski et al., J. Electron Spectrosc. Relat. Phenom. 195, 145 (2014): the
+# loss region of graphite-like carbon is fitted with Gaussians at the loss
+# energies they list (their text and Fig. 5); the pi peak has a width of its
+# own, the other components share one. The positions are an assignment taken
+# from the literature, so they are only starting values, free within ``tol``.
+LOSS_COMPONENTS = (            # key, name, loss (eV), width group
+    ("pi", "π", 6.0, "pi"),
+    ("inter", "interband", 12.5, "sigma"),
+    ("sp2S", "C sp2 surface", 19.5, "sigma"),
+    ("sp3S", "C sp3 surface", 23.0, "sigma"),
+    ("sp2B", "C sp2 bulk", 27.0, "sigma"),
+    ("sp3B", "C sp3 bulk", 33.8, "sigma"),
+    ("ss35", "σ→σ* 35", 35.0, "sigma"),
+    ("ss42", "σ→σ* 42", 42.0, "sigma"),
+)
+LOSS_WINDOW = (3.0, 50.0)      # eV: below that is the elastic peak's tail
+LOSS_TOL = 1.0                 # eV a position may move from its starting value
+LOSS_WIDTHS = {"pi": (2.5, 0.8, 6.0), "sigma": (7.0, 2.0, 16.0)}  # start, low, high
+GRAPHITE_R = 4.2               # sp2 bulk / sp2 surface of their graphite
+LAYER_NM = 0.335               # graphite interlayer distance (nm)
+_UNIT_AREA = 2.0 * math.sqrt(math.log(2.0) / math.pi)
+
+
+def gaussian_unit(x, centre, fwhm):
+    """A Gaussian of unit area (per eV) with the given full width at half
+    maximum, on the array ``x``."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    return (_UNIT_AREA / fwhm) * np.exp(-4.0 * math.log(2.0)
+                                        * ((x - centre) / fwhm) ** 2)
+
+
+def _golden(f, lo, hi, x0, evals=14):
+    """The minimiser of ``f`` on ``[lo, hi]`` by golden section, or ``x0`` when
+    that is no worse (so a sweep never makes the fit worse)."""
+    g = (math.sqrt(5.0) - 1.0) / 2.0
+    a, b = lo, hi
+    c, d = b - g * (b - a), a + g * (b - a)
+    fc, fd = f(c), f(d)
+    for _ in range(evals):
+        if fc < fd:
+            b, d, fd = d, c, fc
+            c = b - g * (b - a)
+            fc = f(c)
+        else:
+            a, c, fc = c, d, fd
+            d = a + g * (b - a)
+            fd = f(d)
+    best = c if fc < fd else d
+    return best if f(best) < f(x0) else x0
+
+
+def decompose(loss, y, window=LOSS_WINDOW, background="Linear", tol=LOSS_TOL,
+              components=None):
+    """Fit the loss region with the Gaussians of :data:`LOSS_COMPONENTS`.
+
+    ``components`` is ``[(key, name, loss, group)]`` (default the table above);
+    ``tol`` is how far each position may move from its starting value (0 holds
+    it). The widths are refined too: one for the pi peak, one shared by the
+    rest. Amplitudes (the areas) and nothing else are solved by non-negative
+    least squares, inside a bounded one-parameter search of each position and
+    width, so the fit has no starting-amplitude dependence. ``background``
+    is taken from the window's two ends as for :func:`plasmon`.
+
+    Returns ``{window, background, tol, components: [{key, name, loss, fwhm,
+    area}], bg, rms, r}`` or None when the window holds too few points, the
+    background cannot be taken, or nothing fits. ``rms`` is the residual's
+    root mean square as a fraction of the data's range in the window and ``r``
+    is sp2 bulk / sp2 surface (None when there is no sp2 surface area)."""
+    import numpy as np
+    import snapfit
+    comps = [tuple(c) for c in
+             (LOSS_COMPONENTS if components is None else components)]
+    try:
+        lo, hi = sorted((float(window[0]), float(window[1])))
+        tol = max(0.0, float(tol))
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not (math.isfinite(lo) and math.isfinite(hi) and math.isfinite(tol)) \
+            or hi <= lo or background not in BACKGROUNDS or not comps:
+        return None
+    x, v = _sorted(loss, y)
+    if x is None:
+        return None
+    sel = (x >= lo) & (x <= hi)
+    xs, ys = x[sel], v[sel]
+    if len(xs) < max(20, 3 * len(comps)):
+        return None
+    bg = window_background(xs, ys, background)
+    if bg is None:
+        return None
+    d = ys - bg
+    centres = [float(c[2]) for c in comps]
+    groups = sorted({c[3] for c in comps})
+    widths = {g: LOSS_WIDTHS.get(g, LOSS_WIDTHS["sigma"])[0] for g in groups}
+
+    def solve(cs, ws):
+        A = np.column_stack([gaussian_unit(xs, c, ws[comp[3]])
+                             for c, comp in zip(cs, comps)])
+        amp = snapfit.nnls(A, d)
+        r = d - A @ amp
+        return float(r @ r), amp
+
+    def cost_of(cs, ws):
+        return solve(cs, ws)[0]
+
+    for _ in range(3):                                   # sweeps
+        for i, c0 in enumerate(centres):
+            if tol <= 0:
+                break
+            centres[i] = _golden(
+                lambda c: cost_of(centres[:i] + [c] + centres[i + 1:], widths),
+                comps[i][2] - tol, comps[i][2] + tol, c0)
+        for g in groups:
+            _s, wl, wh = LOSS_WIDTHS.get(g, LOSS_WIDTHS["sigma"])
+            widths[g] = _golden(
+                lambda w: cost_of(centres, {**widths, g: w}), wl, wh,
+                widths[g])
+    sse, amp = solve(centres, widths)
+    if not np.isfinite(amp).all() or not (amp > 0).any():
+        return None
+    span = float(d.max() - d.min()) or 1.0
+    step = max(1, len(xs) // BG_POINTS)
+    out = [{"key": c[0], "name": c[1], "loss": float(cs), "area": float(a),
+            "fwhm": float(widths[c[3]])}
+           for c, cs, a in zip(comps, centres, amp)]
+    area = {c["key"]: c["area"] for c in out}
+    s2 = area.get("sp2S", 0.0)
+    return {"window": [lo, hi], "background": background, "tol": tol,
+            "components": out,
+            "bg": [[float(a), float(b)] for a, b in zip(xs[::step],
+                                                        bg[::step])],
+            "rms": math.sqrt(sse / len(xs)) / span,
+            "r": (area.get("sp2B", 0.0) / s2
+                  if s2 > 1e-9 * (sum(area.values()) or 1.0) else None)}
+
+
+def loss_curves(fit, x):
+    """The fitted components and their sum on the loss array ``x``:
+    ``(sum including the background, [(component, curve)])``."""
+    import numpy as np
+    x = np.asarray(x, dtype=float)
+    bg = np.asarray(fit.get("bg") or [], dtype=float)
+    base = (np.interp(x, bg[:, 0], bg[:, 1]) if len(bg) > 1
+            else np.zeros(len(x)))
+    parts = [(c, c["area"] * gaussian_unit(x, c["loss"], c["fwhm"]))
+             for c in fit["components"]]
+    return base + sum((p for _c, p in parts), np.zeros(len(x))), parts
+
+
+def loss_fit_metadata(fit):
+    """The metadata rows of a stored loss-region fit (only what it holds)."""
+    out = {}
+    lo, hi = fit["window"]
+    by_key = {c["key"]: c for c in fit["components"]}
+    text = (f"Gaussians at the loss energies of Stobinski et al. (2014), "
+            f"{fit['background'].lower()} background, window {lo:g}–{hi:g} eV, "
+            f"positions free within {fit['tol']:g} eV")
+    out["REELS loss fit"] = text
+    if "pi" in by_key and by_key["pi"]["area"] > 0:
+        out["REELS π loss (eV)"] = f"{by_key['pi']['loss']:.2f}"
+    if "sp2S" in by_key and by_key["sp2S"]["area"] > 0:
+        out["REELS C sp2 surface loss (eV)"] = f"{by_key['sp2S']['loss']:.2f}"
+    if fit.get("r") is not None:
+        out["REELS sp2 bulk / sp2 surface (R)"] = f"{fit['r']:.2f}"
+    g, ly = fit.get("geometry"), fit.get("layers")
+    if g and ly and (ly.get("n") is not None or ly.get("at_least") is not None):
+        n = (f"{ly['n']:.1f}" if ly.get("n") is not None
+             else f"{ly['at_least']:.0f} or more")
+        out["REELS layers (estimate)"] = (
+            f"{n} (mean free path {g['lam']:g} nm, beam {g['a_in']:g}° in, "
+            f"{g['a_out']:g}° out, {g['d']:g} nm a layer, graphite R "
+            f"{g['r_graphite']:g}, information depth {ly['id']:.1f} nm)")
+    return out
+
+
+def information_depth(lam, a_in, a_out, p=99.0):
+    """The depth (nm) from which ``p`` per cent of a REELS signal comes, in the
+    straight-line approximation of Stobinski et al.: ``lam cos(a_in)
+    cos(a_out) / (cos(a_in) + cos(a_out)) ln(1 / (1 - p/100))`` for the
+    inelastic mean free path ``lam`` (nm) and the angles of the incident and
+    emitted beams to the surface normal (degrees). None for an angle at or
+    beyond 90 degrees, ``lam`` <= 0 or ``p`` outside (0, 100)."""
+    try:
+        ci, co = math.cos(math.radians(a_in)), math.cos(math.radians(a_out))
+        lam, p = float(lam), float(p)
+    except (TypeError, ValueError):
+        return None
+    if not (ci > 1e-9 and co > 1e-9 and lam > 0 and 0 < p < 100):
+        return None
+    return lam * ci * co / (ci + co) * math.log(1.0 / (1.0 - p / 100.0))
+
+
+def layers(r, lam, a_in, a_out, d=LAYER_NM, r_graphite=GRAPHITE_R, p=99.0):
+    """An estimate of the number of graphene layers from ``r`` = sp2 bulk /
+    sp2 surface, or None when it is not defined.
+
+    One layer has ``r`` = 0 (all surface) and graphite ``r_graphite``; between
+    them the bulk signal grows as ``1 - exp(-z / (lam cos a_out))`` with ``z``
+    the depth below the first layer, ``(n - 1) d``, and graphite is the
+    thickness the information depth reaches (``n_graphite`` = ID / d):
+    ``r / r_graphite = (1 - exp(-(n - 1) d / L)) / (1 - exp(-(n_g - 1) d / L))``.
+    **This closed form is a reading of the curve of Fig. 7 of Stobinski et al.
+    (J. Electron Spectrosc. Relat. Phenom. 195, 145, 2014), which they do not
+    write as an equation.** With ``lam`` chosen so that the information
+    depth is their 6.5 nm (2 keV, 0 and 35 degrees) it gives 7.9 and 4.1
+    layers for their R = 2.72 and 1.55 (they state 8 and 4).
+
+    Returns ``{n, at_least, id, n_graphite, L}``: ``n`` is None and
+    ``at_least`` the graphite figure when ``r`` reaches ``r_graphite`` (the
+    layer count is then beyond what the information depth can tell)."""
+    depth = information_depth(lam, a_in, a_out, p)
+    try:
+        r, d, rg = float(r), float(d), float(r_graphite)
+    except (TypeError, ValueError):
+        return None
+    if depth is None or not (math.isfinite(r) and r >= 0 and d > 0
+                             and rg > 0):
+        return None
+    n_g = depth / d
+    if n_g <= 1.0:
+        return None
+    big_l = float(lam) * math.cos(math.radians(a_out))
+    out = {"n": None, "at_least": n_g, "id": depth, "n_graphite": n_g,
+           "L": big_l}
+    if r >= rg:
+        return out
+    frac = r / rg * (1.0 - math.exp(-(n_g - 1.0) * d / big_l))
+    out["n"] = 1.0 - (big_l / d) * math.log(1.0 - frac)
+    out["at_least"] = None
+    return out
+
+
 def tangent_points(result, p1, p2, span=1.25):
     """Two ``(loss, intensity)`` ends for drawing: from the baseline crossing
     to a little beyond the higher pick."""

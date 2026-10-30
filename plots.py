@@ -151,7 +151,7 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
                first_col=True, bottom_row=True, accent="#0F6B8C",
                muted="#56636E", scale="Binding", ke_top=False,
                top_row=False, markers=(), style=None, fit=None,
-               reels=None, auger_colour=None, rng=None, plasmon=None):
+               reels=None, auger_colour=None, rng=None, plasmon=None, lossfit=None):
     """Draw one panel: a single spectrum plain, several stacked by y offset.
     ``rng`` is the panel's chosen pair of "Range" end-point energies.
 
@@ -272,6 +272,9 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
     if plasmon and n == 1:             # a REELS plasmon energy
         draw_plasmon(ax, a0, r0.photon_energy, plasmon, 1.0 / nf[0], muted,
                      accent, note_size=small, offset=no[0])
+    if lossfit and n == 1:             # a REELS loss-region fit
+        draw_loss_fit(ax, a0, r0.photon_energy, lossfit, 1.0 / nf[0], muted,
+                      accent, note_size=small, offset=no[0])
     if markers:      # peak labels: (energy, text[, kinetic?[, tier]])
         lo, hi = ax.get_xlim()
         xtf = ax.get_xaxis_transform()       # x in data, y as axes fraction
@@ -654,6 +657,49 @@ def _fit_rms_text(ax, curves, muted, stats=("rms",)):
         ax.text(0.98, 0.98, "\n".join(lines),
                 transform=ax.transAxes, ha="right", va="top",
                 fontsize=fs, color=muted)
+
+
+def draw_loss_fit(ax, a0, hv, fit, scale, muted, accent, note_size=8,
+                  offset=0.0):
+    """Overlay a REELS loss-region fit (``reels.decompose``) on a
+    single-spectrum panel: the components (the two sp2 ones filled, as the
+    bulk and surface of the ratio R), their sum on the background, and R.
+    Intensities are drawn as ``(y - offset) * scale``."""
+    import numpy as np
+    import reels as rl
+
+    def X(loss):                        # loss -> the panel's x value
+        ke = fit["elastic"] - np.asarray(loss, dtype=float)
+        if a0.label == "Kinetic Energy":
+            return ke
+        return hv - ke if hv else None
+    grid = np.linspace(fit["window"][0], fit["window"][1], 400)
+    xg = X(grid)
+    if xg is None:
+        return
+    total, parts = rl.loss_curves(fit, grid)
+    bg = total - sum((p for _c, p in parts), np.zeros(len(grid)))
+    ax.fill_between(xg, (bg - offset) * scale, (total - offset) * scale,
+                    color=muted, alpha=0.06, lw=0, zorder=0.5)
+    for c, p in parts:
+        if c["area"] <= 0:
+            continue
+        y = (bg + p - offset) * scale
+        if c["key"] in ("sp2S", "sp2B"):
+            ax.fill_between(xg, (bg - offset) * scale, y, color=accent,
+                            alpha=0.28, lw=0, zorder=2.5)
+        ax.plot(xg, y, color=accent, lw=0.8, zorder=3)
+        if c["key"] in ("pi", "sp2S", "sp2B"):
+            i = int(np.argmax(p))
+            ax.annotate(c["name"], (xg[i], y[i]), xytext=(0, 4),
+                        textcoords="offset points", ha="center",
+                        color=accent, fontsize=note_size - 1)
+    ax.plot(xg, (total - offset) * scale, color=accent, lw=1.3, zorder=3.6)
+    if fit.get("r") is not None:
+        ax.annotate(f"R = {fit['r']:.2f}", (1.0, 1.0),
+                    xycoords="axes fraction", xytext=(-6, -12),
+                    textcoords="offset points", ha="right", color=accent,
+                    fontsize=note_size + 1, fontweight="bold")
 
 
 def draw_plasmon(ax, a0, hv, plasmon, scale, muted, accent, note_size=8,

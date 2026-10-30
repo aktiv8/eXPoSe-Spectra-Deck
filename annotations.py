@@ -101,6 +101,64 @@ def _clean_plasmon(d):
     return out
 
 
+def _finite(v):
+    import math
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return None
+    return v if math.isfinite(v) else None
+
+
+def _clean_loss_fit(d):
+    """A valid REELS loss-region fit (``reels.decompose`` plus the elastic peak
+    it was measured from, and optionally the ``geometry`` and ``layers`` of a
+    layer estimate) or None."""
+    if not isinstance(d, dict):
+        return None
+    elastic = _finite(d.get("elastic"))
+    try:
+        win = [float(d["window"][0]), float(d["window"][1])]
+    except (KeyError, TypeError, ValueError, IndexError):
+        return None
+    if elastic is None or _finite(win[0]) is None or _finite(win[1]) is None             or d.get("background") not in ("Linear", "Shirley", "None"):
+        return None
+    comps = []
+    for c in d.get("components") or []:
+        try:
+            item = {"key": str(c["key"]), "name": str(c["name"]),
+                    "loss": float(c["loss"]), "fwhm": float(c["fwhm"]),
+                    "area": float(c["area"])}
+        except (KeyError, TypeError, ValueError):
+            continue
+        if all(_finite(item[k]) is not None for k in ("loss", "fwhm", "area"))                 and item["fwhm"] > 0 and item["area"] >= 0:
+            comps.append(item)
+    if not comps:
+        return None
+    out = {"elastic": elastic, "window": win, "background": d["background"],
+           "tol": _finite(d.get("tol")) or 0.0, "components": comps,
+           "r": _finite(d.get("r")), "rms": _finite(d.get("rms")), "bg": []}
+    for p in d.get("bg") or []:
+        try:
+            a, b = float(p[0]), float(p[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if _finite(a) is not None and _finite(b) is not None:
+            out["bg"].append([a, b])
+    g = d.get("geometry")
+    if isinstance(g, dict):
+        geo = {k: _finite(g.get(k)) for k in
+               ("lam", "a_in", "a_out", "d", "r_graphite", "p")}
+        if all(geo[k] is not None for k in ("lam", "a_in", "a_out", "d",
+                                            "r_graphite", "p")):
+            out["geometry"] = geo
+            ly = d.get("layers")
+            if isinstance(ly, dict):
+                out["layers"] = {k: _finite(ly.get(k)) for k in
+                                 ("n", "at_least", "id", "n_graphite", "L")}
+    return out
+
+
 @dataclass
 class Annotations:
     sample_names: dict = field(default_factory=dict)     # sample key -> name
@@ -116,6 +174,7 @@ class Annotations:
     sputter: dict = field(default_factory=dict)          # sample key -> settings
     reels: dict = field(default_factory=dict)            # region key -> band gap
     plasmon: dict = field(default_factory=dict)          # region key -> REELS plasmon energy
+    loss_fit: dict = field(default_factory=dict)         # region key -> REELS loss-region fit (reels.decompose)
     instrument: dict = field(default_factory=dict)       # file id -> NeXus settings
     iss: dict = field(default_factory=dict)              # file id -> {ion, e0, theta}
     imports: dict = field(default_factory=dict)          # file id -> how a column-text file is read
@@ -126,7 +185,8 @@ class Annotations:
 
     # -- samples a reader split into several (Kratos runs) ------------------------
     ADOPTED = ("region_names", "sample_notes", "region_notes", "shifts",
-               "markers", "sputter", "reels", "plasmon", "nexafs_edge")
+               "markers", "sputter", "reels", "plasmon", "loss_fit",
+               "nexafs_edge")
 
     def adopt_aliases(self, fid, aliases):
         """``aliases`` maps a sample the reader made out of a plainer one
@@ -252,6 +312,10 @@ class Annotations:
             out["REELS plasmon method"] = reels.method_text(pl)
             out.setdefault("REELS elastic peak (eV KE)",
                            f"{pl['elastic']:.2f}")
+        lf = self.loss_fit.get(region_key(fid, region.sample, region.name))
+        if lf:
+            import reels
+            out.update(reels.loss_fit_metadata(lf))
         note = self.notes_for(fid, region.sample, region.name)
         if note:
             out["Notes"] = note
@@ -327,6 +391,20 @@ class Annotations:
             self.plasmon[key] = clean
         else:
             self.plasmon.pop(key, None)
+
+    # -- REELS loss-region fits and layer estimates (per spectrum) ------------
+    def loss_fit_for(self, fid, sample, name):
+        """The stored loss-region fit of a spectrum, or None."""
+        d = self.loss_fit.get(region_key(fid, sample, name))
+        return copy.deepcopy(d) if d else None
+
+    def set_loss_fit(self, fid, sample, name, data):
+        key = region_key(fid, sample, name)
+        clean = _clean_loss_fit(data)
+        if clean:
+            self.loss_fit[key] = clean
+        else:
+            self.loss_fit.pop(key, None)
 
     def remove_marker(self, fid, sample, name, be, label):
         key = region_key(fid, sample, name)
@@ -428,7 +506,7 @@ class Annotations:
                     or self.shifts or self.calibration or self.markers
                     or self.calibration_statement or self.experiment_notes
                     or self.sputter or self.reels or self.plasmon
-                    or self.instrument
+                    or self.loss_fit or self.instrument
                     or self.iss or self.imports or self.nexafs_ring
                     or self.nexafs_edge or self.repeat_groups)
 
@@ -440,8 +518,8 @@ class Annotations:
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes", "md_edits", "shifts", "calibration",
                      "calibration_statement", "markers", "experiment_notes",
-                     "sputter", "reels", "plasmon", "instrument", "iss",
-                     "imports"):
+                     "sputter", "reels", "plasmon", "loss_fit", "instrument",
+                     "iss", "imports"):
             d[name] = copy.deepcopy(getattr(self, name))
         if self.nexafs_ring:
             d["nexafs_ring"] = True
@@ -461,8 +539,8 @@ class Annotations:
         known = {"version", "sample_names", "region_names", "sample_notes",
                  "region_notes", "md_edits", "shifts", "calibration",
                  "calibration_statement", "markers", "experiment_notes",
-                 "sputter", "reels", "plasmon", "instrument", "iss",
-                 "imports", "nexafs_ring", "nexafs_edge", "repeat_groups"}
+                 "sputter", "reels", "plasmon", "loss_fit", "instrument",
+                 "iss", "imports", "nexafs_ring", "nexafs_edge", "repeat_groups"}
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes"):
             v = data.get(name)
@@ -512,6 +590,12 @@ class Annotations:
                 clean = _clean_plasmon(x)
                 if clean:
                     a.plasmon[str(k)] = clean
+        v = data.get("loss_fit")
+        if isinstance(v, dict):
+            for k, x in v.items():
+                clean = _clean_loss_fit(x)
+                if clean:
+                    a.loss_fit[str(k)] = clean
         v = data.get("sputter")
         if isinstance(v, dict):
             a.sputter = {str(k): sputter_mod.sanitise(x) for k, x in v.items()

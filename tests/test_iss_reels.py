@@ -588,6 +588,278 @@ class TestPlasmonDrawing(unittest.TestCase):
         self.assertFalse(any("Ep =" in t.get_text() for t in ax.texts))
 
 
+LOSS_TRUTH = {                       # key: (loss, FWHM, area) of a synthetic spectrum
+    "pi": (5.8, 3.0, 900.0), "inter": (12.5, 7.0, 300.0),
+    "sp2S": (19.5, 7.0, 500.0), "sp3S": (23.0, 7.0, 600.0),
+    "sp2B": (27.0, 7.0, 1500.0), "sp3B": (33.8, 7.0, 500.0),
+    "ss35": (35.0, 7.0, 100.0), "ss42": (42.0, 7.0, 150.0)}
+LAM_6_5 = 6.5 / (math.cos(math.radians(35)) / (1 + math.cos(math.radians(35)))
+                 * math.log(100))     # the mean free path that gives their 6.5 nm
+
+
+def loss_spectrum(truth=LOSS_TRUTH, level=20.0, ramp=0.2, el_ke=2000.0):
+    """Elastic peak plus the loss-region Gaussians on a linear background, as
+    plain lists in the kinetic-energy order the app holds."""
+    loss = [i * 0.05 for i in range(1201)]
+    y = []
+    for x in loss:
+        v = level + ramp * x + 50000 * math.exp(-(x / 0.3) ** 2)
+        for c, w, a in truth.values():
+            v += a * (2 * math.sqrt(math.log(2) / math.pi) / w) * math.exp(
+                -4 * math.log(2) * ((x - c) / w) ** 2)
+        y.append(v)
+    return [el_ke - x for x in loss], y, loss
+
+
+class TestLossFit(unittest.TestCase):
+    def test_the_components_and_the_ratio_are_recovered(self):
+        _ke, y, loss = loss_spectrum()
+        res = reels.decompose(loss, y, (3, 50), "Linear")
+        by = {c["key"]: c for c in res["components"]}
+        self.assertEqual(len(by), 8)
+        self.assertLess(res["rms"], 0.02)
+        self.assertAlmostEqual(by["pi"]["loss"], 5.8, delta=0.2)
+        self.assertAlmostEqual(by["pi"]["fwhm"], 3.0, delta=0.5)
+        self.assertAlmostEqual(by["sp2B"]["loss"], 27.0, delta=0.5)
+        self.assertAlmostEqual(by["sp2S"]["loss"], 19.5, delta=1.0)
+        # neighbouring Gaussians trade area, so R is good to about 10 %
+        self.assertAlmostEqual(res["r"], 1500 / 500, delta=0.5)
+        self.assertEqual(res["background"], "Linear")
+
+    def test_positions_held_when_the_tolerance_is_zero(self):
+        _ke, y, loss = loss_spectrum()
+        res = reels.decompose(loss, y, (3, 50), "Linear", tol=0)
+        for (key, _n, c0, _g), c in zip(reels.LOSS_COMPONENTS,
+                                        res["components"]):
+            self.assertEqual(c["key"], key)
+            self.assertEqual(c["loss"], c0)
+
+    def test_positions_stay_within_the_tolerance(self):
+        _ke, y, loss = loss_spectrum()
+        res = reels.decompose(loss, y, (3, 50), "Linear", tol=0.4)
+        for (_k, _n, c0, _g), c in zip(reels.LOSS_COMPONENTS,
+                                       res["components"]):
+            self.assertLessEqual(abs(c["loss"] - c0), 0.4 + 1e-9)
+
+    def test_areas_are_never_negative_and_a_missing_component_is_zero(self):
+        truth = {k: v for k, v in LOSS_TRUTH.items() if k != "sp3B"}
+        _ke, y, loss = loss_spectrum(truth)
+        res = reels.decompose(loss, y, (3, 50), "Linear")
+        self.assertTrue(all(c["area"] >= 0 for c in res["components"]))
+
+    def test_input_order_does_not_matter(self):
+        _ke, y, loss = loss_spectrum()
+        a = reels.decompose(loss, y, (3, 50), "Linear")
+        b = reels.decompose(loss[::-1], y[::-1], (50, 3), "Linear")
+        self.assertAlmostEqual(a["r"], b["r"], 6)
+
+    def test_refusals(self):
+        _ke, y, loss = loss_spectrum()
+        self.assertIsNone(reels.decompose(loss, y, (3, 3), "Linear"))
+        self.assertIsNone(reels.decompose(loss, y, (3, 50), "Cubic"))
+        self.assertIsNone(reels.decompose(loss, y, (3, float("nan")),
+                                          "Linear"))
+        self.assertIsNone(reels.decompose(loss, y, (70, 80), "Linear"))
+        self.assertIsNone(reels.decompose(loss[:10], y[:10], (0, 0.4),
+                                          "Linear"))
+        self.assertIsNone(reels.decompose(loss, y[:-1], (3, 50), "Linear"))
+        self.assertIsNone(reels.decompose(loss, [5.0] * len(loss), (3, 50),
+                                          "Linear"))
+        self.assertIsNone(reels.decompose(loss, y, (3, 50), "Linear",
+                                          components=[]))
+
+    def test_no_sp2_surface_gives_no_ratio(self):
+        _ke, y, loss = loss_spectrum()
+        comps = [c for c in reels.LOSS_COMPONENTS if c[0] != "sp2S"]
+        res = reels.decompose(loss, y, (3, 50), "Linear", components=comps)
+        self.assertIsNone(res["r"])
+
+    def test_the_curves_add_up(self):
+        _ke, y, loss = loss_spectrum()
+        res = reels.decompose(loss, y, (3, 50), "Linear")
+        import numpy as np
+        x = np.linspace(3, 50, 200)
+        total, parts = reels.loss_curves(res, x)
+        bg = np.interp(x, [p[0] for p in res["bg"]], [p[1] for p in res["bg"]])
+        self.assertTrue(np.allclose(total, bg + sum(p for _c, p in parts)))
+        self.assertEqual(len(parts), 8)
+
+    def test_gaussian_unit_has_unit_area_and_the_stated_width(self):
+        import numpy as np
+        x = np.linspace(-30, 30, 60001)
+        g = reels.gaussian_unit(x, 2.0, 5.0)
+        self.assertAlmostEqual(float(g.sum() * (x[1] - x[0])), 1.0, 6)
+        half = x[g >= g.max() / 2]
+        self.assertAlmostEqual(float(half[-1] - half[0]), 5.0, 3)
+
+
+class TestLayers(unittest.TestCase):
+    def test_the_information_depth_formula(self):
+        self.assertAlmostEqual(reels.information_depth(LAM_6_5, 0, 35), 6.5, 9)
+        # normal incidence and emission: lam/2 ln 100
+        self.assertAlmostEqual(reels.information_depth(3.0, 0, 0),
+                               1.5 * math.log(100), 9)
+        for bad in ((0, 0, 0), (3, 90, 0), (3, 0, 90), (-1, 0, 0),
+                    ("x", 0, 0)):
+            self.assertIsNone(reels.information_depth(*bad))
+        self.assertIsNone(reels.information_depth(3, 0, 0, p=100))
+
+    def test_the_published_ratios_give_their_layer_counts(self):
+        # Stobinski et al. 2014: R = 2.72 -> 8 layers (commercial GO) and
+        # R = 1.55 -> 4 layers (commercial rGO), 2 keV, 0 and 35 degrees,
+        # graphite information depth 6.5 nm
+        go = reels.layers(2.72, LAM_6_5, 0, 35)
+        rgo = reels.layers(1.55, LAM_6_5, 0, 35)
+        self.assertEqual(round(go["n"]), 8)
+        self.assertEqual(round(rgo["n"]), 4)
+        self.assertAlmostEqual(go["id"], 6.5, 9)
+        self.assertAlmostEqual(go["n_graphite"], 6.5 / 0.335, 9)
+
+    def test_one_layer_at_zero_and_graphite_at_the_graphite_ratio(self):
+        self.assertAlmostEqual(reels.layers(0, LAM_6_5, 0, 35)["n"], 1.0, 9)
+        g = reels.layers(4.2, LAM_6_5, 0, 35)
+        self.assertIsNone(g["n"])
+        self.assertAlmostEqual(g["at_least"], 6.5 / 0.335, 9)
+        self.assertIsNone(reels.layers(9.0, LAM_6_5, 0, 35)["n"])
+
+    def test_more_layers_for_a_larger_ratio(self):
+        ns = [reels.layers(r, LAM_6_5, 0, 35)["n"] for r in (0.5, 1, 2, 3, 4)]
+        self.assertEqual(ns, sorted(ns))
+
+    def test_a_longer_path_reads_more_layers_for_the_same_ratio(self):
+        # a deeper probe reaches the bulk sooner only if the film is thicker
+        short = reels.layers(2.0, 2.0, 0, 35)["n"]
+        long_ = reels.layers(2.0, 4.0, 0, 35)["n"]
+        self.assertLess(short, long_)
+
+    def test_undefined_inputs(self):
+        self.assertIsNone(reels.layers(-1, LAM_6_5, 0, 35))
+        self.assertIsNone(reels.layers(float("nan"), LAM_6_5, 0, 35))
+        self.assertIsNone(reels.layers(2, LAM_6_5, 90, 35))
+        self.assertIsNone(reels.layers(2, 0.1, 0, 35))     # under one layer deep
+        self.assertIsNone(reels.layers(2, LAM_6_5, 0, 35, d=0))
+        self.assertIsNone(reels.layers(2, LAM_6_5, 0, 35, r_graphite=0))
+
+
+class TestLossFitStorage(unittest.TestCase):
+    def fit(self, geometry=True):
+        _ke, y, loss = loss_spectrum()
+        d = {**reels.decompose(loss, y, (3, 50), "Linear"),
+             "elastic": 2000.0}
+        if geometry:
+            d["geometry"] = {"lam": LAM_6_5, "a_in": 0.0, "a_out": 35.0,
+                             "d": 0.335, "r_graphite": 4.2, "p": 99.0}
+            d["layers"] = reels.layers(d["r"], LAM_6_5, 0, 35)
+        return d
+
+    def test_round_trip_metadata_and_clearing(self):
+        a = annotations.Annotations()
+        self.assertIsNone(a.loss_fit_for("f1", "S", "R"))
+        d = self.fit()
+        a.set_loss_fit("f1", "S", "R", d)
+        self.assertFalse(a.is_empty())
+        got = a.loss_fit_for("f1", "S", "R")
+        self.assertAlmostEqual(got["r"], d["r"], 9)
+        b = annotations.Annotations.from_json(a.to_json())
+        self.assertEqual(b.loss_fit_for("f1", "S", "R"), got)
+        r = Region(name="R", index=0, offset=0, sample="S")
+        md = a.apply_metadata("f1", 0, r, {"Sample": "S", "Region": "R"})
+        self.assertEqual(md["REELS sp2 bulk / sp2 surface (R)"],
+                         f"{d['r']:.2f}")
+        self.assertIn("REELS π loss (eV)", md)
+        self.assertIn("REELS C sp2 surface loss (eV)", md)
+        self.assertIn("linear background", md["REELS loss fit"])
+        self.assertIn("graphite R 4.2", md["REELS layers (estimate)"])
+        a.set_loss_fit("f1", "S", "R", None)
+        self.assertTrue(a.is_empty())
+
+    def test_no_layers_row_without_a_geometry(self):
+        a = annotations.Annotations()
+        a.set_loss_fit("f1", "S", "R", self.fit(geometry=False))
+        r = Region(name="R", index=0, offset=0, sample="S")
+        md = a.apply_metadata("f1", 0, r, {"Sample": "S"})
+        self.assertNotIn("REELS layers (estimate)", md)
+        self.assertIn("REELS sp2 bulk / sp2 surface (R)", md)
+
+    def test_a_graphite_like_ratio_says_or_more(self):
+        d = self.fit()
+        d["layers"] = reels.layers(9.0, LAM_6_5, 0, 35)
+        a = annotations.Annotations()
+        a.set_loss_fit("f1", "S", "R", d)
+        r = Region(name="R", index=0, offset=0, sample="S")
+        md = a.apply_metadata("f1", 0, r, {"Sample": "S"})
+        self.assertIn("or more", md["REELS layers (estimate)"])
+
+    def test_it_is_independent_of_the_other_reels_results(self):
+        a = annotations.Annotations()
+        a.set_loss_fit("f1", "S", "R", self.fit())
+        a.set_reels("f1", "S", "R", None)
+        a.set_plasmon("f1", "S", "R", None)
+        self.assertIsNotNone(a.loss_fit_for("f1", "S", "R"))
+
+    def test_loading_is_tolerant(self):
+        good = self.fit()
+        b = annotations.Annotations.from_json({"loss_fit": {
+            "ok": good, "junk": "x", "nowin": {**good, "window": [1]},
+            "badbg": {**good, "background": "Spline"},
+            "nocomp": {**good, "components": []},
+            "noel": {k: v for k, v in good.items() if k != "elastic"}}})
+        self.assertEqual(list(b.loss_fit), ["ok"])
+        self.assertEqual(annotations.Annotations.from_json(
+            {"loss_fit": [1]}).loss_fit, {})
+        c = annotations.Annotations.from_json({"loss_fit": {"k": {
+            **good, "components": good["components"] + [
+                {"key": "x", "name": "x", "loss": "bad", "fwhm": 1,
+                 "area": 1},
+                {"key": "y", "name": "y", "loss": 1, "fwhm": -1, "area": 1}],
+            "geometry": {"lam": 3}}}})
+        self.assertEqual(len(c.loss_fit["k"]["components"]), 8)
+        self.assertNotIn("geometry", c.loss_fit["k"])     # incomplete: dropped
+
+
+@unittest.skipUnless(HAVE_MPL, "matplotlib not installed")
+class TestLossFitDrawing(unittest.TestCase):
+    def setUp(self):
+        ke, y, loss = loss_spectrum()
+        self.region = Region(name="REELS", index=0, offset=0, energy=ke,
+                             counts=y, decodable=True, sample="S",
+                             photon_energy=2000.0,
+                             energy_label="Kinetic Energy")
+        self.fit = {**reels.decompose(loss, y, (3, 50), "Linear"),
+                    "elastic": 2000.0}
+
+    def draw(self, regions, norm="None"):
+        import plots
+        fig = Figure(figsize=(6, 4))
+        ax = fig.add_subplot(111)
+        plots.draw_stack(ax, regions, 0.6, norm, None,
+                         ["#1f77b4"] * len(regions), "R", "", (), False,
+                         lossfit=self.fit, scale="Kinetic")
+        fig.canvas.draw()
+        return ax
+
+    def test_the_ratio_the_components_and_the_sum_are_drawn(self):
+        ax = self.draw([self.region])
+        self.assertTrue(any(t.get_text().startswith("R = ")
+                            for t in ax.texts))
+        self.assertTrue(any(t.get_text() == "C sp2 bulk" for t in ax.texts))
+        # the sum and every component with an area (the 35 eV one has none)
+        n_drawn = sum(1 for c in self.fit["components"] if c["area"] > 0)
+        self.assertEqual(len([ln for ln in ax.lines
+                              if len(ln.get_xdata()) == 400]), n_drawn + 1)
+        self.assertGreaterEqual(len(ax.collections), 3)        # the fills
+
+    def test_the_sum_follows_the_normalisation(self):
+        ax = self.draw([self.region], norm="Max = 1")
+        sums = [ln for ln in ax.lines if len(ln.get_xdata()) == 400]
+        self.assertLess(max(float(max(ln.get_ydata())) for ln in sums), 5.0)
+
+    def test_no_overlay_on_a_stack(self):
+        ax = self.draw([self.region, self.region])
+        self.assertFalse(any(t.get_text().startswith("R = ")
+                             for t in ax.texts))
+
+
 class TestBrowserPayload(unittest.TestCase):
     def test_kinetic_markers_are_flagged_and_not_shifted(self):
         import htmlbrowser
