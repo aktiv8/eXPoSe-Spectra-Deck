@@ -2096,6 +2096,16 @@ def build_chapters(doc):
         "presets) are saved in ~/.spectradeck_config.json. The holder-photo "
         "calibration lives in each workbook; the last one used seeds new "
         "workbooks via ~/.spectradeck_calib.json.",
+        "Help → Reset settings to defaults… puts every setting back to its "
+        "default after a warning. It clears the theme and window layout, the "
+        "view, plot and report choices, your saved plot styles and report "
+        "presets, the recent files, the places you gave for CasaXPS and "
+        "KherveFitting, the choices you asked the program to remember and the "
+        "splash and display options. It cannot be undone, and it does not "
+        "touch your data files, your workbooks (each keeps its own saved look "
+        "and annotations) or the camera-calibration seed. The defaults apply "
+        "the next time the program starts, so the program offers to close; "
+        "until then nothing you change is saved.",
         "Binding energy is photon energy minus kinetic energy and is not "
         "charge-corrected, so peaks on a charging sample may sit a few eV off "
         "until you calibrate (Chapter 11).",

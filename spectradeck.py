@@ -197,6 +197,19 @@ def load_config():
         return {}
 
 
+def reset_settings_files():
+    """Put the user's settings back to the defaults: the settings file is
+    replaced by an empty one (not deleted, because with no file the settings
+    of the former application name would be read again) and a half-written
+    temporary file is removed. The camera-calibration seed, the workbooks and
+    the data are not touched. True when the file now holds no settings."""
+    try:
+        os.remove(CONFIG_PATH + ".tmp")
+    except OSError:
+        pass
+    return save_config({})
+
+
 def save_config(cfg):
     """Write the settings file (a temporary file first, then a rename, so a
     crash part-way leaves the old settings, not half a file)."""
@@ -603,6 +616,18 @@ class ReportCancelled(Exception):
 
 FORGET_DUP_LABEL = ("Forget my choice for duplicate files "
                     "(.avg/.vgd, .kal/.dset)")
+RESET_SETTINGS_LABEL = "Reset settings to defaults…"
+RESET_SETTINGS_WARNING = (
+    "Reset every setting to its default?\n\n"
+    "This clears, for your user account: the theme and the window layout, "
+    "the view, plot and report choices, your saved plot styles and report "
+    "presets, the recent files, the places you gave for CasaXPS and "
+    "KherveFitting, the choices you asked the program to remember, and the "
+    "splash and display options.\n\n"
+    "It cannot be undone. Your data files, your workbooks (each keeps its own "
+    "saved look and annotations) and the camera-calibration seed are not "
+    "touched.\n\n"
+    "The defaults apply the next time the program starts.")
 # menu entries that need loaded spectra (dimmed while none are), by label
 FILE_NEEDS_DATA = frozenset((
     "Save plot image…", "Close all files",
@@ -650,10 +675,18 @@ class Workspace:
                    "Element, per file": "file"}
     VIEW_MODES = list(panelview.VIEWS)
 
-    def __init__(self, root):
+    def __init__(self, root, persist=False):
+        """``persist`` says whether this window owns the user's settings file
+        (``~/.spectradeck_config.json``) and the camera-calibration seed: the
+        application (``main``) passes True; anything else (the tests, a script
+        building a Workspace) gets the defaults and never reads or writes them,
+        so a test cannot be changed by, or change, the settings of whoever runs
+        it."""
         self.root = root
+        self.persist = bool(persist)
+        self._settings_reset = False     # see reset_settings
         root.title(appinfo.NAME)
-        self.cfg = load_config()
+        self.cfg = load_config() if self.persist else {}
         h = min(780, max(560, root.winfo_screenheight() - 140))
         w = min(1400, max(1000, root.winfo_screenwidth() - 40))
         root.geometry(self.cfg.get("geometry") or f"{w}x{h}")
@@ -702,7 +735,7 @@ class Workspace:
         self.panel_order = []       # group keys in the order the user set
         self.panel_slots = []       # page layout: shape / span per position
         self._trace_limit_now = None    # window the trace slider describes
-        self.calib =holder.sanitise(load_calibration())
+        self.calib = holder.sanitise(self._seed_calibration())
         self.casa_quant = None      # casaquant.CasaQuant of the loaded folder
         self._casa_quant_scanned = set()   # folders already scanned for it
         self._open = {}             # id(node) -> expanded?
@@ -966,6 +999,9 @@ class Workspace:
             helpm.add_checkbutton(
                 label="Sharp text on scaled screens (restart to apply)",
                 variable=self.dpi_var, command=self._on_dpi_toggle)
+        helpm.add_separator()
+        helpm.add_command(label=RESET_SETTINGS_LABEL,
+                          command=self.reset_settings)
         bar.add_cascade(label="Help", menu=helpm)
         self.menubar = bar
         self.root.config(menu=bar)
@@ -1097,13 +1133,13 @@ class Workspace:
         if not path:
             return None
         self.cfg.setdefault("external_apps", {})[key] = path
-        save_config(self.cfg)
+        self._write_settings()
         self._launchers_changed()
         return path
 
     def forget_external(self, key):
         (self.cfg.get("external_apps") or {}).pop(key, None)
-        save_config(self.cfg)
+        self._write_settings()
         self._launchers_changed()
 
     def external_hidden(self, key):
@@ -1112,7 +1148,7 @@ class Workspace:
     def set_external_hidden(self, key, hidden):
         """Hide or bring back the toolbar button of one program."""
         self.cfg.setdefault("external_hidden", {})[key] = bool(hidden)
-        save_config(self.cfg)
+        self._write_settings()
         var = getattr(self, "launcher_vars", {}).get(key)
         if var is not None:
             var.set(not hidden)
@@ -1139,7 +1175,7 @@ class Workspace:
         applies at the next start; sizes drawn in pixels were made for 100 %,
         so this is off until chosen)."""
         self.cfg["dpi_aware"] = bool(self.dpi_var.get())
-        save_config(self.cfg)
+        self._write_settings()
 
     # -- theme --------------------------------------------------------------
     def _plot_palette(self, pal=None, paper=False):
@@ -1280,6 +1316,20 @@ class Workspace:
         except tk.TclError:
             pass
 
+    def _seed_calibration(self):
+        """The holder-photo calibration a new workbook starts from: the last
+        one saved, for the application; nothing otherwise."""
+        return load_calibration() if self.persist else None
+
+    def _write_settings(self, cfg=None):
+        """Save the settings file (``cfg``, else ``self.cfg``). Does nothing
+        for a window that does not own the file (``persist`` False) and after
+        *Reset settings to defaults*, until the program is restarted: the
+        settings in memory are the old ones and must not overwrite the reset."""
+        if not self.persist or self._settings_reset:
+            return False
+        return save_config(self.cfg if cfg is None else cfg)
+
     def _on_close(self):
         if not self._confirm_discard():
             return
@@ -1337,7 +1387,7 @@ class Workspace:
         cfg["plot_presets"] = dict(self.plot_presets)
         cfg["report_last"] = self.report_spec
         cfg["report_presets"] = dict(self.report_presets)
-        save_config(cfg)
+        self._write_settings(cfg)
         self.root.quit()
 
     def _build_tree_pane(self, parent):
@@ -2446,7 +2496,7 @@ class Workspace:
             choice, remember = dlg.result
             if remember and isinstance(choice, str):
                 self.cfg[key] = choice
-                save_config(self.cfg)
+                self._write_settings()
             paths = importplan.apply_choice(paths, pairs, choice, family)
         return paths
 
@@ -2455,10 +2505,39 @@ class Workspace:
     _DUP_FAMILIES = ((importplan.AVG_VGD, "dup_format", "avg"),
                      (importplan.KAL_DSET, "dup_format_kal", "dset"))
 
+    def reset_settings(self):
+        """Help > *Reset settings to defaults*: after a warning that says what
+        goes and what stays, replace the settings file by an empty one
+        (``reset_settings_files``). The settings in memory are the old ones, so
+        nothing is written again until the program is restarted
+        (``_settings_reset``); the defaults apply then. Returns True when the
+        settings were reset, False when cancelled, failed or this window does
+        not own the settings file."""
+        if not self.persist:
+            return False
+        if not messagebox.askokcancel(
+                "Reset settings to defaults", RESET_SETTINGS_WARNING,
+                icon="warning", default="cancel", parent=self.root):
+            return False
+        if not reset_settings_files():
+            messagebox.showerror(
+                "Reset settings", "The settings file could not be reset "
+                f"({CONFIG_PATH}). Nothing was changed.", parent=self.root)
+            return False
+        self._settings_reset = True
+        self.cfg.clear()
+        if messagebox.askyesno(
+                "Settings reset",
+                "The settings are back to their defaults and will apply when "
+                "the program starts again. Until then nothing you change is "
+                "saved.\n\nClose the program now?", parent=self.root):
+            self._on_close()
+        return True
+
     def _forget_dup_choice(self):
         for _family, key, _default in self._DUP_FAMILIES:
             self.cfg.pop(key, None)
-        save_config(self.cfg)
+        self._write_settings()
         messagebox.showinfo("Duplicate formats",
                             "You will be asked again when a folder holds the "
                             "same data as .avg and .vgd, or as .kal and "
@@ -3410,7 +3489,7 @@ class Workspace:
 
     def set_ident_split(self, on):
         self.cfg["ident_split_doublets"] = bool(on)
-        save_config(self.cfg)
+        self._write_settings()
         self._schedule_render()
 
     def identify_auto(self, r):
@@ -5378,7 +5457,7 @@ class Workspace:
         self._fid_used = set()
         self.ann = annotations.Annotations()
         self._disp_cache.clear()
-        self.calib = holder.sanitise(load_calibration())
+        self.calib = holder.sanitise(self._seed_calibration())
         self.casa_quant = None
         self._casa_quant_scanned = set()
         self.casa_csv_imports = []
@@ -7116,8 +7195,8 @@ class Workspace:
 
     def _hide_calib(self):
         self.calib_holder.pack_forget()
-        if self.calib:                # the last calibration seeds new workbooks
-            save_calibration(self.calib)
+        if self.calib and self.persist:    # the last calibration seeds new
+            save_calibration(self.calib)   # workbooks
 
     def _calib_changed(self, calib):
         """A live change from the calibration panel."""
@@ -7634,7 +7713,7 @@ class ExportDialog(tk.Toplevel):
             elif escape["type"] in ESCAPE_VALUE_HINT:
                 cfg["export_escape_thickness"] = escape["exponent"]
             cfg["export_escape_type"] = escape["type"]
-        save_config(cfg)
+        self.app._write_settings()
         if self.app._write_export(chosen, self.fmt.get(),
                                   include_tf=self.incl_tf.get(),
                                   casa_transmission=self.casa_tf.get(),
@@ -7651,7 +7730,7 @@ def main():
         root = splash.create_root()
     crashlog.install(root)              # log + dialog for uncaught errors
     splash.status("Building the window…")
-    app = Workspace(root)
+    app = Workspace(root, persist=True)
     splash.set_window_icon(root)
     args = [os.path.abspath(a) for a in sys.argv[1:] if os.path.exists(a)]
     if args:                     # double-clicking a workbook, or "open with"

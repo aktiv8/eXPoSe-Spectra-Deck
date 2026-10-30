@@ -890,6 +890,11 @@ in `CLAUDE.md` have the detail):
   lives in each workbook; the last one used is kept in
   `~/.spectradeck_calib.json` to start new workbooks with. (Files saved under the
   former name, `~/.escape_explorer_*.json`, are picked up automatically.)
+* *Help → Reset settings to defaults…* puts every setting back to its default
+  after a warning (theme, layout, view / plot / report choices, saved styles and
+  presets, recent files, program paths, remembered choices). It cannot be undone
+  and leaves your data files, workbooks and the calibration seed alone; the
+  defaults apply at the next start, so the program offers to close.
 * Binding energy is *photon energy − kinetic energy* and is **not
   charge-corrected**, so peaks may be shifted by a few eV on charging samples.
 * The `.experiment`, `.vgd`, `.kal` and `.dset` readers are reverse-engineered. The

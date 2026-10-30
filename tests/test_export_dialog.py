@@ -17,6 +17,10 @@ class FakeApp:
         self.calls.append((chosen, fmt, kw))
         return True
 
+    def _write_settings(self, cfg=None):      # the Workspace's settings seam
+        self.settings_written = getattr(self, "settings_written", 0) + 1
+        return False
+
 
 class TestExportDialog(unittest.TestCase):
     @classmethod
