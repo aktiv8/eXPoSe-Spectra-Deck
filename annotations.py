@@ -159,6 +159,69 @@ def _clean_loss_fit(d):
     return out
 
 
+def _clean_window(w):
+    try:
+        lo, hi = float(w[0]), float(w[1])
+    except (TypeError, ValueError, IndexError):
+        return None
+    return [lo, hi] if _finite(lo) is not None and _finite(hi) is not None \
+        and hi > lo else None
+
+
+def _clean_pi_ratio(d):
+    """A valid REELS π / (σ+π) ratio result (``reels.pi_ratio`` plus the
+    elastic peak it was measured from) or None. The ratio may be None (a σ+π
+    area that is not positive) and a π area may be negative: both are kept as
+    measured."""
+    if not isinstance(d, dict):
+        return None
+    pw, sw = _clean_window(d.get("pi_window")), _clean_window(d.get("sp_window"))
+    elastic, i_pi, i_sp = (_finite(d.get(k)) for k in
+                           ("elastic", "i_pi", "i_sp"))
+    try:
+        avg = int(d["avg"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if None in (pw, sw, elastic, i_pi, i_sp) or avg < 1:
+        return None
+    out = {"pi_window": pw, "sp_window": sw, "avg": avg, "elastic": elastic,
+           "i_pi": i_pi, "i_sp": i_sp, "ratio": _finite(d.get("ratio"))}
+    for key in ("bg_pi", "bg_sp"):
+        pts = []
+        for p in d.get(key) or []:
+            try:
+                a, b = float(p[0]), float(p[1])
+            except (TypeError, ValueError, IndexError):
+                continue
+            if _finite(a) is not None and _finite(b) is not None:
+                pts.append([a, b])
+        out[key] = pts
+    return out
+
+
+def _clean_reels_ref(d):
+    """A valid reference ratio (HOPG or diamond) or None: a ``ratio``, a
+    ``label`` and ``kind`` ("spectrum" = measured here, "entered" = typed),
+    with the windows, end-point channels and elastic-peak energy it was measured
+    with when it was measured here."""
+    if not isinstance(d, dict):
+        return None
+    ratio = _finite(d.get("ratio"))
+    if ratio is None:
+        return None
+    out = {"ratio": ratio, "label": str(d.get("label") or "reference"),
+           "kind": "entered" if d.get("kind") == "entered" else "spectrum",
+           "source": str(d.get("source") or ""),
+           "pi_window": _clean_window(d.get("pi_window")),
+           "sp_window": _clean_window(d.get("sp_window")),
+           "e0": _finite(d.get("e0"))}
+    try:
+        out["avg"] = int(d["avg"]) if d.get("avg") is not None else None
+    except (TypeError, ValueError):
+        out["avg"] = None
+    return out
+
+
 @dataclass
 class Annotations:
     sample_names: dict = field(default_factory=dict)     # sample key -> name
@@ -175,6 +238,8 @@ class Annotations:
     reels: dict = field(default_factory=dict)            # region key -> band gap
     plasmon: dict = field(default_factory=dict)          # region key -> REELS plasmon energy
     loss_fit: dict = field(default_factory=dict)         # region key -> REELS loss-region fit (reels.decompose)
+    pi_ratio: dict = field(default_factory=dict)         # region key -> REELS pi / (sigma+pi) ratio (reels.pi_ratio)
+    reels_refs: dict = field(default_factory=dict)       # "hopg" / "diamond" -> the reference ratios of this workbook
     instrument: dict = field(default_factory=dict)       # file id -> NeXus settings
     iss: dict = field(default_factory=dict)              # file id -> {ion, e0, theta}
     imports: dict = field(default_factory=dict)          # file id -> how a column-text file is read
@@ -186,7 +251,7 @@ class Annotations:
     # -- samples a reader split into several (Kratos runs) ------------------------
     ADOPTED = ("region_names", "sample_notes", "region_notes", "shifts",
                "markers", "sputter", "reels", "plasmon", "loss_fit",
-               "nexafs_edge")
+               "pi_ratio", "nexafs_edge")
 
     def adopt_aliases(self, fid, aliases):
         """``aliases`` maps a sample the reader made out of a plainer one
@@ -316,6 +381,10 @@ class Annotations:
         if lf:
             import reels
             out.update(reels.loss_fit_metadata(lf))
+        pr = self.pi_ratio.get(region_key(fid, region.sample, region.name))
+        if pr:
+            import reels
+            out.update(reels.ratio_metadata(pr, self.reels_refs))
         note = self.notes_for(fid, region.sample, region.name)
         if note:
             out["Notes"] = note
@@ -405,6 +474,29 @@ class Annotations:
             self.loss_fit[key] = clean
         else:
             self.loss_fit.pop(key, None)
+
+    # -- REELS pi / (sigma+pi) ratios (per spectrum) and their references -----
+    def pi_ratio_for(self, fid, sample, name):
+        """The stored π / (σ+π) ratio result of a spectrum, or None."""
+        d = self.pi_ratio.get(region_key(fid, sample, name))
+        return copy.deepcopy(d) if d else None
+
+    def set_pi_ratio(self, fid, sample, name, data):
+        key = region_key(fid, sample, name)
+        clean = _clean_pi_ratio(data)
+        if clean:
+            self.pi_ratio[key] = clean
+        else:
+            self.pi_ratio.pop(key, None)
+
+    def set_reels_ref(self, which, data):
+        """Store (or, with None, remove) the workbook's HOPG or diamond
+        reference ratio. ``which`` is "hopg" or "diamond"."""
+        clean = _clean_reels_ref(data)
+        if which in ("hopg", "diamond") and clean:
+            self.reels_refs[which] = clean
+        else:
+            self.reels_refs.pop(which, None)
 
     def remove_marker(self, fid, sample, name, be, label):
         key = region_key(fid, sample, name)
@@ -506,7 +598,8 @@ class Annotations:
                     or self.shifts or self.calibration or self.markers
                     or self.calibration_statement or self.experiment_notes
                     or self.sputter or self.reels or self.plasmon
-                    or self.loss_fit or self.instrument
+                    or self.loss_fit or self.pi_ratio or self.reels_refs
+                    or self.instrument
                     or self.iss or self.imports or self.nexafs_ring
                     or self.nexafs_edge or self.repeat_groups)
 
@@ -518,8 +611,8 @@ class Annotations:
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes", "md_edits", "shifts", "calibration",
                      "calibration_statement", "markers", "experiment_notes",
-                     "sputter", "reels", "plasmon", "loss_fit", "instrument",
-                     "iss", "imports"):
+                     "sputter", "reels", "plasmon", "loss_fit", "pi_ratio",
+                     "reels_refs", "instrument", "iss", "imports"):
             d[name] = copy.deepcopy(getattr(self, name))
         if self.nexafs_ring:
             d["nexafs_ring"] = True
@@ -539,8 +632,9 @@ class Annotations:
         known = {"version", "sample_names", "region_names", "sample_notes",
                  "region_notes", "md_edits", "shifts", "calibration",
                  "calibration_statement", "markers", "experiment_notes",
-                 "sputter", "reels", "plasmon", "loss_fit", "instrument",
-                 "iss", "imports", "nexafs_ring", "nexafs_edge", "repeat_groups"}
+                 "sputter", "reels", "plasmon", "loss_fit", "pi_ratio",
+                 "reels_refs", "instrument", "iss", "imports",
+                 "nexafs_ring", "nexafs_edge", "repeat_groups"}
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes"):
             v = data.get(name)
@@ -596,6 +690,18 @@ class Annotations:
                 clean = _clean_loss_fit(x)
                 if clean:
                     a.loss_fit[str(k)] = clean
+        v = data.get("pi_ratio")
+        if isinstance(v, dict):
+            for k, x in v.items():
+                clean = _clean_pi_ratio(x)
+                if clean:
+                    a.pi_ratio[str(k)] = clean
+        v = data.get("reels_refs")
+        if isinstance(v, dict):
+            for k in ("hopg", "diamond"):
+                clean = _clean_reels_ref(v.get(k))
+                if clean:
+                    a.reels_refs[k] = clean
         v = data.get("sputter")
         if isinstance(v, dict):
             a.sputter = {str(k): sputter_mod.sanitise(x) for k, x in v.items()

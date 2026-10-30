@@ -438,6 +438,242 @@ def loss_curves(fit, x):
     return base + sum((p for _c, p in parts), np.zeros(len(x))), parts
 
 
+# -- the pi / (sigma+pi) intensity ratio and an sp2 fraction against HOPG ----------------
+# The ratio of the areas of the pi and the (sigma+pi) losses, each above a
+# straight background between its own window's limits, as HarwellXPS's REELS
+# analysis defines it (windows 3.5-8.0 and 10.0-35.0 eV of loss, the line
+# anchored on the mean of 3 channels centred on each limit, trapezoidal areas,
+# the loss zero at each spectrum's own parabola-refined elastic peak; checked
+# digit for digit on the six REELS spectra of D:\Temp\hxps\BM-20263874-25-55
+# against the rows its .xpsv stores). It rises with sp2 content but
+# depends on the windows, the beam energy and the geometry, so on its own it
+# only compares spectra measured together. Against a measured HOPG (sp2, set to
+# 1) and, optionally, diamond (no pi, set to 0) it becomes a fraction on a
+# scale that removes those dependences *if the references were measured the
+# same way*; nothing here is a published reference value.
+PI_WINDOW = (3.5, 8.0)
+SP_WINDOW = (10.0, 35.0)
+EDGE_AVG = 3
+SCALE_LIMITS = (0.0, 1.15)     # a fraction outside this is flagged, never clipped
+ELASTIC_TOL = 0.01             # relative difference in elastic-peak energy that is noted
+SENSITIVITY_SHIFT = 0.5        # eV a window limit is moved by window_sensitivity
+
+
+def elastic_peak_refined(ke, counts):
+    """Kinetic energy of the elastic peak: the strongest point, refined by a
+    parabola through it and its two neighbours; the plain maximum at an end
+    of the spectrum or on a flat top. None for no data."""
+    if not ke or not counts or len(ke) != len(counts):
+        return None
+    i = max(range(len(counts)), key=counts.__getitem__)
+    e = ke[i]
+    if 0 < i < len(ke) - 1:
+        a, b, c = counts[i - 1], counts[i], counts[i + 1]
+        den = a - 2 * b + c
+        if den < 0:
+            step = (ke[i + 1] - ke[i - 1]) / 2.0
+            return float(ke[i] + 0.5 * step * (a - c) / den)
+    return float(e)
+
+
+def _window_area(x, v, window, avg):
+    """``(area, loss, background)`` of ``v`` above the straight line between the
+    window's first and last points, by the trapezoid rule, or None when the
+    window holds too few points. Each end of the line is the mean of ``avg``
+    channels **centred on** that end point, so the channel just outside the
+    window counts (for ``avg`` 3: the point and one either side): that is what
+    reproduces HarwellXPS's areas to every digit (the six REELS spectra of
+    ``D:\\Temp\\hxps\\BM-20263874-25-55``); the first ``avg`` channels inside
+    the window do not."""
+    import numpy as np
+    try:
+        lo, hi = sorted((float(window[0]), float(window[1])))
+    except (TypeError, ValueError, IndexError):
+        return None
+    if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+        return None
+    idx = np.flatnonzero((x >= lo) & (x <= hi))
+    if len(idx) < max(5, avg):
+        return None
+    i0, i1 = int(idx[0]), int(idx[-1])
+
+    def level(i):
+        a = max(0, i - avg // 2)
+        return float(v[a:a + avg].mean())
+    xs, ys = x[i0:i1 + 1], v[i0:i1 + 1]
+    lo_y, hi_y = level(i0), level(i1)
+    bg = lo_y + (hi_y - lo_y) * (xs - xs[0]) / (xs[-1] - xs[0])
+    d = ys - bg
+    return float(np.sum((d[1:] + d[:-1]) * np.diff(xs)) / 2.0), xs, bg
+
+
+def pi_ratio(loss, y, pi_window=PI_WINDOW, sp_window=SP_WINDOW,
+             avg=EDGE_AVG):
+    """The π / (σ+π) ratio of a REELS spectrum, or None when a window holds too
+    few points.
+
+    ``loss`` is energy loss (eV) from the elastic peak, ``y`` the intensity.
+    Returns ``{pi_window, sp_window, avg, i_pi, i_sp, ratio, bg_pi, bg_sp}``:
+    the two areas (intensity units x eV), their ratio (None when the σ+π area
+    is not positive) and each window's background as ``[loss, level]`` pairs
+    for drawing. A negative π area is returned as it is, never clipped (see
+    :func:`ratio_flags`)."""
+    try:
+        avg = int(avg)
+    except (TypeError, ValueError):
+        return None
+    if avg < 1:
+        return None
+    x, v = _sorted(loss, y)
+    if x is None:
+        return None
+    a = _window_area(x, v, pi_window, avg)
+    b = _window_area(x, v, sp_window, avg)
+    if a is None or b is None:
+        return None
+    step = lambda n: max(1, n // BG_POINTS)
+    return {"pi_window": [float(min(pi_window)), float(max(pi_window))],
+            "sp_window": [float(min(sp_window)), float(max(sp_window))],
+            "avg": avg, "i_pi": a[0], "i_sp": b[0],
+            "ratio": a[0] / b[0] if b[0] > 0 else None,
+            "bg_pi": [[float(p), float(q)] for p, q in
+                      zip(a[1][::step(len(a[1]))], a[2][::step(len(a[2]))])],
+            "bg_sp": [[float(p), float(q)] for p, q in
+                      zip(b[1][::step(len(b[1]))], b[2][::step(len(b[2]))])]}
+
+
+def ratio_flags(res):
+    """What is wrong with a measured ratio, in words (an empty list when
+    nothing is): a negative π area or a σ+π area that is not positive."""
+    out = []
+    if res.get("i_pi") is not None and \
+            res["i_pi"] < -1e-9 * max(abs(res.get("i_sp") or 0.0), 1.0):
+        out.append("the π area is negative (no peak above the background)")
+    if res.get("i_sp") is not None and res["i_sp"] <= 0:
+        out.append("the σ+π area is not positive, so there is no ratio")
+    return out
+
+
+def sp2_fraction(ratio, ref, zero=0.0):
+    """The sp2 fraction on the scale where the reference (HOPG) ratio ``ref`` is
+    1 and ``zero`` (diamond, 0 unless measured) is 0:
+    ``(ratio - zero) / (ref - zero)``. The raw value; None when any input is
+    missing or the reference does not lie above the zero."""
+    try:
+        ratio, ref, zero = float(ratio), float(ref), float(zero or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (ratio, ref, zero)) or ref <= zero:
+        return None
+    return (ratio - zero) / (ref - zero)
+
+
+def _same_setting(res, ref):
+    """None when a reference was measured with the windows and end-point
+    channels of ``res`` (or does not say), else what differs."""
+    if ref.get("pi_window") is None or ref.get("sp_window") is None:
+        return None
+    same = lambda a, b: all(abs(p - q) < 1e-9 for p, q in zip(a, b))
+    if not (same(res["pi_window"], ref["pi_window"])
+            and same(res["sp_window"], ref["sp_window"])
+            and res["avg"] == ref.get("avg")):
+        return "windows or end-point channels"
+    return None
+
+
+def sp2_for(res, refs):
+    """The sp2 fraction of a stored ratio result ``res`` against the workbook's
+    references ``refs`` (``{"hopg": {...}, "diamond": {...}}``, each with a
+    ``ratio``, ``label`` and the windows and elastic energy it was measured
+    with). Returns ``{fraction, problem, notes}``: ``fraction`` is None and
+    ``problem`` says why when there is no reference or it was measured another
+    way; ``notes`` flag a fraction outside the scale or an elastic-peak energy
+    more than 1 % from the reference's."""
+    out = {"fraction": None, "problem": "", "notes": []}
+    hopg = (refs or {}).get("hopg")
+    if not hopg or res.get("ratio") is None:
+        return out
+    dia = (refs or {}).get("diamond")
+    for ref in (hopg, dia):
+        diff = _same_setting(res, ref) if ref else None
+        if diff:
+            out["problem"] = (f"the {ref.get('label', 'reference')} was "
+                              f"measured with other {diff}")
+            return out
+    zero = dia["ratio"] if dia else 0.0
+    f = sp2_fraction(res["ratio"], hopg["ratio"], zero)
+    if f is None:
+        out["problem"] = "the reference ratio does not lie above the zero"
+        return out
+    out["fraction"] = f
+    lo, hi = SCALE_LIMITS
+    if f < lo or f > hi:
+        out["notes"].append(f"the fraction is outside the {lo:g}–{hi:g} scale")
+    for ref in (hopg, dia):
+        e0, e1 = (ref or {}).get("e0"), res.get("elastic")
+        if e0 and e1 and abs(e1 - e0) > ELASTIC_TOL * e0:
+            out["notes"].append(
+                f"the elastic peak ({e1:.0f} eV) differs from the "
+                f"{ref.get('label', 'reference')}'s ({e0:.0f} eV) by more "
+                f"than {ELASTIC_TOL * 100:g} %: the beam energy is not the "
+                f"same")
+    return out
+
+
+def window_sensitivity(loss, y, pi_window=PI_WINDOW, sp_window=SP_WINDOW,
+                       avg=EDGE_AVG, shift=SENSITIVITY_SHIFT):
+    """How the ratio changes when each window limit is moved by ``shift`` eV
+    either way: ``[{window, limit, shift, ratio, change_pct}]`` (empty when
+    the ratio itself is not defined)."""
+    base = pi_ratio(loss, y, pi_window, sp_window, avg)
+    if not base or base["ratio"] is None or base["ratio"] == 0:
+        return []
+    out = []
+    for name, win in (("π", list(pi_window)), ("σ+π", list(sp_window))):
+        for k, limit in enumerate(("start", "end")):
+            for sgn in (-1, 1):
+                w = list(win)
+                w[k] = w[k] + sgn * shift
+                moved = (pi_ratio(loss, y, w, sp_window, avg) if name == "π"
+                         else pi_ratio(loss, y, pi_window, w, avg))
+                r = moved["ratio"] if moved else None
+                out.append({"window": name, "limit": limit,
+                            "shift": sgn * shift, "ratio": r,
+                            "change_pct": (100.0 * (r - base["ratio"])
+                                           / abs(base["ratio"])
+                                           if r is not None else None)})
+    return out
+
+
+def ratio_text(res):
+    """The windows and background of a ratio, in one sentence."""
+    p, s = res["pi_window"], res["sp_window"]
+    return (f"π {p[0]:g}–{p[1]:g} eV and σ+π {s[0]:g}–{s[1]:g} eV of loss, a "
+            f"straight background between each window's limits (the mean of "
+            f"{res['avg']} channels centred on each), trapezoidal areas")
+
+
+def ratio_metadata(res, refs=None):
+    """The metadata rows of a stored ratio (only what it holds)."""
+    out = {"REELS π / (σ+π) windows": ratio_text(res)}
+    notes = ratio_flags(res)
+    if res.get("ratio") is not None:
+        out["REELS π / (σ+π) ratio"] = f"{res['ratio']:.4f}"
+    sp = sp2_for(res, refs)
+    if sp["fraction"] is not None:
+        hopg, dia = refs["hopg"], refs.get("diamond")
+        out["REELS sp2 fraction"] = (
+            f"{sp['fraction']:.2f} (HOPG {hopg['ratio']:.4f} = 1"
+            + (f", {dia.get('label', 'diamond')} {dia['ratio']:.4f} = 0"
+               if dia else "") + ")")
+    elif sp["problem"]:
+        out["REELS sp2 fraction"] = "not calculated: " + sp["problem"]
+    notes += sp["notes"]
+    if notes:
+        out["REELS π / (σ+π) notes"] = "; ".join(notes)
+    return out
+
+
 def loss_fit_metadata(fit):
     """The metadata rows of a stored loss-region fit (only what it holds)."""
     out = {}

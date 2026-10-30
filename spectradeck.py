@@ -3058,6 +3058,30 @@ class Workspace:
         self._ann_changed(relabel=False)
         self._update_metadata()
 
+    def pi_ratio_get(self, r):
+        return self.ann.pi_ratio_for(*self._marker_key(r))
+
+    def pi_ratio_set(self, r, data):
+        self.ann.set_pi_ratio(*self._marker_key(r), data)
+        self._ann_changed(relabel=False)
+        self._update_metadata()
+
+    def reels_ref_set(self, which, data):
+        """The workbook's HOPG / diamond reference ratio (None removes it)."""
+        self.ann.set_reels_ref(which, data)
+        self._ann_changed(relabel=False)
+        self._update_metadata()
+
+    def _piratio_overlay(self, r):
+        """The stored π / (σ+π) ratio of ``r`` for the plot, with the sp2
+        fraction against the workbook's references when there is one."""
+        import reels
+        res = self.ann.pi_ratio_for(*self._marker_key(r))
+        if not res:
+            return None
+        return {**res, "fraction": reels.sp2_for(
+            res, self.ann.reels_refs)["fraction"]}
+
     def open_iss_reels(self):
         if not self.spectrum_regions():
             messagebox.showinfo("ISS / REELS", "Select or tick the ISS or "
@@ -4161,6 +4185,8 @@ class Workspace:
                            if len(vis) == 1 else None)
             lossfit_arg = (self.ann.loss_fit_for(*self._marker_key(vis[0]))
                            if len(vis) == 1 else None)
+            piratio_arg = self._piratio_overlay(vis[0]) if len(vis) == 1 \
+                else None
             fit_arg = self._fit_overlay(vis, disp, base, notes,
                                         look["fit_show"],
                                         bool(look.get("fit_merge")),
@@ -4184,7 +4210,7 @@ class Workspace:
                        scale=pscale, ke_top=ke_top, top_row=top_row,
                        markers=marks, style=style, fit=fit_arg,
                        reels=reels_arg, plasmon=plasmon_arg,
-                       lossfit=lossfit_arg,
+                       lossfit=lossfit_arg, piratio=piratio_arg,
                        auger_colour=pal["cycle"][1],
                        rng=self.ranges.get(key))
             axmap[ax] = key

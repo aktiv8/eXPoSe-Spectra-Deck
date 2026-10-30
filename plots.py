@@ -151,7 +151,7 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
                first_col=True, bottom_row=True, accent="#0F6B8C",
                muted="#56636E", scale="Binding", ke_top=False,
                top_row=False, markers=(), style=None, fit=None,
-               reels=None, auger_colour=None, rng=None, plasmon=None, lossfit=None):
+               reels=None, auger_colour=None, rng=None, plasmon=None, lossfit=None, piratio=None):
     """Draw one panel: a single spectrum plain, several stacked by y offset.
     ``rng`` is the panel's chosen pair of "Range" end-point energies.
 
@@ -274,6 +274,9 @@ def draw_stack(ax, regs, offset=0.6, norm="None", cursor=None, colours=None,
                      accent, note_size=small, offset=no[0])
     if lossfit and n == 1:             # a REELS loss-region fit
         draw_loss_fit(ax, a0, r0.photon_energy, lossfit, 1.0 / nf[0], muted,
+                      accent, note_size=small, offset=no[0])
+    if piratio and n == 1:             # a REELS pi / (sigma+pi) ratio
+        draw_pi_ratio(ax, a0, r0.photon_energy, piratio, 1.0 / nf[0], muted,
                       accent, note_size=small, offset=no[0])
     if markers:      # peak labels: (energy, text[, kinetic?[, tier]])
         lo, hi = ax.get_xlim()
@@ -700,6 +703,41 @@ def draw_loss_fit(ax, a0, hv, fit, scale, muted, accent, note_size=8,
                     xycoords="axes fraction", xytext=(-6, -12),
                     textcoords="offset points", ha="right", color=accent,
                     fontsize=note_size + 1, fontweight="bold")
+
+
+def draw_pi_ratio(ax, a0, hv, res, scale, muted, accent, note_size=8,
+                  offset=0.0):
+    """Overlay a REELS π / (σ+π) ratio (``reels.pi_ratio`` plus ``elastic`` and,
+    with a reference, ``fraction``) on a single-spectrum panel: the two windows
+    shaded, the straight background under each and the ratio. Intensities are
+    drawn as ``(y - offset) * scale``."""
+    def X(loss):                        # loss -> the panel's x value
+        ke = res["elastic"] - loss
+        if a0.label == "Kinetic Energy":
+            return ke
+        return hv - ke if hv else None
+    for win, bgkey, name in ((res["pi_window"], "bg_pi", "π"),
+                             (res["sp_window"], "bg_sp", "σ+π")):
+        lo, hi = X(win[0]), X(win[1])
+        if None in (lo, hi):
+            return
+        ax.axvspan(min(lo, hi), max(lo, hi), color=accent, alpha=0.08, lw=0,
+                   zorder=0.5)
+        pts = [(X(a), (b - offset) * scale) for a, b in res.get(bgkey) or []]
+        if len(pts) > 1:
+            ax.plot([p[0] for p in pts], [p[1] for p in pts], color=accent,
+                    lw=0.9, ls="--", zorder=3.4)
+        ax.annotate(name, ((lo + hi) / 2.0, 1.0),
+                    xycoords=("data", "axes fraction"), xytext=(0, -12),
+                    textcoords="offset points", ha="center", color=accent,
+                    fontsize=note_size)
+    text = ("Iπ/Iσ+π = " + (f"{res['ratio']:.3f}" if res.get("ratio")
+                            is not None else "–"))
+    if res.get("fraction") is not None:
+        text += f"   sp² {res['fraction']:.2f}"
+    ax.annotate(text, (1.0, 1.0), xycoords="axes fraction", xytext=(-6, -26),
+                textcoords="offset points", ha="right", color=accent,
+                fontsize=note_size + 1, fontweight="bold")
 
 
 def draw_plasmon(ax, a0, hv, plasmon, scale, muted, accent, note_size=8,

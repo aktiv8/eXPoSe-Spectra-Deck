@@ -560,6 +560,22 @@ def fig_plasmon():
                         plasmon={**res, "elastic": 1000.0})
 
 
+def fig_piratio():
+    import reels
+    _ke, y, loss = _loss_spectrum()
+    res = reels.pi_ratio(loss.tolist(), y.tolist())
+    # an imagined HOPG whose π peak is a quarter stronger: this sample's sp² is 0.8
+    refs = {"hopg": {"ratio": res["ratio"] * 1.25, "label": "HOPG",
+                     "kind": "spectrum", "pi_window": res["pi_window"],
+                     "sp_window": res["sp_window"], "avg": res["avg"],
+                     "e0": 1000.0}}
+    full = {**res, "elastic": 1000.0}
+    full["fraction"] = reels.sp2_for(full, refs)["fraction"]
+    _draw_reels_overlay("fig_piratio.png", "REELS π / (σ+π) ratio",
+                        "windows of the HarwellXPS analysis; HOPG = 1",
+                        piratio=full)
+
+
 def fig_lossfit():
     import reels
     _ke, y, loss = _loss_spectrum()
@@ -621,6 +637,7 @@ def main():
     fig_reels()
     fig_plasmon()
     fig_lossfit()
+    fig_piratio()
     build_demo_browser_html()
 
 

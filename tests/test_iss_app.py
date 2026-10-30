@@ -157,6 +157,107 @@ class TestIssDialog(unittest.TestCase):
         dlg._clear_loss()
         self.assertIsNone(self.ws.loss_fit_get(self.region))
 
+    def patch_spectrum(self, dlg, pi_area, sp_area=2000.0):
+        from test_iss_reels import ratio_spectrum
+        ke, y, _loss = ratio_spectrum(pi_area, sp_area)
+        dlg._ke_counts = lambda: (list(ke), list(y))
+        dlg._ke_counts_for = lambda r: (list(ke), list(y))
+        dlg.elastic.set("")                   # use the spectrum's own peak
+
+    def test_measuring_the_ratio_stores_it_with_the_windows_used(self):
+        dlg = self.dialog()
+        self.patch_spectrum(dlg, 300.0)
+        res = dlg._measure_ratio()
+        got = self.ws.pi_ratio_get(self.region)
+        self.assertAlmostEqual(got["ratio"], 0.16, delta=0.01)
+        self.assertEqual((got["pi_window"], got["sp_window"], got["avg"]),
+                         ([3.5, 8.0], [10.0, 35.0], 3))
+        self.assertAlmostEqual(got["elastic"], 1000.0, delta=0.05)
+        self.assertEqual(res["ratio"], got["ratio"])
+        self.assertIn("ratio", dlg.rt_table.cget("text"))
+        self.assertIn("0.1", dlg.rt_table.cget("text"))
+        self.assertIn("No reference yet", dlg.rt_refs.cget("text"))
+        md = self.ws.ann.apply_metadata(self.ws._marker_key(self.region)[0], 0,
+                                       self.region, {"Sample": "S"})
+        self.assertIn("REELS π / (σ+π) ratio", md)
+        self.assertNotIn("REELS sp2 fraction", md)         # no reference yet
+        dlg._clear_ratio()
+        self.assertIsNone(self.ws.pi_ratio_get(self.region))
+
+    def test_hopg_and_diamond_set_the_scale(self):
+        dlg = self.dialog()
+        self.patch_spectrum(dlg, 300.0)                    # the HOPG
+        dlg._set_reference("hopg")
+        hopg = self.ws.ann.reels_refs["hopg"]
+        self.assertEqual(hopg["kind"], "spectrum")
+        self.assertEqual(hopg["pi_window"], [3.5, 8.0])
+        self.assertAlmostEqual(hopg["e0"], 1000.0, delta=0.05)
+        self.assertIn("1.00", dlg.rt_table.cget("text"))   # itself is 1
+        self.patch_spectrum(dlg, 0.0)                      # the diamond
+        dlg._set_reference("diamond")
+        self.assertIn("diamond", dlg.rt_refs.cget("text"))
+        self.patch_spectrum(dlg, 150.0)                    # a sample
+        dlg._measure_ratio()
+        sp = __import__("reels").sp2_for(self.ws.pi_ratio_get(self.region),
+                                         self.ws.ann.reels_refs)
+        self.assertAlmostEqual(sp["fraction"], 0.5, delta=0.05)
+        self.assertIn("0.5", dlg.rt_table.cget("text"))
+        md = self.ws.ann.apply_metadata(self.ws._marker_key(self.region)[0], 0,
+                                       self.region, {"Sample": "S"})
+        self.assertIn("HOPG", md["REELS sp2 fraction"])
+        self.assertIn("diamond", md["REELS sp2 fraction"])
+        dlg._clear_references()
+        self.assertEqual(self.ws.ann.reels_refs, {})
+
+    def test_a_typed_hopg_ratio_is_marked_as_typed(self):
+        dlg = self.dialog()
+        self.patch_spectrum(dlg, 300.0)
+        dlg._measure_ratio()
+        dlg.rt_value.set("0.32")
+        dlg.rt_source.set("a note from the lab")
+        dlg._enter_reference()
+        ref = self.ws.ann.reels_refs["hopg"]
+        self.assertEqual((ref["kind"], ref["ratio"]), ("entered", 0.32))
+        self.assertIn("typed", dlg.rt_refs.cget("text"))
+        self.assertIn("a note from the lab", dlg.rt_refs.cget("text"))
+        dlg.rt_value.set("x")
+        dlg._enter_reference()                             # not a number
+        self.assertEqual(self.ws.ann.reels_refs["hopg"]["ratio"], 0.32)
+
+    def test_a_reference_measured_with_other_windows_is_not_used(self):
+        dlg = self.dialog()
+        self.patch_spectrum(dlg, 300.0)
+        dlg._set_reference("hopg")
+        dlg.rt_pi_hi.set("9")                              # another window
+        dlg._measure_ratio()
+        self.assertIn("no sp² fraction", dlg.rt_detail.cget("text"))
+        md = self.ws.ann.apply_metadata(self.ws._marker_key(self.region)[0], 0,
+                                       self.region, {"Sample": "S"})
+        self.assertIn("not calculated", md["REELS sp2 fraction"])
+
+    def test_measuring_every_spectrum_and_the_bad_inputs(self):
+        dlg = self.dialog()
+        self.patch_spectrum(dlg, 300.0)
+        dlg._measure_ratio_all()
+        self.assertIsNotNone(self.ws.pi_ratio_get(self.region))
+        dlg._clear_ratio()
+        dlg._ke_counts_for = lambda r: (None, None)        # no energies
+        dlg._measure_ratio_all()
+        self.assertIsNone(self.ws.pi_ratio_get(self.region))
+        self.assertIn("left out", dlg.rt_detail.cget("text"))
+        dlg.rt_sp_lo.set("40")                             # start after end
+        dlg._measure_ratio_all()
+        self.assertIn("two numbers", dlg.rt_detail.cget("text"))
+        self.assertIsNone(self.ws.pi_ratio_get(self.region))
+
+    def test_the_window_sensitivity_table(self):
+        dlg = self.dialog()
+        self.patch_spectrum(dlg, 300.0)
+        dlg._ratio_sensitivity()
+        text = dlg.rt_sens.cget("text")
+        self.assertIn("σ+π start", text)
+        self.assertEqual(len(text.splitlines()), 9)
+
     def test_tpp2m_fills_the_mean_free_path(self):
         dlg = self.dialog()
         dlg.elastic.set("2000")

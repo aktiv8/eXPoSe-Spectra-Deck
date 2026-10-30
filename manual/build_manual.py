@@ -1650,11 +1650,70 @@ def build_chapters(doc):
     add_figure(doc, "A REELS loss region fitted with the Gaussians of "
               "Stobinski et al.: the two sp² components that make R are filled.",
               image_path=os.path.join(FIGDIR, "fig_lossfit.png"))
+    h2(doc, "REELS π / (σ+π) ratio and an sp² fraction")
     para(doc,
-        "Not included: the ratio of the π peak to the π + σ region as an sp² "
-        "fraction against a graphite reference. None of the papers this "
-        "chapter follows gives a method or reference value for it, so it "
-        "waits for a citation."
+        "The REELS π / (σ+π) ratio tab measures the area of the π loss "
+        "over the area of the σ + π loss, the quantity the HarwellXPS REELS "
+        "analysis reports. The windows start as that analysis uses them: π "
+        "3.5–8.0 eV and σ + π 10.0–35.0 eV of energy loss, two separate "
+        "windows. Each area is taken above a straight line between the "
+        "window’s first and last points; each end of the line is the mean of "
+        "3 channels centred on that end point (so the channel just outside "
+        "the window counts), and the area is the trapezoid sum. The loss zero "
+        "is each spectrum’s own elastic peak, found as the maximum refined by "
+        "a parabola. Windows and end-point channels can be changed and are "
+        "stored with the result. The areas and ratios agree with those stored "
+        "in an XPSView project for six REELS spectra to about one part in a "
+        "million."
+    )
+    para(doc,
+        "Measure this spectrum measures the one selected; Measure every "
+        "spectrum in the list measures every ticked spectrum with the same "
+        "windows, each at its own elastic peak, and lists the areas, the "
+        "ratio and the sp² fraction in a table. How much do the windows "
+        "matter? moves each window limit by ±0.5 eV and shows how the ratio "
+        "changes."
+    )
+    para(doc,
+        "The ratio is not an sp² percentage. It depends on the windows, the "
+        "beam energy and the geometry, so on its own it compares spectra "
+        "measured together. For a fraction, measure HOPG, which is all sp², "
+        "and diamond, which has no π component, in the same way. Select the "
+        "HOPG spectrum and press Use this spectrum as HOPG (= 1); do the same "
+        "for diamond with Use this spectrum as diamond (= 0). Both buttons "
+        "measure the spectrum again with the windows shown. The sp² fraction "
+        "of any other spectrum is then (R − R_diamond) / (R_HOPG − R_diamond), "
+        "with the diamond term 0 if no diamond is stored. One HOPG and one "
+        "diamond are kept for the workbook."
+    )
+    para(doc,
+        "Nothing is assumed about the reference. It must come from your own "
+        "spectra, or you can type a HOPG ratio with a note of its source; a "
+        "typed number is marked as typed and carries no windows, so it is used "
+        "without checking them. A reference measured with other windows or "
+        "end-point channels than a spectrum is not used for it, and the "
+        "dialog and the metadata say so. A difference of more than 1 % "
+        "between the elastic-peak energies of a spectrum and its reference is "
+        "noted, because it means the beam energy was not the same; the "
+        "geometry cannot be checked, so keep it the same."
+    )
+    para(doc,
+        "A negative π area (no peak above the background, as expected for "
+        "diamond within the noise), a σ + π area that is not positive, which "
+        "leaves no ratio, and a fraction outside 0–1.15 are flagged and "
+        "never clipped. The result is drawn on the plot (both windows shaded, "
+        "each background dashed, the ratio and the fraction), saved in the "
+        "workbook and added to the metadata as REELS π / (σ+π) ratio, "
+        "windows and notes, and REELS sp² fraction."
+    )
+    add_figure(doc, "The π / (σ+π) ratio: the two windows, the straight "
+              "background under each, the ratio and the sp² fraction against "
+              "a HOPG reference.",
+              image_path=os.path.join(FIGDIR, "fig_piratio.png"))
+    para(doc,
+        "Not included: published reference values for HOPG or other carbons. "
+        "The XPSView data lists graphite 0.145 and amorphous carbon 0.134 "
+        "from a paper whose citation is not known, so no value is built in."
     )
 
     # 22. Avantage / SnapMap -----------------------------------------------------

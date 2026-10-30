@@ -59,9 +59,12 @@ class IssReelsDialog(tk.Toplevel):
         self.nb.add(self.reels_tab, text="REELS band gap")
         self.loss_tab = ttk.Frame(self.nb, padding=8)
         self.nb.add(self.loss_tab, text="REELS loss peaks / layers")
+        self.ratio_tab = ttk.Frame(self.nb, padding=8)
+        self.nb.add(self.ratio_tab, text="REELS π / (σ+π) ratio")
         self._build_iss()
         self._build_reels()
         self._build_loss()
+        self._build_ratio()
         self.nb.bind("<<NotebookTabChanged>>", lambda e: self._tab_changed())
         ttk.Button(body, text="Close", command=self.destroy).grid(
             row=3, column=1, sticky="e", pady=(10, 0))
@@ -323,6 +326,260 @@ class IssReelsDialog(tk.Toplevel):
                      f"background).")
         self.pl_detail.config(text=text + " Drawn on the plot and stored "
                                           "with the workbook.")
+
+    # -- the π / (σ+π) ratio and an sp2 fraction against HOPG ----------------------------
+    def _build_ratio(self):
+        """The ratio of the π and (σ+π) loss areas (see ``reels.pi_ratio``),
+        for the selected spectrum or every ticked one, and, against a measured
+        HOPG (= 1) and optionally diamond (= 0), an sp2 fraction."""
+        t = self.ratio_tab
+        t.columnconfigure(1, weight=1)
+        self.rt_pi_lo = tk.StringVar(value=f"{reels.PI_WINDOW[0]:g}")
+        self.rt_pi_hi = tk.StringVar(value=f"{reels.PI_WINDOW[1]:g}")
+        self.rt_sp_lo = tk.StringVar(value=f"{reels.SP_WINDOW[0]:g}")
+        self.rt_sp_hi = tk.StringVar(value=f"{reels.SP_WINDOW[1]:g}")
+        self.rt_avg = tk.StringVar(value=str(reels.EDGE_AVG))
+        self.rt_value = tk.StringVar()
+        self.rt_source = tk.StringVar()
+        box = ttk.Frame(t)
+        box.grid(row=0, column=0, columnspan=2, sticky="w")
+        for r, (label, lo, hi) in enumerate((
+                ("π window (eV of loss)", self.rt_pi_lo, self.rt_pi_hi),
+                ("σ+π window (eV of loss)", self.rt_sp_lo, self.rt_sp_hi))):
+            ttk.Label(box, text=label).grid(row=r, column=0, sticky="w",
+                                            pady=2)
+            ttk.Entry(box, textvariable=lo, width=6).grid(row=r, column=1,
+                                                          padx=4)
+            ttk.Label(box, text="to").grid(row=r, column=2)
+            ttk.Entry(box, textvariable=hi, width=6).grid(row=r, column=3,
+                                                          padx=4)
+        ttk.Label(box, text="End-point channels").grid(row=2, column=0,
+                                                       sticky="w", pady=2)
+        ttk.Entry(box, textvariable=self.rt_avg, width=6).grid(row=2,
+                                                               column=1,
+                                                               padx=4)
+        btns = ttk.Frame(t)
+        btns.grid(row=1, column=0, columnspan=2, sticky="w", pady=6)
+        ttk.Button(btns, text="Measure this spectrum",
+                   command=self._measure_ratio).pack(side="left")
+        ttk.Button(btns, text="Measure every spectrum in the list",
+                   command=self._measure_ratio_all).pack(side="left", padx=6)
+        ttk.Button(btns, text="Clear this one", command=self._clear_ratio
+                   ).pack(side="left")
+        self.rt_table = ttk.Label(t, wraplength=470, justify="left",
+                                  font="TkFixedFont")
+        self.rt_table.grid(row=2, column=0, columnspan=2, sticky="w", pady=4)
+        self.rt_detail = ttk.Label(t, style="Muted.TLabel", wraplength=470,
+                                   justify="left")
+        self.rt_detail.grid(row=3, column=0, columnspan=2, sticky="w")
+        ttk.Separator(t).grid(row=4, column=0, columnspan=2, sticky="ew",
+                              pady=8)
+        ttk.Label(t, text="sp² fraction: HOPG = 1, diamond = 0",
+                  font=("", 11, "bold")).grid(row=5, column=0, columnspan=2,
+                                               sticky="w")
+        rb = ttk.Frame(t)
+        rb.grid(row=6, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Button(rb, text="Use this spectrum as HOPG (= 1)",
+                   command=lambda: self._set_reference("hopg")).pack(
+            side="left")
+        ttk.Button(rb, text="Use this spectrum as diamond (= 0)",
+                   command=lambda: self._set_reference("diamond")).pack(
+            side="left", padx=6)
+        eb = ttk.Frame(t)
+        eb.grid(row=7, column=0, columnspan=2, sticky="w", pady=2)
+        ttk.Label(eb, text="Or type the HOPG ratio").grid(row=0, column=0)
+        ttk.Entry(eb, textvariable=self.rt_value, width=8).grid(row=0,
+                                                                column=1,
+                                                                padx=4)
+        ttk.Label(eb, text="source").grid(row=0, column=2, padx=(8, 0))
+        ttk.Entry(eb, textvariable=self.rt_source, width=22).grid(row=0,
+                                                                  column=3,
+                                                                  padx=4)
+        ttk.Button(eb, text="Use", command=self._enter_reference).grid(
+            row=0, column=4, padx=4)
+        b3 = ttk.Frame(t)
+        b3.grid(row=8, column=0, columnspan=2, sticky="w", pady=4)
+        ttk.Button(b3, text="Forget the references",
+                   command=self._clear_references).pack(side="left")
+        ttk.Button(b3, text="How much do the windows matter?",
+                   command=self._ratio_sensitivity).pack(side="left", padx=6)
+        self.rt_refs = ttk.Label(t, wraplength=470, justify="left",
+                                 font=("", 10, "bold"))
+        self.rt_refs.grid(row=9, column=0, columnspan=2, sticky="w",
+                          pady=(4, 0))
+        self.rt_sens = ttk.Label(t, wraplength=470, justify="left",
+                                 font="TkFixedFont")
+        self.rt_sens.grid(row=10, column=0, columnspan=2, sticky="w")
+        ttk.Label(t, style="Muted.TLabel", wraplength=470, justify="left",
+                  text="The ratio of the π and σ+π loss areas, each above a "
+                       "straight line between its window's limits (the "
+                       "windows of the HarwellXPS REELS analysis). It rises "
+                       "with sp² content but is not an sp² percentage: it "
+                       "depends on the windows, the beam energy and the "
+                       "geometry. Measure HOPG (and diamond, which has no π "
+                       "peak) the same way and the fraction is relative to "
+                       "them; the references are not published numbers and "
+                       "are used only with the windows they were measured "
+                       "with. Each spectrum uses its own elastic peak."
+                  ).grid(row=11, column=0, columnspan=2, sticky="w",
+                         pady=(6, 0))
+
+    def _ratio_settings(self):
+        v = self._floats(self.rt_pi_lo, self.rt_pi_hi, self.rt_sp_lo,
+                         self.rt_sp_hi)
+        try:
+            avg = int(self.rt_avg.get())
+        except ValueError:
+            avg = None
+        if v is None or avg is None or avg < 1 or not (v[1] > v[0]
+                                                         and v[3] > v[2]):
+            return None
+        return (v[0], v[1]), (v[2], v[3]), avg
+
+    def _ratio_for(self, ke, counts, elastic, settings):
+        res = reels.pi_ratio(reels.loss_axis(ke, elastic), counts, *settings)
+        return {**res, "elastic": elastic} if res else None
+
+    def _measure_ratio(self):
+        settings = self._ratio_settings()
+        if settings is None:
+            self.rt_detail.config(text="Give both windows as two numbers "
+                                       "(start below end) and the number of "
+                                       "end-point channels.")
+            return None
+        ke, counts = self._ke_counts()
+        if ke is None:
+            self.rt_detail.config(text="The kinetic energies are not known "
+                                       "for this spectrum.")
+            return None
+        el = self._elastic() or reels.elastic_peak_refined(ke, counts)
+        res = self._ratio_for(ke, counts, el, settings)
+        if res is None:
+            self.rt_detail.config(text="A window holds too few points.")
+            return None
+        self.elastic.set(f"{el:.2f}")
+        self.app.pi_ratio_set(self._region(), res)
+        self._show_ratio()
+        return res
+
+    def _measure_ratio_all(self):
+        settings = self._ratio_settings()
+        if settings is None:
+            self.rt_detail.config(text="Give both windows as two numbers "
+                                       "(start below end) and the number of "
+                                       "end-point channels.")
+            return
+        done = skipped = 0
+        for r in self.regions:
+            ke, counts = self._ke_counts_for(r)
+            el = reels.elastic_peak_refined(ke, counts) if ke else None
+            res = self._ratio_for(ke, counts, el, settings) if el else None
+            if res is None:
+                skipped += 1
+                continue
+            self.app.pi_ratio_set(r, res)
+            done += 1
+        self._show_ratio()
+        if skipped:
+            self.rt_detail.config(
+                text=f"{done} measured, {skipped} left out (no kinetic "
+                     f"energies, or a window with too few points).")
+
+    def _clear_ratio(self):
+        self.app.pi_ratio_set(self._region(), None)
+        self._show_ratio()
+
+    def _show_ratio(self):
+        refs = self.app.ann.reels_refs
+        rows = [f"{'spectrum':<22}{'Iπ':>9}{'Iσ+π':>10}{'ratio':>8}{'sp²':>7}"]
+        shown = 0
+        for i, r in enumerate(self.regions):
+            d = self.app.pi_ratio_get(r)
+            if not d:
+                continue
+            shown += 1
+            sp = reels.sp2_for(d, refs)
+            name = self.app.calibration_label(r)[:21]
+            rows.append(
+                f"{name:<22}{d['i_pi']:>9.1f}{d['i_sp']:>10.1f}"
+                + (f"{d['ratio']:>8.4f}" if d["ratio"] is not None
+                   else f"{'–':>8}")
+                + (f"{sp['fraction']:>7.2f}" if sp["fraction"] is not None
+                   else f"{'–':>7}"))
+        self.rt_table.config(text="\n".join(rows) if shown
+                             else "No ratio measured yet")
+        cur = self.app.pi_ratio_get(self._region())
+        notes = []
+        if cur:
+            notes += reels.ratio_flags(cur)
+            sp = reels.sp2_for(cur, refs)
+            if sp["problem"]:
+                notes.append("no sp² fraction: " + sp["problem"])
+            notes += sp["notes"]
+        self.rt_detail.config(text=("; ".join(notes) + ". " if notes else "")
+                              + (reels.ratio_text(cur) + "." if cur else ""))
+        bits = []
+        for which, name in (("hopg", "HOPG"), ("diamond", "diamond")):
+            ref = refs.get(which)
+            if ref:
+                bits.append(f"{name} {ref['ratio']:.4f} "
+                            f"({'typed' if ref['kind'] == 'entered' else 'measured'}"
+                            + (f": {ref['source']}" if ref.get("source")
+                               else "") + ")")
+        self.rt_refs.config(text=("References: " + "; ".join(bits)) if bits
+                            else "No reference yet: the sp² fraction needs "
+                                 "a HOPG ratio.")
+
+    def _set_reference(self, which):
+        d = self._measure_ratio()       # always with the windows shown now
+        if d is None:
+            return
+        if d["ratio"] is None:
+            self.rt_detail.config(text="This spectrum has no ratio (its σ+π "
+                                       "area is not positive).")
+            return
+        name = "HOPG" if which == "hopg" else "diamond"
+        self.app.reels_ref_set(which, {
+            "ratio": d["ratio"], "label": name, "kind": "spectrum",
+            "source": self.app.calibration_label(self._region()),
+            "pi_window": d["pi_window"], "sp_window": d["sp_window"],
+            "avg": d["avg"], "e0": d["elastic"]})
+        self._show_ratio()
+
+    def _enter_reference(self):
+        try:
+            value = float(self.rt_value.get())
+        except ValueError:
+            self.rt_detail.config(text="Type the HOPG ratio as a number.")
+            return
+        self.app.reels_ref_set("hopg", {
+            "ratio": value, "label": "HOPG", "kind": "entered",
+            "source": self.rt_source.get().strip()})
+        self._show_ratio()
+
+    def _clear_references(self):
+        for which in ("hopg", "diamond"):
+            self.app.reels_ref_set(which, None)
+        self._show_ratio()
+
+    def _ratio_sensitivity(self):
+        settings = self._ratio_settings()
+        ke, counts = self._ke_counts()
+        if settings is None or ke is None:
+            return
+        el = self._elastic() or reels.elastic_peak_refined(ke, counts)
+        rows = reels.window_sensitivity(reels.loss_axis(ke, el), counts,
+                                        *settings)
+        if not rows:
+            self.rt_sens.config(text="No ratio to vary for this spectrum.")
+            return
+        lines = [f"{'limit moved':<16}{'shift':>7}{'ratio':>9}{'change':>9}"]
+        for s in rows:
+            lines.append(
+                f"{s['window'] + ' ' + s['limit']:<16}{s['shift']:>+7.1f}"
+                + (f"{s['ratio']:>9.4f}{s['change_pct']:>+8.0f}%"
+                   if s["ratio"] is not None else f"{'–':>9}{'–':>9}"))
+        self.rt_sens.config(text="\n".join(lines))
 
     # -- loss-region Gaussians and a layer estimate -----------------------------------
     def _build_loss(self):
@@ -763,7 +1020,9 @@ class IssReelsDialog(tk.Toplevel):
             return None
 
     def _ke_counts(self):
-        r = self._region()
+        return self._ke_counts_for(self._region())
+
+    def _ke_counts_for(self, r):
         d = self.app._display(r)
         if self._is_ke(d):
             return list(d.energy), list(d.counts)
@@ -840,6 +1099,7 @@ class IssReelsDialog(tk.Toplevel):
     def _show_reels(self):
         self._show_plasmon()
         self._show_loss()
+        self._show_ratio()
         d = self.app.reels_get(self._region())
         if not d:
             self.result.config(text="No band gap yet")

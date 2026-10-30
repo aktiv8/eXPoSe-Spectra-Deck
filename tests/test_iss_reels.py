@@ -860,6 +860,389 @@ class TestLossFitDrawing(unittest.TestCase):
                              for t in ax.texts))
 
 
+def ratio_spectrum(pi_area, sp_area, ramp=0.5, level=30.0, el_ke=1000.0):
+    """Elastic peak, a π Gaussian (5.8 eV, FWHM 1.8) and a broad σ+π Gaussian
+    (26 eV, FWHM 9) on a rising background: (ke, intensity, loss) as lists."""
+    loss = [i * 0.05 for i in range(1001)]
+    y = []
+    for x in loss:
+        y.append(level + ramp * x + 40000 * math.exp(-(x / 0.3) ** 2)
+                 + pi_area * (2 * math.sqrt(math.log(2) / math.pi) / 1.8)
+                 * math.exp(-4 * math.log(2) * ((x - 5.8) / 1.8) ** 2)
+                 + sp_area * (2 * math.sqrt(math.log(2) / math.pi) / 9.0)
+                 * math.exp(-4 * math.log(2) * ((x - 26.0) / 9.0) ** 2))
+    return [el_ke - x for x in loss], y, loss
+
+
+class TestPiRatio(unittest.TestCase):
+    def test_the_areas_and_the_ratio_are_recovered(self):
+        _ke, y, loss = ratio_spectrum(300.0, 2000.0)
+        res = reels.pi_ratio(loss, y)
+        # the Gaussians' own tails lie under the line's ends and outside
+        # the windows, so a few per cent of each area is not recovered
+        self.assertAlmostEqual(res["i_pi"], 300.0, delta=15.0)
+        self.assertAlmostEqual(res["i_sp"], 2000.0, delta=200.0)   # the line
+        # sits on the wide Gaussian's tail at the 35 eV end: about 9 % lost
+        self.assertAlmostEqual(res["ratio"], 0.15, delta=0.01)
+        self.assertEqual(res["pi_window"], [3.5, 8.0])
+        self.assertEqual(res["sp_window"], [10.0, 35.0])
+        self.assertEqual(res["avg"], 3)
+        self.assertTrue(res["bg_pi"] and res["bg_sp"])
+
+    def test_a_spectrum_with_no_pi_peak_gives_a_ratio_near_zero(self):
+        _ke, y, loss = ratio_spectrum(0.0, 2000.0)           # diamond-like
+        res = reels.pi_ratio(loss, y)
+        self.assertAlmostEqual(res["ratio"], 0.0, delta=0.005)
+        self.assertAlmostEqual(res["i_pi"], 0.0, delta=15.0)
+
+    def test_a_negative_pi_area_is_kept_and_flagged_not_clipped(self):
+        _ke, y, loss = ratio_spectrum(0.0, 2000.0)
+        y = [v - 40.0 * math.exp(-((x - 5.8) / 0.8) ** 2)    # a dip in the window
+             for v, x in zip(y, loss)]
+        res = reels.pi_ratio(loss, y)
+        self.assertLess(res["i_pi"], 0)
+        self.assertLess(res["ratio"], 0)
+        self.assertIn("negative", reels.ratio_flags(res)[0])
+
+    def test_a_sigma_pi_area_that_is_not_positive_gives_no_ratio(self):
+        loss = [i * 0.05 for i in range(1001)]
+        y = [100.0 - 2.0 * math.exp(-((x - 26) / 6) ** 2) for x in loss]
+        res = reels.pi_ratio(loss, y)
+        self.assertIsNone(res["ratio"])
+        self.assertTrue(any("no ratio" in f for f in reels.ratio_flags(res)))
+
+    def test_the_line_ends_are_means_centred_on_the_first_and_last_points(self):
+        # one channel just outside the window is high: a mean of the first
+        # three channels inside would not see it, a centred one does
+        loss = [i * 0.1 for i in range(0, 501)]
+        y = [100.0] * len(loss)
+        i0 = next(i for i, x in enumerate(loss) if x >= 3.5)
+        y[i0 - 1] = 400.0
+        res = reels.pi_ratio(loss, y)
+        self.assertAlmostEqual(res["bg_pi"][0][1], 200.0, 6)
+        self.assertAlmostEqual(res["bg_pi"][-1][1], 100.0, 6)
+
+    def test_the_area_is_the_trapezoid_above_the_line(self):
+        loss = [i * 0.1 for i in range(0, 501)]
+        y = [50.0 + (20.0 if 4.0 <= x <= 7.0 else 0.0) for x in loss]
+        res = reels.pi_ratio(loss, y)
+        # a 3 eV wide box of height 20 (the edges are one channel wide)
+        self.assertAlmostEqual(res["i_pi"], 20.0 * 3.0, delta=2.1)
+
+    def test_input_order_nan_and_refusals(self):
+        _ke, y, loss = ratio_spectrum(300.0, 2000.0)
+        a = reels.pi_ratio(loss, y)
+        b = reels.pi_ratio(loss[::-1], y[::-1])
+        self.assertAlmostEqual(a["ratio"], b["ratio"], 9)
+        y2 = list(y)
+        y2[100] = float("nan")
+        self.assertAlmostEqual(reels.pi_ratio(loss, y2)["ratio"], a["ratio"],
+                               delta=0.002)
+        self.assertIsNone(reels.pi_ratio(loss, y, pi_window=(60, 70)))
+        self.assertIsNone(reels.pi_ratio(loss, y, pi_window=(5, 5)))
+        self.assertIsNone(reels.pi_ratio(loss, y, avg=0))
+        self.assertIsNone(reels.pi_ratio(loss, y, avg="x"))
+        self.assertIsNone(reels.pi_ratio(loss, y[:-1]))
+        self.assertIsNone(reels.pi_ratio(loss[:30], y[:30]))
+        self.assertIsNone(reels.pi_ratio(loss, y, sp_window=(10, float("nan"))))
+
+    def test_the_sp2_fraction_scale(self):
+        self.assertAlmostEqual(reels.sp2_fraction(0.15, 0.15), 1.0, 12)
+        self.assertAlmostEqual(reels.sp2_fraction(0.0, 0.15), 0.0, 12)
+        self.assertAlmostEqual(reels.sp2_fraction(0.075, 0.15), 0.5, 12)
+        # a measured diamond sets the zero: (0.075 - 0.01) / (0.15 - 0.01)
+        self.assertAlmostEqual(reels.sp2_fraction(0.075, 0.15, 0.01),
+                               0.065 / 0.14, 12)
+        self.assertAlmostEqual(reels.sp2_fraction(-0.01, 0.15), -0.01 / 0.15,
+                               12)                              # not clipped
+        for bad in ((None, 0.15), (0.1, None), (0.1, 0.0), (0.1, 0.15, 0.2),
+                    (float("nan"), 0.15), ("x", 0.15)):
+            self.assertIsNone(reels.sp2_fraction(*bad))
+
+    def refs(self, **over):
+        hopg = {"ratio": 0.15, "label": "HOPG", "kind": "spectrum",
+                "pi_window": [3.5, 8.0], "sp_window": [10.0, 35.0],
+                "avg": 3, "e0": 1000.0}
+        hopg.update(over)
+        return {"hopg": hopg}
+
+    def result(self, ratio=0.075, elastic=1000.0, **over):
+        r = {"pi_window": [3.5, 8.0], "sp_window": [10.0, 35.0], "avg": 3,
+             "i_pi": 150.0, "i_sp": 2000.0, "ratio": ratio,
+             "elastic": elastic}
+        r.update(over)
+        return r
+
+    def test_sp2_for_needs_a_reference_and_the_same_windows(self):
+        self.assertIsNone(reels.sp2_for(self.result(), {})["fraction"])
+        self.assertEqual(reels.sp2_for(self.result(), {})["problem"], "")
+        ok = reels.sp2_for(self.result(), self.refs())
+        self.assertAlmostEqual(ok["fraction"], 0.5, 12)
+        self.assertEqual(ok["notes"], [])
+        other = reels.sp2_for(self.result(pi_window=[3.0, 8.0]), self.refs())
+        self.assertIsNone(other["fraction"])
+        self.assertIn("windows", other["problem"])
+        self.assertIsNone(reels.sp2_for(self.result(avg=5),
+                                        self.refs())["fraction"])
+        # a typed reference does not state its windows: used, not compared
+        typed = self.refs(kind="entered", pi_window=None, sp_window=None,
+                          avg=None, e0=None)
+        self.assertAlmostEqual(reels.sp2_for(self.result(), typed)["fraction"],
+                               0.5, 12)
+
+    def test_sp2_for_uses_a_diamond_zero_and_checks_both_references(self):
+        refs = {**self.refs(), "diamond": {
+            "ratio": 0.01, "label": "diamond", "kind": "spectrum",
+            "pi_window": [3.5, 8.0], "sp_window": [10.0, 35.0], "avg": 3,
+            "e0": 1000.0}}
+        got = reels.sp2_for(self.result(ratio=0.075), refs)
+        self.assertAlmostEqual(got["fraction"], 0.065 / 0.14, 12)
+        refs["diamond"]["avg"] = 1                        # measured another way
+        bad = reels.sp2_for(self.result(), refs)
+        self.assertIsNone(bad["fraction"])
+        self.assertIn("diamond", bad["problem"])
+
+    def test_sp2_for_flags_the_scale_and_the_beam_energy_not_clips(self):
+        high = reels.sp2_for(self.result(ratio=0.30), self.refs())
+        self.assertAlmostEqual(high["fraction"], 2.0, 12)
+        self.assertIn("outside", high["notes"][0])
+        neg = reels.sp2_for(self.result(ratio=-0.01), self.refs())
+        self.assertLess(neg["fraction"], 0)
+        self.assertIn("outside", neg["notes"][0])
+        far = reels.sp2_for(self.result(elastic=2000.0), self.refs())
+        self.assertIsNotNone(far["fraction"])            # a note, not a block
+        self.assertTrue(any("beam energy" in n for n in far["notes"]))
+        near = reels.sp2_for(self.result(elastic=1004.0), self.refs())
+        self.assertEqual(near["notes"], [])              # within 1 %
+
+    def test_sp2_for_a_reference_at_or_below_the_zero_gives_no_fraction(self):
+        got = reels.sp2_for(self.result(), self.refs(ratio=0.0))
+        self.assertIsNone(got["fraction"])
+        self.assertIn("reference", got["problem"])
+
+    def test_the_sensitivity_to_each_window_limit(self):
+        _ke, y, loss = ratio_spectrum(300.0, 2000.0)
+        rows = reels.window_sensitivity(loss, y)
+        self.assertEqual(len(rows), 8)
+        self.assertEqual({(r["window"], r["limit"]) for r in rows},
+                         {("π", "start"), ("π", "end"), ("σ+π", "start"),
+                          ("σ+π", "end")})
+        self.assertEqual({r["shift"] for r in rows}, {-0.5, 0.5})
+        self.assertTrue(all(r["change_pct"] is not None for r in rows))
+        zero = reels.window_sensitivity(loss, y, shift=0.0)
+        self.assertTrue(all(abs(r["change_pct"]) < 1e-9 for r in zero))
+        self.assertEqual(reels.window_sensitivity(loss, y, pi_window=(60, 70)),
+                         [])
+
+    def test_the_elastic_peak_is_refined_between_the_points(self):
+        ke = [1000.0 - i * 0.1 for i in range(200)]
+        centre = 990.04                                       # between points
+        y = [1000 * math.exp(-((k - centre) / 0.3) ** 2) for k in ke]
+        self.assertAlmostEqual(reels.elastic_peak_refined(ke, y), centre,
+                               delta=0.005)
+        self.assertAlmostEqual(reels.elastic_peak_refined([1, 2, 3],
+                                                          [9, 2, 1]), 1.0)
+        self.assertIsNone(reels.elastic_peak_refined([], []))
+        self.assertIsNone(reels.elastic_peak_refined([1, 2], [1]))
+
+    def test_the_metadata_rows(self):
+        refs = self.refs()
+        md = reels.ratio_metadata(self.result(), refs)
+        self.assertEqual(md["REELS π / (σ+π) ratio"], "0.0750")
+        self.assertIn("HOPG 0.1500 = 1", md["REELS sp2 fraction"])
+        self.assertIn("centred", md["REELS π / (σ+π) windows"])
+        self.assertNotIn("REELS π / (σ+π) notes", md)
+        none = reels.ratio_metadata(self.result(), {})
+        self.assertNotIn("REELS sp2 fraction", none)
+        wrong = reels.ratio_metadata(self.result(avg=5), refs)
+        self.assertIn("not calculated", wrong["REELS sp2 fraction"])
+        noratio = reels.ratio_metadata(self.result(ratio=None, i_sp=-1.0),
+                                       refs)
+        self.assertNotIn("REELS π / (σ+π) ratio", noratio)
+        self.assertIn("no ratio", noratio["REELS π / (σ+π) notes"])
+
+
+class TestPiRatioAgainstXpsView(unittest.TestCase):
+    """The HarwellXPS REELS analysis stored in an XPSView project: the same
+    windows, end-point averaging and elastic peak must give its areas and
+    ratios to every digit (``XPS_XPSV_CORPUS=<D:\\Temp\\hxps>``)."""
+
+    def test_the_six_spectra_of_the_stored_analysis(self):
+        base = os.environ.get("XPS_XPSV_CORPUS")
+        if not base:
+            self.skipTest("XPS_XPSV_CORPUS is not set")
+        import gzip
+        import json
+        path = os.path.join(base, "BM-20263874-25-55", "XPSView",
+                            "20263874-25-55.xpsv")
+        if not os.path.exists(path):
+            self.skipTest("the project is not there")
+        import readers
+        raw = json.loads(gzip.open(path, "rb").read().decode("utf-8"))
+        an = [a for a in raw["content"]["analyses"]
+              if a["kind"] == "reels"][0]
+        doc = readers.load_file(path)
+        checked = 0
+        for row in an["rows"]:
+            r = next(x for x in doc.regions if x.sample == row["sample"]
+                     and (x.technique or "").upper() == "REELS")
+            ke, y = list(r.energy), list(r.counts)
+            el = reels.elastic_peak_refined(ke, y)
+            self.assertAlmostEqual(el, row["elastic_ke"], 6)
+            res = reels.pi_ratio(reels.loss_axis(ke, el), y,
+                                 an["pi_window"], an["sigma_pi_window"],
+                                 an["edge_avg"])
+            # the same arithmetic to about 1e-6 (the stored data are float32)
+            for ours, theirs in ((res["i_pi"], row["pi"]["integral"]),
+                                 (res["i_sp"], row["sigma_pi"]["integral"]),
+                                 (res["ratio"], row["ratio"])):
+                self.assertAlmostEqual(ours, theirs,
+                                       delta=2e-5 * max(1.0, abs(theirs)))
+            checked += 1
+        self.assertEqual(checked, 6)
+
+
+class TestPiRatioStorage(unittest.TestCase):
+    def result(self):
+        _ke, y, loss = ratio_spectrum(300.0, 2000.0)
+        return {**reels.pi_ratio(loss, y), "elastic": 1000.0}
+
+    def ref(self, **over):
+        d = {"ratio": 0.15, "label": "HOPG", "kind": "spectrum",
+             "source": "HOPG 1 keV", "pi_window": [3.5, 8.0],
+             "sp_window": [10.0, 35.0], "avg": 3, "e0": 1000.0}
+        d.update(over)
+        return d
+
+    def test_round_trip_metadata_and_clearing(self):
+        a = annotations.Annotations()
+        self.assertIsNone(a.pi_ratio_for("f1", "S", "R"))
+        d = self.result()
+        a.set_pi_ratio("f1", "S", "R", d)
+        a.set_reels_ref("hopg", self.ref())
+        self.assertFalse(a.is_empty())
+        got = a.pi_ratio_for("f1", "S", "R")
+        self.assertAlmostEqual(got["ratio"], d["ratio"], 9)
+        b = annotations.Annotations.from_json(a.to_json())
+        self.assertEqual(b.pi_ratio_for("f1", "S", "R"), got)
+        self.assertEqual(b.reels_refs["hopg"], a.reels_refs["hopg"])
+        r = Region(name="R", index=0, offset=0, sample="S")
+        md = a.apply_metadata("f1", 0, r, {"Sample": "S", "Region": "R"})
+        self.assertEqual(md["REELS π / (σ+π) ratio"], f"{d['ratio']:.4f}")
+        self.assertIn("HOPG 0.1500 = 1", md["REELS sp2 fraction"])
+        a.set_pi_ratio("f1", "S", "R", None)
+        a.set_reels_ref("hopg", None)
+        self.assertTrue(a.is_empty())
+
+    def test_a_reference_alone_makes_the_workbook_non_empty(self):
+        a = annotations.Annotations()
+        a.set_reels_ref("diamond", self.ref(label="diamond", ratio=0.01))
+        self.assertFalse(a.is_empty())
+        a.set_reels_ref("nonsense", self.ref())
+        self.assertEqual(list(a.reels_refs), ["diamond"])
+        a.set_reels_ref("diamond", {"ratio": "x"})
+        self.assertTrue(a.is_empty())
+
+    def test_it_is_independent_of_the_other_reels_results(self):
+        a = annotations.Annotations()
+        a.set_pi_ratio("f1", "S", "R", self.result())
+        a.set_reels("f1", "S", "R", None)
+        a.set_plasmon("f1", "S", "R", None)
+        a.set_loss_fit("f1", "S", "R", None)
+        self.assertIsNotNone(a.pi_ratio_for("f1", "S", "R"))
+
+    def test_a_negative_area_and_a_missing_ratio_survive_storage(self):
+        a = annotations.Annotations()
+        d = {**self.result(), "i_pi": -12.0, "ratio": None, "i_sp": -1.0}
+        a.set_pi_ratio("f1", "S", "R", d)
+        got = a.pi_ratio_for("f1", "S", "R")
+        self.assertEqual(got["i_pi"], -12.0)
+        self.assertIsNone(got["ratio"])
+
+    def test_loading_is_tolerant(self):
+        good = self.result()
+        b = annotations.Annotations.from_json({
+            "pi_ratio": {
+                "ok": good, "junk": "x",
+                "nowin": {**good, "pi_window": [1]},
+                "backwards": {**good, "sp_window": [35, 10]},
+                "noavg": {k: v for k, v in good.items() if k != "avg"},
+                "badavg": {**good, "avg": "x"},
+                "nan": {**good, "i_pi": float("nan")},
+                "noel": {k: v for k, v in good.items() if k != "elastic"}},
+            "reels_refs": {"hopg": self.ref(), "diamond": {"ratio": "x"},
+                           "other": self.ref()}})
+        self.assertEqual(list(b.pi_ratio), ["ok"])
+        self.assertEqual(list(b.reels_refs), ["hopg"])
+        self.assertEqual(annotations.Annotations.from_json(
+            {"pi_ratio": [1], "reels_refs": [1]}).pi_ratio, {})
+        c = annotations.Annotations.from_json({"pi_ratio": {"k": {
+            **good, "bg_pi": [[1, 2], ["x", 3], [4]]}}})
+        self.assertEqual(c.pi_ratio["k"]["bg_pi"], [[1.0, 2.0]])
+        d = annotations.Annotations.from_json({"reels_refs": {"hopg": {
+            "ratio": 0.2, "kind": "bogus", "avg": "x"}}})
+        self.assertEqual(d.reels_refs["hopg"]["kind"], "spectrum")
+        self.assertIsNone(d.reels_refs["hopg"]["avg"])
+        self.assertEqual(d.reels_refs["hopg"]["label"], "reference")
+
+    def test_a_split_sample_keeps_its_ratio(self):
+        a = annotations.Annotations()
+        a.set_pi_ratio("f1", "S", "R", self.result())
+        self.assertIn("pi_ratio", annotations.Annotations.ADOPTED)
+
+
+@unittest.skipUnless(HAVE_MPL, "matplotlib not installed")
+class TestPiRatioDrawing(unittest.TestCase):
+    def setUp(self):
+        ke, y, loss = ratio_spectrum(300.0, 2000.0)
+        self.region = Region(name="REELS", index=0, offset=0, energy=ke,
+                             counts=y, decodable=True, sample="S",
+                             photon_energy=1000.0,
+                             energy_label="Kinetic Energy")
+        self.res = {**reels.pi_ratio(loss, y), "elastic": 1000.0}
+
+    def draw(self, regions, norm="None", fraction=None):
+        import plots
+        fig = Figure(figsize=(6, 4))
+        ax = fig.add_subplot(111)
+        plots.draw_stack(ax, regions, 0.6, norm, None,
+                         ["#1f77b4"] * len(regions), "R", "", (), False,
+                         piratio={**self.res, "fraction": fraction},
+                         scale="Kinetic")
+        fig.canvas.draw()
+        return ax
+
+    def test_both_windows_the_backgrounds_and_the_ratio_are_drawn(self):
+        ax = self.draw([self.region])
+        self.assertTrue(any(t.get_text().startswith("Iπ/Iσ+π = 0.1")
+                            for t in ax.texts))
+        self.assertEqual(sum(1 for t in ax.texts if t.get_text() in
+                             ("π", "σ+π")), 2)
+        self.assertEqual(len([ln for ln in ax.lines
+                              if ln.get_linestyle() == "--"]), 2)
+        self.assertGreaterEqual(len(ax.patches), 2)           # the windows
+
+    def test_the_sp2_fraction_is_shown_when_there_is_one(self):
+        ax = self.draw([self.region], fraction=0.93)
+        self.assertTrue(any("sp² 0.93" in t.get_text() for t in ax.texts))
+        ax2 = self.draw([self.region])
+        self.assertFalse(any("sp²" in t.get_text() for t in ax2.texts))
+
+    def test_the_backgrounds_follow_the_normalisation(self):
+        ax = self.draw([self.region], norm="Max = 1")
+        for ln in (x for x in ax.lines if x.get_linestyle() == "--"):
+            self.assertLess(max(ln.get_ydata()), 5.0)
+
+    def test_no_overlay_on_a_stack(self):
+        ax = self.draw([self.region, self.region])
+        self.assertFalse(any("Iπ" in t.get_text() for t in ax.texts))
+
+    def test_a_missing_ratio_is_drawn_as_a_dash(self):
+        self.res["ratio"] = None
+        ax = self.draw([self.region])
+        self.assertTrue(any(t.get_text() == "Iπ/Iσ+π = –" for t in ax.texts))
+
+
 class TestBrowserPayload(unittest.TestCase):
     def test_kinetic_markers_are_flagged_and_not_shifted(self):
         import htmlbrowser
