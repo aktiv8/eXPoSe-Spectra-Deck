@@ -188,6 +188,35 @@ class TestFigureFromThePlot(unittest.TestCase):
         ax2, _k2 = self._panel("O 1s")
         self.assertEqual(ax2.get_ylim(), self.ws._auto_lims[ax2][1])
 
+    def test_auto_fit_y_follows_the_x_window_and_home_restores(self):
+        ws = self.ws
+        ws.root.update()                 # let a pending render finish
+        ax, key = self._panel()
+        auto = ws._auto_lims[ax]
+        ws.fit_y_auto_var.set(True)
+        self.addCleanup(ws.fit_y_auto_var.set, False)
+        ws._fit_y_auto_changed()
+        # a zoom sets x, then y (as the toolbar does); the refit runs at idle
+        ax.set_xlim(292.0, 289.0)
+        ax.set_ylim(0.0, 5000.0)
+        ws.root.update()
+        lo, hi = ax.get_ylim()
+        self.assertGreater(lo, 90.0)
+        self.assertLess(hi, 110.0)
+        ax.set_xlim(auto[0])                       # back to the full range
+        ws.root.update()
+        self.assertEqual(tuple(ax.get_ylim()), tuple(auto[1]))
+
+    def test_auto_fit_y_off_leaves_y_alone(self):
+        ws = self.ws
+        ws.root.update()
+        ax, _key = self._panel()
+        ws.fit_y_auto_var.set(False)
+        ax.set_xlim(292.0, 289.0)
+        ax.set_ylim(0.0, 5000.0)
+        ws.root.update()
+        self.assertEqual(ax.get_ylim(), (0.0, 5000.0))
+
     def test_fit_y_on_a_window_with_no_data_changes_nothing(self):
         ax, key = self._panel()
         ax.set_xlim(400.0, 395.0)

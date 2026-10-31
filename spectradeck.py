@@ -953,6 +953,11 @@ class Workspace:
                           command=self._untick_matching)
         viewm.add_command(label="Fit Y to the zoomed window",
                           command=self.fit_y_to_view)
+        self.fit_y_auto_var = tk.BooleanVar(
+            value=bool(self.cfg.get("zoom_fit_y", False)))
+        viewm.add_checkbutton(label="Auto-fit Y while zooming",
+                              variable=self.fit_y_auto_var,
+                              command=self._fit_y_auto_changed)
         viewm.add_separator()
         viewm.add_command(label="Show/hide file tree",
                           command=lambda: self._toggle_pane("tree"))
@@ -1355,6 +1360,7 @@ class Workspace:
             shutil.rmtree(self._pdf_dir, ignore_errors=True)
         self.ribbon.save_state(cfg)
         cfg["viewbar_collapsed"] = bool(self.viewbar_collapsed)
+        cfg["zoom_fit_y"] = bool(self.fit_y_auto_var.get())
         cfg["show_splash"] = bool(self.splash_var.get())
         cfg["csv_preamble"] = bool(self.preamble_var.get())
         if hasattr(self, "dpi_var"):
@@ -4257,6 +4263,8 @@ class Workspace:
                 self._zoom_request = None
             else:
                 self._restore_zoom(zoom)
+            self._auto_fit_pending = set()
+            self._watch_x_limits()      # after the restore: it sets x then y
             self.fig.set_facecolor(self.palette["plot_bg"])
             self.canvas.draw()
             if n_groups:
@@ -4790,6 +4798,9 @@ class Workspace:
             label="Fit Y to the zoomed window",
             state="disabled" if series else "normal",
             command=lambda: self.fit_y_to_view(key))
+        sp.add_checkbutton(label="Auto-fit Y while zooming",
+                           variable=self.fit_y_auto_var,
+                           command=self._fit_y_auto_changed)
         sp.add_separator()
         sp.add_command(label="Use the page's view",
                        state="normal" if key in self.panel_views
@@ -5023,6 +5034,64 @@ class Workspace:
             except Exception:
                 pass
 
+    def _fit_axis_y(self, ax):
+        """Set one panel's y limits to the data inside its x window; False
+        (nothing changed) when there is nothing to fit."""
+        series = [(ln.get_xdata(orig=False), ln.get_ydata(orig=False))
+                  for ln in ax.lines if ln.get_transform() == ax.transData]
+        new = viewzoom.fit_y(series, ax.get_xlim(), 0.06,
+                             ax.get_yscale() == "log")
+        if new is None:
+            return False
+        ax.set_ylim(new)
+        return True
+
+    def _fit_y_auto_changed(self):
+        """The "Auto-fit Y while zooming" box: on, every panel is fitted now
+        and refitted whenever its x window changes (zoom, pan, Home)."""
+        if self.fit_y_auto_var.get():
+            self._watch_x_limits()
+            self._auto_fit_pending = set(self._axmap)
+            self._auto_fit_y()
+
+    def _watch_x_limits(self):
+        """Hook every panel's x-limit change (called after each draw: the
+        axes are new). A zoom sets x and then y, so the refit is deferred to
+        idle, after the tool has finished, and coalesced per panel."""
+        for ax in self._axmap:
+            ax.callbacks.connect("xlim_changed", self._x_limits_changed)
+
+    def _x_limits_changed(self, ax):
+        if not self.fit_y_auto_var.get() or ax not in self._axmap:
+            return
+        pending = getattr(self, "_auto_fit_pending", None)
+        if pending is None:
+            pending = self._auto_fit_pending = set()
+        if not pending:
+            self.root.after_idle(self._auto_fit_y)
+        pending.add(ax)
+
+    def _auto_fit_y(self):
+        pending = getattr(self, "_auto_fit_pending", set())
+        self._auto_fit_pending = set()
+        if not self.fit_y_auto_var.get():
+            return
+        changed = False
+        for ax in pending:
+            auto = self._auto_lims.get(ax)
+            if (ax not in self._axmap or auto is None
+                    or hasattr(ax, "get_zlim")):
+                continue
+            if viewzoom._same(auto[0], tuple(ax.get_xlim())):
+                new = auto[1]               # back at the full range: as drawn
+                if not viewzoom._same(new, tuple(ax.get_ylim())):
+                    ax.set_ylim(new)
+                    changed = True
+            elif self._fit_axis_y(ax):
+                changed = True
+        if changed:
+            self.canvas.draw_idle()
+
     def fit_y_to_view(self, key=None):
         """Rescale y so the data inside each panel's current x window fill it
         (every panel, or only ``key``). A view change like a zoom: the new
@@ -5038,15 +5107,9 @@ class Workspace:
             if hasattr(ax, "get_zlim") or not ax.lines:
                 skipped += 1
                 continue
-            series = [(ln.get_xdata(orig=False), ln.get_ydata(orig=False))
-                      for ln in ax.lines
-                      if ln.get_transform() == ax.transData]
-            new = viewzoom.fit_y(series, ax.get_xlim(), 0.06,
-                                 ax.get_yscale() == "log")
-            if new is None:
+            if not self._fit_axis_y(ax):
                 skipped += 1
                 continue
-            ax.set_ylim(new)
             done += 1
         if done:
             try:
