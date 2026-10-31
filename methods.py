@@ -59,7 +59,7 @@ def values_text(values, unit="", max_list=3):
 def is_survey(md):
     """True for a survey / wide scan: named so, or spanning over 250 eV. An
     ion scattering spectrum is wide by nature and is never a survey."""
-    if is_iss(md):
+    if is_iss(md) or is_reels(md):
         return False
     name = str(md.get("Region", "")).lower()
     if any(k in name for k in ("survey", "wide")):
@@ -79,6 +79,13 @@ def is_iss(md):
     of a Kratos file whose export lost the technique)."""
     return (str(md.get("Technique", "")).strip().upper() == "ISS"
             or is_iss_lens(md.get("Lens mode", "")))
+
+
+def is_reels(md):
+    """True for a reflection electron energy loss spectrum (technique REELS, or
+    the REELS lens of an Avantage file whose header has no technique)."""
+    return (str(md.get("Technique", "")).strip().upper() == "REELS"
+            or str(md.get("Lens mode", "")).strip().upper() == "REELS")
 
 
 def _unique(rows, key):
@@ -161,6 +168,28 @@ def _iss_paragraph(rows):
             [f"a beam HT of {ht[0]} V" if ht else "",
              f"an emission current of {emis[0]} mA" if emis else ""]) + ". ")
     return (s + _analyser_paragraph(rows, "Ion scattering spectra")).strip()
+
+
+def _reels_paragraph(rows):
+    """REELS spectra: the primary electron beam, the energy-scale calibration
+    (the elastic peak moved to the primary energy) and the analyser settings.
+    A setting nobody stated is not written."""
+    energy, _n = values_text([r.get("Primary beam energy (eV)") for r in rows],
+                             "eV")
+    s = (f"REELS used a primary electron beam of {energy}. " if energy else
+         "")
+    cal = [r for r in rows if r.get("REELS energy calibration")]
+    if cal:
+        shift, n = values_text([r.get("REELS energy shift (eV)") for r in cal],
+                               "eV")
+        who = ("The energy scale of each spectrum was" if len(cal) == len(rows)
+               else f"The energy scale of {len(cal)} of {len(rows)} spectra "
+                    "was")
+        s += (f"{who} calibrated by shifting its kinetic energies"
+              + (f" ({shift})" if shift else "")
+              + " so that the elastic peak lay at the primary energy. ")
+    s += "Energy losses are measured from the elastic peak. "
+    return (s + _analyser_paragraph(rows, "REELS spectra")).strip()
 
 
 def _nexafs_paragraph(rows):
@@ -514,11 +543,15 @@ def generate(rows, calibration="", timing_summary=None):
     inst = _instrument_names(lab_rows)
     operator = _unique(lab_rows, "Operator")
     iss_rows = [r for r in lab_rows if is_iss(r)]
-    rows_x = [r for r in lab_rows if not is_iss(r)]  # the X-ray measurements
+    reels_rows = [r for r in lab_rows if is_reels(r) and not is_iss(r)]
+    rows_x = [r for r in lab_rows                    # the X-ray measurements
+              if not is_iss(r) and not is_reels(r)]
     if lab_rows:
         techniques = ([] if not rows_x else
                       ["X-ray photoelectron spectroscopy (XPS)"]) + (
-            ["ion scattering spectroscopy (ISS)"] if iss_rows else [])
+            ["ion scattering spectroscopy (ISS)"] if iss_rows else []) + (
+            ["reflection electron energy loss spectroscopy (REELS)"]
+            if reels_rows else [])
         intro = (f"{join_and(techniques)} measurements were made "
                  + (f"on a {join_and(inst)} spectrometer" if inst
                     else "on the instrument recorded in the data files"))
@@ -534,6 +567,8 @@ def generate(rows, calibration="", timing_summary=None):
         paras.append(ana)
     if iss_rows:
         paras.append(_iss_paragraph(iss_rows))
+    if reels_rows:
+        paras.append(_reels_paragraph(reels_rows))
     if maps:
         paras.append(_map_paragraph(maps))
     if nex_rows:

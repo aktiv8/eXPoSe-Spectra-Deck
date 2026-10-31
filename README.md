@@ -385,7 +385,7 @@ workbook. Sections, in the default results-first order:
   only written when the files record it. It can be ticked off like any other
   section (PDF, slides and Word follow together); a report saved before it
   existed keeps it off.
-* **REELS energy scale** — ISS / REELS ▸ *REELS energy scale* moves each REELS spectrum's elastic peak to the primary beam energy (the file's, or typed), and the *REELS axis* box draws the energy lost from it: 0 eV at the peak, increasing to the right (the default for REELS spectra).
+* **REELS energy scale** — Avantage REELS files (`.VGD` / `.avg`) are recognised as REELS and opened with each spectrum's elastic peak already moved to the primary beam energy the file records (1000 eV); *ISS / REELS ▸ REELS energy scale* shows, removes or repeats it (and can enter a primary energy a file does not record), and the *REELS axis* box draws the energy lost from the peak: 0 eV at the peak, increasing to the right (the default for REELS spectra).
 * **REELS analysis** — after the Quantification, when you have measured REELS
   π / (σ+π) ratios (Tools ▸ ISS / REELS…): one table of the ratio, the peak
   positions, the two areas and the sp² fraction against your own HOPG (and

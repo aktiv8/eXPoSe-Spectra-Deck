@@ -215,7 +215,8 @@ def _clean_reels_cal(d):
     if None in (elastic, nominal, shift) or nominal <= 0:
         return None
     return {"elastic": elastic, "nominal": nominal, "shift": shift,
-            "source": "file" if d.get("source") == "file" else "entered"}
+            "source": "file" if d.get("source") == "file" else "entered",
+            "auto": bool(d.get("auto"))}
 
 
 def _clean_reels_ref(d):
@@ -260,6 +261,8 @@ class Annotations:
     pi_ratio: dict = field(default_factory=dict)         # region key -> REELS pi / (sigma+pi) ratio (reels.pi_ratio)
     reels_refs: dict = field(default_factory=dict)       # "hopg" / "diamond" -> the reference ratios of this workbook
     reels_cal: dict = field(default_factory=dict)        # region key -> REELS energy calibration (reels.calibration)
+    reels_cal_declined: list = field(default_factory=list)   # region keys the user removed it from: not recalibrated on load
+    reels_auto: bool = True                              # calibrate a REELS spectrum on load when its file records the primary energy
     instrument: dict = field(default_factory=dict)       # file id -> NeXus settings
     iss: dict = field(default_factory=dict)              # file id -> {ion, e0, theta}
     imports: dict = field(default_factory=dict)          # file id -> how a column-text file is read
@@ -401,6 +404,7 @@ class Annotations:
         if rc:
             import reels
             out["REELS energy calibration"] = reels.calibration_text(rc)
+            out["REELS energy shift (eV)"] = f"{rc['shift']:+.2f}"
         lf = self.loss_fit.get(region_key(fid, region.sample, region.name))
         if lf:
             import reels
@@ -540,10 +544,17 @@ class Annotations:
         d = self.reels_cal.get(region_key(fid, sample, name))
         return d["shift"] if d else 0.0
 
-    def set_reels_cal(self, fid, sample, name, data):
+    def reels_cal_is_declined(self, fid, sample, name):
+        """True when the user removed this spectrum's calibration, so it is not
+        calibrated again automatically."""
+        return region_key(fid, sample, name) in self.reels_cal_declined
+
+    def set_reels_cal(self, fid, sample, name, data, decline=False):
         """Store (or, with None, remove) a spectrum's calibration and move the
         elastic peak of every REELS result stored for it by the change of
-        shift. Returns the change (eV)."""
+        shift. ``decline`` (with None) also records that the user removed it,
+        so loading the file again does not calibrate it again; a stored
+        calibration clears that record. Returns the change (eV)."""
         key = region_key(fid, sample, name)
         old = self.reels_cal.get(key)
         clean = _clean_reels_cal(data)
@@ -551,8 +562,12 @@ class Annotations:
             old["shift"] if old else 0.0)
         if clean:
             self.reels_cal[key] = clean
+            if key in self.reels_cal_declined:
+                self.reels_cal_declined.remove(key)
         else:
             self.reels_cal.pop(key, None)
+            if decline and key not in self.reels_cal_declined:
+                self.reels_cal_declined.append(key)
         if delta:
             for table in self.REELS_RESULTS:
                 d = getattr(self, table).get(key)
@@ -661,7 +676,8 @@ class Annotations:
                     or self.calibration_statement or self.experiment_notes
                     or self.sputter or self.reels or self.plasmon
                     or self.loss_fit or self.pi_ratio or self.reels_refs
-                    or self.reels_cal
+                    or self.reels_cal or self.reels_cal_declined
+                    or not self.reels_auto
                     or self.instrument
                     or self.iss or self.imports or self.nexafs_ring
                     or self.nexafs_edge or self.repeat_groups)
@@ -675,9 +691,11 @@ class Annotations:
                      "region_notes", "md_edits", "shifts", "calibration",
                      "calibration_statement", "markers", "experiment_notes",
                      "sputter", "reels", "plasmon", "loss_fit", "pi_ratio",
-                     "reels_refs", "reels_cal", "instrument", "iss",
-                     "imports"):
+                     "reels_refs", "reels_cal", "reels_cal_declined",
+                     "instrument", "iss", "imports"):
             d[name] = copy.deepcopy(getattr(self, name))
+        if not self.reels_auto:               # only the unusual choice is saved
+            d["reels_auto"] = False
         if self.nexafs_ring:
             d["nexafs_ring"] = True
         if self.nexafs_edge:
@@ -697,7 +715,8 @@ class Annotations:
                  "region_notes", "md_edits", "shifts", "calibration",
                  "calibration_statement", "markers", "experiment_notes",
                  "sputter", "reels", "plasmon", "loss_fit", "pi_ratio",
-                 "reels_refs", "reels_cal", "instrument", "iss", "imports",
+                 "reels_refs", "reels_cal", "reels_cal_declined",
+                 "reels_auto", "instrument", "iss", "imports",
                  "nexafs_ring", "nexafs_edge", "repeat_groups"}
         for name in ("sample_names", "region_names", "sample_notes",
                      "region_notes"):
@@ -754,6 +773,12 @@ class Annotations:
                 clean = _clean_loss_fit(x)
                 if clean:
                     a.loss_fit[str(k)] = clean
+        v = data.get("reels_cal_declined")
+        if isinstance(v, list):
+            a.reels_cal_declined = [k for k in dict.fromkeys(
+                str(x) for x in v if isinstance(x, str) and x)]
+        if data.get("reels_auto") is False:
+            a.reels_auto = False
         v = data.get("reels_cal")
         if isinstance(v, dict):
             for k, x in v.items():

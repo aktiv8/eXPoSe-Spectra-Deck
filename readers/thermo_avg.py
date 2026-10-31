@@ -28,6 +28,13 @@ _INT_TYPES = ("VT_I1", "VT_I2", "VT_I4", "VT_I8", "VT_UI1", "VT_UI2", "VT_UI4",
               "VT_UI8", "VT_INT", "VT_UINT")
 K_ENERGY = "DS_SOPROPID_ENERGY"
 ISS_TECHNIQUE = 6              # DS_GEPROPID_TECHNIQUE of an ion scattering file
+# ... and 22 in every REELS file seen (the six spectra of D:\Temp\hxps\
+# BM-20263874-25-55\Experiment\REELS Source; HarwellXPS's own table of
+# technique codes reads {XPS: 1, ISS: 6, UPS: 7, REELS: 22, AES: 4}, and 1 and 6
+# are the two this reader already knew). The same files name the lens mode
+# "REELS", which also identifies a header with no technique code.
+REELS_TECHNIQUE = 22
+REELS_LENS = "REELS"
 K_VALUE_TYPE = "DS_GEPROPID_VALUE_TYPE"
 VALUE_RGB = 13                       # a camera image: one packed colour per pixel
 # axis type codes of the binary VGSpaceAxes stream (the .avg dump spells them out)
@@ -268,7 +275,17 @@ class ThermoDataSpaceFile(SpectrumFile):
         # A header with neither (an unacquired scan) still names the ISS lens.
         iss = (p.get("DS_GEPROPID_TECHNIQUE") == ISS_TECHNIQUE
                or is_iss_lens(p.get("DS_ANPROPID_LENS_MODE_NAME")))
-        name = (title.strip() or "ISS") if iss else region_name_from_title(title)
+        # REELS: the "photon energy" field holds the energy of the electron
+        # beam (1000 eV), which is no photon energy: it is kept as the primary
+        # energy (what the elastic peak is calibrated to) and the axis stays
+        # the kinetic one the analyser measured
+        reels = not iss and self._is_reels(p)
+        primary = None
+        if reels:
+            primary, hv = hv, None
+        name = ((title.strip() or "ISS") if iss
+                else (title.strip() or "REELS") if reels
+                else region_name_from_title(title))
         ax0 = ds.space_axes[0]
         if ax0["type"].upper() != "ENERGY":
             self.warnings.append(
@@ -278,15 +295,17 @@ class ThermoDataSpaceFile(SpectrumFile):
         ev_scale = p.get("DS_ACPROPID_EV_SCALE", 1)
         is_ke = ax0["type"].upper() == "ENERGY" and ev_scale != 2
         # ion scattering is recorded on a kinetic axis (flag 0, no photon
-        # energy) by nature: nothing to warn about
-        if ev_scale not in (1, 2) and not iss:
+        # energy) by nature: nothing to warn about, nor for REELS (flag 0 in
+        # every file seen; any other unknown value still warns)
+        if (ev_scale not in (1, 2) and not iss
+                and not (reels and ev_scale == 0)):
             self.warnings.append(
                 f"Unknown energy scale flag ({ev_scale}); assumed kinetic.")
         if is_ke and hv and not iss:
             energy, e_label = [hv - ke for ke in native], "Binding Energy"
         elif is_ke:
             energy, e_label = native, "Kinetic Energy"
-            if not iss:
+            if not (iss or reels):
                 self.warnings.append(
                     "Photon energy not found: shown on a kinetic-energy axis.")
         else:
@@ -307,7 +326,7 @@ class ThermoDataSpaceFile(SpectrumFile):
                 counts = [v if v is not None else 0.0 for v in values]
             r = Region(
                 name=name, index=idx, offset=idx,
-                technique="ISS" if iss else "XPS",
+                technique="ISS" if iss else "REELS" if reels else "XPS",
                 energy=energy if ok else None, counts=counts,
                 energy_label=e_label, energy_units=ax0["unit"] or "eV",
                 count_label=p.get("DS_GEPROPID_VALUE_LABEL") or "Counts",
@@ -326,6 +345,10 @@ class ThermoDataSpaceFile(SpectrumFile):
                 etch_level=level, etch_time=etch_time,
             )
             self._acquisition_facts(r, p)
+            if reels and primary:            # what the elastic peak belongs at
+                r.extra["primary_energy"] = primary
+                r.extra.setdefault("acq_metadata", {})[
+                    "Primary beam energy (eV)"] = f"{primary:g}"
             if tilt is not None:             # a stage-tilt series (ARXPS)
                 r.extra["tilt"] = tilt
                 r.conditions["Sample tilt (\u00b0)"] = f"{tilt:g}"
@@ -394,6 +417,14 @@ class ThermoDataSpaceFile(SpectrumFile):
                 "etch_source": ("tilt angle (not sputtering)"
                                 if any("tilt" in r.extra for r in regions)
                                 else "data axis")}
+
+    @staticmethod
+    def _is_reels(p):
+        """True for a REELS spectrum: the technique code or, when the header
+        has none (an unacquired scan), the lens mode name says so."""
+        return (p.get("DS_GEPROPID_TECHNIQUE") == REELS_TECHNIQUE
+                or str(p.get("DS_ANPROPID_LENS_MODE_NAME", "")).strip().upper()
+                == REELS_LENS)
 
     @staticmethod
     def _anode(p, hv):
@@ -565,7 +596,8 @@ class ThermoDataSpaceFile(SpectrumFile):
         wf = p.get("DS_ANPROPID_WORK_FTN")
         if isinstance(wf, (int, float)) and wf:
             instr["Work function (eV)"] = f"{wf:.3g}"
-        if hv:
+        if hv and not (not is_iss_lens(instr["Lens mode"])
+                       and ThermoDataSpaceFile._is_reels(p)):
             anode = ThermoDataSpaceFile._anode(p, hv)
             instr["X-ray source"] = {
                 "Al Kα (mono)": "Al Kα, monochromated",
@@ -577,7 +609,7 @@ class ThermoDataSpaceFile(SpectrumFile):
                   f"{p.get('DS_SOURCE_FLOODGUNPROPID_CURRENT', 0):g} µA")
             en = p.get("DS_SOURCE_FLOODGUNPROPID_ENERGY")
             if isinstance(en, (int, float)) and en:
-                fg += f", {en:.3g} eV"
+                fg += f", {en:g} eV"
             instr["Charge neutraliser"] = fg
         self.instrument = {k: v for k, v in instr.items() if v}
         import sputter

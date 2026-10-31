@@ -910,6 +910,12 @@ class IssReelsDialog(tk.Toplevel):
         self.cal_source = ttk.Label(t, style="Muted.TLabel", wraplength=470,
                                     justify="left")
         self.cal_source.grid(row=1, column=0, columnspan=2, sticky="w")
+        self.cal_auto = tk.BooleanVar(value=bool(self.app.ann.reels_auto))
+        ttk.Checkbutton(
+            t, text="Calibrate automatically when a file records the primary "
+                    "energy", variable=self.cal_auto,
+            command=self._auto_toggled).grid(row=6, column=0, columnspan=2,
+                                             sticky="w", pady=(8, 0))
         btns = ttk.Frame(t)
         btns.grid(row=2, column=0, columnspan=2, sticky="w", pady=8)
         ttk.Button(btns, text="Move the elastic peak to the primary energy",
@@ -980,13 +986,24 @@ class IssReelsDialog(tk.Toplevel):
                      f"spectra recorded as REELS have an energy-loss axis.")
             return
         peak, _ke, _y = self.app.reels_measured_peak(r)
+        self.cal_auto.set(bool(self.app.ann.reels_auto))
         if cal:
             self.cal_status.config(
-                text=f"Calibrated: shift {cal['shift']:+.2f} eV")
+                text=f"Calibrated{' automatically' if cal.get('auto') else ''}"
+                     f": shift {cal['shift']:+.2f} eV")
             self.cal_detail.config(
                 text=f"The elastic peak was found at {cal['elastic']:.2f} eV "
                      f"and now lies at {cal['nominal']:g} eV (0 eV of energy "
-                     f"loss). Stored with the workbook.")
+                     f"loss). Stored with the workbook; Remove undoes it and "
+                     f"stops it being applied again.")
+        elif self.app.ann.reels_cal_is_declined(
+                *self.app._marker_key(r)):
+            self.cal_status.config(
+                text=f"Not calibrated (removed)" if peak is None else
+                     f"Elastic peak at {peak:.2f} eV, calibration removed")
+            self.cal_detail.config(
+                text="It is not calibrated automatically again; use the "
+                     "button to calibrate it.")
         elif peak is None:
             self.cal_status.config(text="No elastic peak found")
             self.cal_detail.config(text="The kinetic energies of this "
@@ -1040,8 +1057,13 @@ class IssReelsDialog(tk.Toplevel):
                      f"primary energy, or no elastic peak).")
 
     def _uncalibrate(self):
-        self.app.reels_cal_set(self._region(), None)
+        """Remove the calibration (an automatic one too); the spectrum is not
+        calibrated automatically again when its file is loaded."""
+        self.app.reels_cal_set(self._region(), None, decline=True)
         self._after_calibration()
+
+    def _auto_toggled(self):
+        self.app.reels_auto_set(self.cal_auto.get())
 
     def _after_calibration(self):
         """The stored elastic peaks moved with the energy scale: show them."""

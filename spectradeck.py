@@ -2597,9 +2597,10 @@ class Workspace:
             self.ann.set_import(fid, parser.import_options)
         for r in parser.regions:
             self.region_parser[id(r)] = parser
+        auto_notes = self._auto_calibrate_reels(parser)
         if refresh:
             self._finish_adding()
-        problems = []
+        problems = [f"{name}: {n}" for n in auto_notes]
         if parser.corruption["corrupted"]:
             problems.append(f"{name}: {parser.corruption['message']}")
         problems += [f"{name}: {w}" for w in parser.warnings]
@@ -3180,13 +3181,57 @@ class Workspace:
         """The stored energy calibration of REELS spectrum ``r``, or None."""
         return self.ann.reels_cal_for(*self._marker_key(r))
 
-    def reels_cal_set(self, r, data):
+    def reels_cal_set(self, r, data, decline=False):
         """Store (None removes) the energy calibration of REELS spectrum ``r``:
         every kinetic energy moves by its shift, and the elastic peak stored
-        with any REELS result of it moves with them."""
-        self.ann.set_reels_cal(*self._marker_key(r), data)
+        with any REELS result of it moves with them. ``decline`` (with None)
+        records that the user removed it, so it is not applied again when the
+        file is loaded."""
+        self.ann.set_reels_cal(*self._marker_key(r), data, decline=decline)
         self._ann_changed(relabel=False)
         self._update_metadata()
+
+    def reels_auto_set(self, on):
+        """Whether a REELS spectrum is calibrated when it is loaded and its
+        file records the primary energy (stored with the workbook)."""
+        self.ann.reels_auto = bool(on)
+        self._ann_changed(relabel=False)
+
+    def _auto_calibrate_reels(self, parser):
+        """Calibrate each REELS spectrum of the file just registered whose file
+        records the primary energy, when the workbook allows it
+        (``Annotations.reels_auto``), it has no calibration yet and the user has
+        not removed one: its elastic peak is moved to the primary energy
+        (``reels.auto_calibration``) so it opens at 1000 eV, 0 eV of loss. A
+        spectrum whose peak is not found or is far from the primary energy is
+        left as it is and named in the returned notes. Returns those notes."""
+        notes = []
+        if not self.ann.reels_auto:
+            return notes
+        changed = False
+        for r in parser.regions:
+            if not r.is_reels:
+                continue
+            key = self._marker_key(r)
+            if (self.ann.reels_cal_for(*key)
+                    or self.ann.reels_cal_is_declined(*key)):
+                continue
+            primary = reels.primary_energy(r)
+            if primary is None:
+                continue
+            _peak, ke, y = self.reels_measured_peak(r)
+            cal, why = (reels.auto_calibration(ke, y, primary) if ke
+                        else (None, "its kinetic energies are not known"))
+            if cal is None:
+                notes.append(f"{r.sample}: not calibrated automatically "
+                             f"({why}).")
+                continue
+            self.ann.set_reels_cal(*key, cal)
+            changed = True
+        if changed:                      # what was drawn or remembered is stale
+            self._disp_cache.clear()
+            self._ann_serial += 1
+        return notes
 
     def reels_measured_peak(self, r):
         """``(elastic peak, kinetic energies, counts)`` of REELS spectrum ``r``

@@ -525,6 +525,30 @@ def calibration(ke, counts, nominal):
             "shift": nominal - float(elastic)}
 
 
+AUTO_LIMIT = 30.0     # eV: a larger automatic shift is not applied (see below)
+
+
+def auto_calibration(ke, counts, nominal, limit=AUTO_LIMIT):
+    """``(calibration, "")`` for a spectrum whose file records the primary
+    energy ``nominal``, to be applied when it is loaded, or ``(None, why)``.
+
+    It is the ordinary :func:`calibration` marked ``auto``, and it is **not**
+    applied when no elastic peak is found or when the peak lies more than
+    ``limit`` eV from the primary energy: a spectrum without an elastic peak, or
+    with a wrong primary energy, must not be shifted blindly (the user can still
+    calibrate it by hand)."""
+    cal = calibration(ke, counts, nominal)
+    if cal is None:
+        return None, "no elastic peak could be found"
+    if abs(cal["shift"]) > limit:
+        return None, (f"the elastic peak, at {cal['elastic']:.1f} eV, is more "
+                      f"than {limit:g} eV from the primary energy of "
+                      f"{cal['nominal']:g} eV")
+    cal["auto"] = True
+    cal["source"] = "file"
+    return cal, ""
+
+
 def calibration_text(cal):
     """One sentence for the metadata and the methods."""
     how = {"file": "recorded in the file", "entered": "entered by the user"}
@@ -532,7 +556,9 @@ def calibration_text(cal):
     return (f"kinetic energies shifted by {cal['shift']:+.2f} eV so that the "
             f"elastic peak, found at {cal['elastic']:.2f} eV, lies at the "
             f"primary energy of {cal['nominal']:g} eV"
-            + (f" ({src})" if src else "") + " (0 eV of energy loss)")
+            + (f" ({src})" if src else "") + " (0 eV of energy loss)"
+            + ("; applied automatically when the file was loaded"
+               if cal.get("auto") else ""))
 
 
 def _window_area(x, v, window, avg):

@@ -337,7 +337,11 @@ class TestOverlaysOnTheLossAxis(unittest.TestCase):
         self.assertAlmostEqual(first, 3.5 - 0.3, 2)
 
 
-def make_workspace(case, regions=None, file_id="f1"):
+def make_workspace(case, regions=None, file_id="f1", auto=False):
+    """A workspace holding one file. ``auto`` False (the default) switches the
+    automatic calibration on load off, so these tests start from an
+    uncalibrated spectrum and exercise the manual path; the automatic one is
+    tested in test_thermo_reels.py."""
     import matplotlib
     saved = matplotlib.rcParams.copy()
     try:
@@ -357,6 +361,7 @@ def make_workspace(case, regions=None, file_id="f1"):
     case.addCleanup(restore)
     ws = ee.Workspace(root)
     ws.cfg["reels_axis"] = viewdata.LOSS
+    ws.ann.reels_auto = bool(auto)
     f = SpectrumFile()
     f.path = "t.vms"
     f.format_name = "Test"
@@ -478,7 +483,9 @@ class TestWorkspace(unittest.TestCase):
         self.assertIn("Calibrated", dlg.cal_status.cget("text"))
         self.assertIn("-4.3", dlg.cal_status.cget("text"))
         dlg._uncalibrate()
-        self.assertIn("not calibrated", dlg.cal_status.cget("text"))
+        self.assertIn("calibration removed", dlg.cal_status.cget("text"))
+        self.assertIn("not calibrated automatically again",
+                      dlg.cal_detail.cget("text"))
 
     def test_a_typed_energy_is_marked_entered_and_used(self):
         dlg = self.dialog()
