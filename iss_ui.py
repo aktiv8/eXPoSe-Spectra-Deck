@@ -22,6 +22,7 @@ from tkinter import messagebox, ttk
 
 import elements
 import reels
+import tabfit
 import viewdata
 from workbook_ui import _finish
 
@@ -60,7 +61,7 @@ class IssReelsDialog(tk.Toplevel):
         self.nb.add(self.cal_tab, text="REELS energy scale")
         self.nb.add(self.reels_tab, text="REELS band gap")
         self.loss_tab = ttk.Frame(self.nb, padding=8)
-        self.nb.add(self.loss_tab, text="REELS loss peaks / layers")
+        self.nb.add(self.loss_tab, text="REELS loss / layers")
         self.ratio_tab = ttk.Frame(self.nb, padding=8)
         self.nb.add(self.ratio_tab, text="REELS π / (σ+π) ratio")
         self._build_iss()
@@ -75,7 +76,8 @@ class IssReelsDialog(tk.Toplevel):
         self.bind("<Escape>", lambda e: self.destroy())
         self.bind("<Destroy>", lambda e: self._detach()
                   if e.widget is self else None)
-        _finish(self, app, 560, 640)
+        _finish(self, app, 640, 640)
+        tabfit.fit_tabs(self.nb, self)
         for lb in (self.cand_list, self.mark_list):
             lb.configure(bg=app.palette["entry"], fg=app.palette["fg"],
                          selectbackground=app.palette["select_bg"],

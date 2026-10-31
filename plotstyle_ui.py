@@ -14,6 +14,7 @@ import tkinter as tk
 from tkinter import messagebox, simpledialog, ttk
 
 import plotstyle
+import tabfit
 from workbook_ui import _finish
 
 
@@ -71,7 +72,8 @@ class PlotStyleDialog(tk.Toplevel):
         ttk.Button(body, text="Close", command=self.destroy).grid(
             row=4, column=1, sticky="e", pady=(10, 0))
         self.bind("<Escape>", lambda e: self.destroy())
-        _finish(self, app, 500, 520)
+        _finish(self, app, 560, 520)
+        tabfit.fit_tabs(self.nb, self)
         self._sync()
 
     # -- controls, one per field ------------------------------------------

@@ -466,6 +466,13 @@ class ThemeManager:
                      padding=(12, 5), borderwidth=0)
         st.map("TNotebook.Tab", background=[("selected", bg)],
                foreground=[("selected", fg)])
+        # same look with less padding, for a notebook whose tabs would be
+        # squeezed (tabfit.fit_tabs switches to it)
+        st.configure("Compact.TNotebook", background=bg, bordercolor=border)
+        st.configure("Compact.TNotebook.Tab", background=bg, foreground=muted,
+                     padding=(6, 5), borderwidth=0)
+        st.map("Compact.TNotebook.Tab", background=[("selected", bg)],
+               foreground=[("selected", fg)])
         # tree + tables: airy rows, quiet flat headings
         st.configure("Treeview", background=entry, fieldbackground=entry,
                      foreground=fg, bordercolor=border, rowheight=self._row_height(),

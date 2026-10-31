@@ -91,6 +91,7 @@ import icons
 import ribbon
 import plotstyle
 import themes
+import tabfit
 import viewdata
 import metasummary
 import methods
@@ -2141,8 +2142,9 @@ class Workspace:
         self.tab_quant = ttk.Frame(self.nb)
         self.nb.add(self.tab_images, text="Images")
         self.nb.add(self.tab_map, text="Stage map")
-        self.nb.add(self.tab_casaquant, text="CasaXPS quant")
+        self.nb.add(self.tab_casaquant, text="CasaXPS")
         self.nb.add(self.tab_quant, text="Quantification")
+        tabfit.fit_tabs(self.nb)
         self.casaquant_panel = casaquant_ui.CasaQuantPanel(
             self.tab_casaquant, self)
         self.casaquant_panel.pack(fill="both", expand=True)
