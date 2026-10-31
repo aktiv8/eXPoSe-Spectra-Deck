@@ -60,6 +60,45 @@ class TestIsZoomed(unittest.TestCase):
         self.assertTrue(vz.is_zoomed(auto, ((0.0, 1200.0), (0.0, 1000.0))))
 
 
+class TestFitY(unittest.TestCase):
+    NAN = float("nan")
+
+    def test_only_the_data_inside_the_window_count(self):
+        xs = [0, 1, 2, 3, 4]
+        ys = [100, 5, 7, 3, 200]
+        lo, hi = vz.fit_y([(xs, ys)], (1, 3), pad=0.1)
+        self.assertAlmostEqual(lo, 3 - 0.4)
+        self.assertAlmostEqual(hi, 7 + 0.4)
+
+    def test_window_given_high_to_low_and_several_lines(self):
+        a = ([0, 1, 2], [1, 2, 3])
+        b = ([0, 1, 2], [10, 20, 30])
+        lo, hi = vz.fit_y([a, b], (2, 0), pad=0)
+        self.assertEqual((lo, hi), (1, 30))
+
+    def test_nan_outside_a_fit_region_is_ignored(self):
+        lo, hi = vz.fit_y([([0, 1, 2], [self.NAN, 4, self.NAN])], (0, 2),
+                          pad=0.5)
+        self.assertLess(lo, 4)
+        self.assertGreater(hi, 4)
+
+    def test_flat_data_still_gets_a_range(self):
+        lo, hi = vz.fit_y([([0, 1], [10, 10])], (0, 1))
+        self.assertLess(lo, 10)
+        self.assertGreater(hi, 10)
+
+    def test_empty_window_gives_none(self):
+        self.assertIsNone(vz.fit_y([([0, 1], [1, 2])], (5, 6)))
+        self.assertIsNone(vz.fit_y([], (0, 1)))
+
+    def test_log_axis_ignores_non_positive_and_pads_by_a_factor(self):
+        lo, hi = vz.fit_y([([0, 1, 2], [0, 10, 1000])], (0, 2), pad=0.1,
+                          log=True)
+        self.assertLess(lo, 10)
+        self.assertGreater(lo, 0)
+        self.assertGreater(hi, 1000)
+
+
 class TestFits(unittest.TestCase):
     def test_overlap_is_enough_whichever_way_round(self):
         self.assertTrue(vz.fits((1200.0, 0.0), [300.0, 280.0]))

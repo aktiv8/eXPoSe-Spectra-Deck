@@ -173,6 +173,28 @@ class TestFigureFromThePlot(unittest.TestCase):
         self.assertEqual(list(z["panels"]), [key])
         self.assertEqual(z["panels"][key]["x"], [288.0, 283.0])
 
+    def test_fit_y_fills_the_zoomed_window_and_is_saved_with_a_figure(self):
+        ax, key = self._panel()
+        ax.set_xlim(292.0, 289.0)             # the flat tail: counts about 100
+        ax.set_ylim(0.0, 5000.0)
+        self.assertEqual(self.ws.fit_y_to_view(key), 1)
+        lo, hi = ax.get_ylim()
+        self.assertLess(lo, 100.5)
+        self.assertGreater(lo, 90.0)
+        self.assertLess(hi, 110.0)
+        self.assertEqual(self.ws.current_zoom()["panels"][key]["y"],
+                         [lo, hi])
+        # the other panel was not touched
+        ax2, _k2 = self._panel("O 1s")
+        self.assertEqual(ax2.get_ylim(), self.ws._auto_lims[ax2][1])
+
+    def test_fit_y_on_a_window_with_no_data_changes_nothing(self):
+        ax, key = self._panel()
+        ax.set_xlim(400.0, 395.0)
+        before = ax.get_ylim()
+        self.assertEqual(self.ws.fit_y_to_view(key), 0)
+        self.assertEqual(ax.get_ylim(), before)
+
     def test_an_unzoomed_view_stores_an_empty_zoom(self):
         fig = self.ws.add_figure("Plain")
         self.assertEqual(fig["state"]["zoom"]["panels"], {})

@@ -652,7 +652,7 @@ TOOLS_NEEDS_DATA = frozenset((
 VIEW_NEEDS_DATA = frozenset((
     "Expand all", "Collapse all", "Untick all",
     "Tick matching regions everywhere",
-    "Untick matching regions everywhere"))
+    "Untick matching regions everywhere", "Fit Y to the zoomed window"))
 # widget classes where a typed Ctrl+letter belongs to the text box
 TEXT_WIDGETS = frozenset(("Entry", "TEntry", "Text", "TCombobox", "Spinbox",
                           "TSpinbox"))
@@ -951,6 +951,8 @@ class Workspace:
                           command=self._tick_matching)
         viewm.add_command(label="Untick matching regions everywhere",
                           command=self._untick_matching)
+        viewm.add_command(label="Fit Y to the zoomed window",
+                          command=self.fit_y_to_view)
         viewm.add_separator()
         viewm.add_command(label="Show/hide file tree",
                           command=lambda: self._toggle_pane("tree"))
@@ -2023,6 +2025,20 @@ class Workspace:
             btn = self.toolbar._buttons.get(name)
             if btn is not None:
                 btn.configure(state="normal")
+        try:        # "Fit Y": rescale y to the data inside the zoomed window
+            tb = self.toolbar
+            # a black-on-transparent icon, which matplotlib recolours to the
+            # theme like its own (a _large.png beside it serves scaled screens)
+            icon = os.path.join(appinfo.ASSETS, "toolbar", "fit_y.png")
+            btn = tb._Button("Fit Y", icon, False, self.fit_y_to_view)
+            home = tb._buttons.get("Home")
+            if home is not None:
+                btn.pack_configure(after=home)      # beside Home, not last
+            Tooltip(btn, "Fit Y: rescale y to the data in the zoomed window",
+                    lambda: self.palette)
+            tb._buttons["Fit Y"] = btn          # so the theme recolours it
+        except Exception:
+            pass
         self.themes.recolor_mpl_toolbar(self.toolbar)
         self._layout_bottom()
 
@@ -4770,6 +4786,10 @@ class Workspace:
             state="disabled" if series else "normal",
             command=lambda: self._set_panel_view(key, "reverse",
                                                  not look["reverse"]))
+        sp.add_command(
+            label="Fit Y to the zoomed window",
+            state="disabled" if series else "normal",
+            command=lambda: self.fit_y_to_view(key))
         sp.add_separator()
         sp.add_command(label="Use the page's view",
                        state="normal" if key in self.panel_views
@@ -5002,6 +5022,44 @@ class Workspace:
                     ax.set_ylim(z["y"])
             except Exception:
                 pass
+
+    def fit_y_to_view(self, key=None):
+        """Rescale y so the data inside each panel's current x window fill it
+        (every panel, or only ``key``). A view change like a zoom: the new
+        limits go on the toolbar's history (Back undoes them) and are saved
+        with a figure by ``current_zoom``. Series views (heat map, 3D
+        waterfall) have no y axis to fit and are skipped."""
+        if not HAVE_MPL:
+            return 0
+        done = skipped = 0
+        for ax, k in self._axmap.items():
+            if key is not None and k != key:
+                continue
+            if hasattr(ax, "get_zlim") or not ax.lines:
+                skipped += 1
+                continue
+            series = [(ln.get_xdata(orig=False), ln.get_ydata(orig=False))
+                      for ln in ax.lines
+                      if ln.get_transform() == ax.transData]
+            new = viewzoom.fit_y(series, ax.get_xlim(), 0.06,
+                                 ax.get_yscale() == "log")
+            if new is None:
+                skipped += 1
+                continue
+            ax.set_ylim(new)
+            done += 1
+        if done:
+            try:
+                self.toolbar.push_current()
+            except Exception:
+                pass
+            self.canvas.draw_idle()
+        self.status.config(
+            text=(f"Y fitted to the zoomed window on {done} panel"
+                  f"{'s' if done != 1 else ''}"
+                  + (f" ({skipped} skipped)" if skipped else ""))
+            if done else "Nothing to fit: no plotted data in the window.")
+        return done
 
     CLICK_SLOP = 5                  # px: less than this is a click, not a drag
 

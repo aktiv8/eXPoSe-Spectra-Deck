@@ -69,6 +69,39 @@ def is_zoomed(auto, current):
     return not (_same(auto[0], current[0]) and _same(auto[1], current[1]))
 
 
+def fit_y(series, xlim, pad=0.06, log=False):
+    """The y range that makes the data inside ``xlim`` fill a panel.
+
+    ``series`` is a list of ``(x, y)`` sequences (every line of the panel);
+    only finite points with x inside ``xlim`` count (a fit curve is NaN
+    outside its region). ``pad`` is the margin as a fraction of the span (the
+    plot's own 6 %). Returns ``(lo, hi)`` or None when no point falls in the
+    window (the panel is then left as it is). On a log axis values <= 0 are
+    ignored and the margin is a factor."""
+    a, b = sorted(xlim)
+    lo = hi = None
+    for xs, ys in series:
+        for x, y in zip(xs, ys):
+            try:
+                x, y = float(x), float(y)
+            except (TypeError, ValueError):
+                continue
+            if not (math.isfinite(x) and math.isfinite(y) and a <= x <= b):
+                continue
+            if log and y <= 0:
+                continue
+            lo = y if lo is None or y < lo else lo
+            hi = y if hi is None or y > hi else hi
+    if lo is None:
+        return None
+    if log:
+        f = (hi / lo) ** pad if hi > lo else 1.05
+        return lo / f, hi * f
+    span = hi - lo
+    m = pad * span if span > 0 else (0.05 * abs(lo) or 1.0)
+    return lo - m, hi + m
+
+
 def fits(auto_x, saved_x):
     """A saved x range is usable when it overlaps the panel's own (auto)
     range: if the data have changed since the figure was saved so that they
