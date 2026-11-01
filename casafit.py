@@ -586,6 +586,8 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
     ks, cs = ke[order], cps[order]
     for reg, lo, hi, segments in regions:
         pos = np.nonzero((ks >= lo) & (ks <= hi))[0]
+        if reg.casa and len(pos):
+            pos = _casa_positions(ks, lo, hi, pos)
         sel = order[pos]
         if len(sel) < 3:
             continue
@@ -687,6 +689,32 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
             background_known=bg is not None,
             fit_region=reg, notes=notes))
     return out
+
+
+def _casa_positions(ks, lo, hi, fallback):
+    """The positions of the points CasaXPS puts in a region of limits
+    ``lo`` / ``hi`` (``FUN_140441620``): ``ceil`` and ``floor`` of the index
+    ratio ``(E - x0) (n - 1) / (x_n - x0)`` on the regular axis it holds, which
+    drops a last point lying exactly on the limit when the ratio comes out a
+    hair under a whole number (a region ending at 1037.1 on a 0.1 grid ends at
+    1037.0). ``fallback`` (an inclusive window) for an axis that is not
+    regular."""
+    import math
+    import numpy as np
+    n = len(ks)
+    if n < 3:
+        return fallback
+    step = round(float((ks[-1] - ks[0]) / (n - 1)), 9)
+    if step <= 0 or not np.allclose(np.diff(ks), step, atol=1e-6):
+        return fallback
+    x0 = round(float(ks[0]), 9)
+    span = (x0 + step * (n - 1)) - x0
+    if span <= 0:
+        return fallback
+    i0 = math.ceil((lo - x0) * (n - 1) / span)
+    i1 = math.floor((hi - x0) * (n - 1) / span)
+    i0, i1 = max(i0, 0), min(i1, n - 1)
+    return np.arange(i0, i1 + 1) if i1 >= i0 else fallback
 
 
 def _casa_ctx(reg, cs, i0, i1):

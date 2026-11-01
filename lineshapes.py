@@ -629,10 +629,11 @@ def is_exact(shape) -> bool:
         # (LS: a, b 0.5-1.5, n 10-500; QA / QS: a 0.5-1, b 1-5, n 0-300)
         return (len(ps["params"]) in (2, 3) and not ps["tail"]
                 and not ps["suffix"] and ps["a"] > 0 and ps["b"] > 0)
-    if ps["kind"] == "SB":
+    if ps["kind"] in ("SB", "TB"):
         # the program's step table, checked against CasaXPS's exported curves
-        # (SB(0)LA(50), LA(70), LA(90)); other bases and d > 0 are the same
-        # code but not compared
+        # (SB(0)LA(50), LA(70), LA(90); nine TB(...)LA(50) with 0 to 5 passes
+        # and four cross sections); other bases and d > 0 are the same code but
+        # not compared
         return _table_for(ps) is not None
     if ps["kind"] == "E":
         # checked against CasaXPS's exported curves (a = 1, 0.5 and 0.1)
@@ -774,6 +775,18 @@ def check_shape(shape) -> list:
                        "and 1 and ET >= 0")
         if n >= 5 and vals[4] < 0:
             bad.append(f"{kind}'s channel width cannot be negative")
+    elif kind in ("SB", "ST", "TB"):
+        # a wrapper around a base shape: CasaXPS refuses the string (and draws
+        # nothing) when no table comes out of it -- a Tougaard pass with no
+        # overlap with its cross section (T0 beyond the data), more than six
+        # passes, or a base this module cannot build
+        if not ps["suffix"]:
+            bad.append(f"{kind} needs a base shape after its parentheses")
+        elif kind == "TB" and n in (4, 5) and vals[3] > 6:
+            bad.append("TB's repeat count is at most 6")
+        elif _table_for(ps) is None:
+            bad.append(f"no {kind} table can be built for these numbers "
+                       "(CasaXPS draws nothing)")
     if ps["tail"]:
         tk = ps["tk"]
         if tk is None or not math.isfinite(tk) or tk <= 0:
@@ -1028,12 +1041,38 @@ _TABLE_CACHE = {}
 
 
 def _cached(key, build):
+    key = (key, _TABLE_STEP, _TABLE_RATIO)
     hit = _TABLE_CACHE.get(key)
     if hit is None:
         if len(_TABLE_CACHE) > 96:
             _TABLE_CACHE.clear()
         hit = _TABLE_CACHE[key] = build()
     return hit
+
+
+class _grid_of:
+    """Context manager: build tables on another grid (``step`` between the
+    samples of the fine array, ``ratio`` times that between those of the
+    coarse one). CasaXPS builds the base shape of a ``TB(...)`` wrapper on a
+    0.1 grid with a coarse step of 1.0 instead of the usual 0.025 / 1.0."""
+
+    def __init__(self, step, ratio):
+        self.new = (step, ratio)
+
+    def __enter__(self):
+        global _TABLE_STEP, _TABLE_RATIO
+        self.old = (_TABLE_STEP, _TABLE_RATIO)
+        _TABLE_STEP, _TABLE_RATIO = self.new
+
+    def __exit__(self, *exc):
+        global _TABLE_STEP, _TABLE_RATIO
+        _TABLE_STEP, _TABLE_RATIO = self.old
+
+
+def _grid_of_table(table):
+    """``(step, ratio)`` a table was built on (the default grid unless it
+    carries its own, a fifth element)."""
+    return table[4] if len(table) > 4 else (_TABLE_STEP, _TABLE_RATIO)
 
 
 def _la_table(a, b, n, boxcar=False, quartic=False):
@@ -1295,7 +1334,7 @@ def _table_values(table, x, pos, fwhm, area):
     measured ``offset``, kept in the table but not used) put them 9 % of the
     peak out against 0.5-1.3 % without it."""
     np = _np()
-    y, width, _off, npts = table
+    y, width, _off, npts = table[:4]
     u = np.asarray((np.asarray(x, dtype=float) - pos) / fwhm * width)
     return _table_lookup(table, u) * (area * width / fwhm)
 
@@ -1304,7 +1343,8 @@ def _table_lookup(table, u):
     """The table read at ``u`` table units from its centre, the way the
     program reads it (see :func:`_table_values`)."""
     np = _np()
-    y, _width, _off, npts = table
+    y, _width, _off, npts = table[:4]
+    step, ratio = _grid_of_table(table)
     c = (len(y) - 1) // 2
     half = (npts - 1) // 2
     # The program keeps each table twice: a fine array (``npts`` samples
@@ -1315,10 +1355,10 @@ def _table_lookup(table, u):
     # (the edge of a wide boxcar): CasaXPS's own LSF(1,1,50,500) shows exactly
     # that, 1.8 % of the peak at +-7.5 table units, against 0.1 % elsewhere.
     fine = y[c - half:c + half + 1]
-    coarse = y[c - half * _TABLE_RATIO:c + half * _TABLE_RATIO + 1:_TABLE_RATIO]
-    fine_u = _TABLE_STEP * np.arange(-half, half + 1)
-    coarse_u = _TABLE_STEP * _TABLE_RATIO * np.arange(-half, half + 1)
-    inside = np.abs(u) <= _TABLE_STEP * half
+    coarse = y[c - half * ratio:c + half * ratio + 1:ratio]
+    fine_u = step * np.arange(-half, half + 1)
+    coarse_u = step * ratio * np.arange(-half, half + 1)
+    inside = np.abs(u) <= step * half
     # a position beyond the coarse array (hundreds of FWHM away) counts as
     # zero (the program's own lookup past its table was not read)
     return np.where(inside, np.interp(u, fine_u, fine),
@@ -1353,6 +1393,45 @@ def _sb_table(base, d, key):
         if not area > 1e-200:
             return None
         return (step / area, width, off, npts)
+    return _cached(key, build)
+
+
+def _tb_table(base, c, d, t0, passes, scale, key):
+    """``TB(C, D, T0, n[, scale])BASE``: the Tougaard version of ``SB``
+    (the ``d`` < 0 branch of ``FUN_140409ce0``). The base table is read at
+    ``x * width / scale`` (``scale`` stretches the peak, 1 by default) on a grid
+    of the table's own 0.025 steps centred half a sample off the table's centre
+    (the program centres it on ``size / 2`` as a real number), and then, ``n``
+    times (at most 6, none for ``n`` of 0 or less), replaced by its
+    ``U 3`` Tougaard background with B = 1 and the cross section
+    ``T / ((C - T^2)^2 + D T^2)`` for ``T >= T0``: the tail of
+    everything above each point, scaled to be 1 at the low-KE end. The table
+    is then divided by its trapezoid area and keeps the base's width (no
+    re-measure), as ``SB`` does. A pass whose tail is empty has no defined
+    scale in the program (it leaves a stale variable); here that table is
+    refused (None)."""
+    def build():
+        np = _np()
+        y, width, off, npts = base[:4]
+        step, ratio = _grid_of_table(base)
+        size = len(y)
+        pos = (np.arange(size) - size / 2.0) * step / scale
+        g = _table_lookup(base, pos * width)
+        t = np.arange(size) * step
+        den = (c - t * t) ** 2 + d * t * t
+        ok = (t >= t0) & (den > 0)
+        kern = np.where(ok, t / np.where(ok, den, 1.0), 0.0)
+        for _ in range(passes):
+            # (a direct correlation: exact zeros where the cross section does
+            # not reach the data, which an FFT would blur into noise)
+            tail = np.correlate(np.maximum(g, 0.0), kern, mode="full")[size - 1:] * step
+            if not tail[0] > 1e-200:
+                return None
+            g = tail / tail[0]
+        area = (float(g.sum()) - 0.5 * float(g[0] + g[-1])) * step
+        if not area > 1e-200:
+            return None
+        return (g / area, width, off, npts, (step, ratio))
     return _cached(key, build)
 
 
@@ -1408,6 +1487,33 @@ def _table_for(sp):
         return _sb_table(base, int(math.floor(d)),
                          ("SB", int(math.floor(d)),
                           re.sub(r"\s+", "", sp["suffix"]).upper()))
+    if kind == "TB":
+        # TB(C, D, T0, n)BASE / TB(C, D, T0, n, scale)BASE (a trailing comma
+        # with nothing after it, as CasaXPS writes, parses as the first form)
+        ps = sp["params"]
+        if len(ps) not in (4, 5) or not sp["suffix"]:
+            return None
+        c, d, t0, n = ps[:4]
+        scale = ps[4] if len(ps) == 5 else 1.0
+        if not all(math.isfinite(v) for v in (c, d, t0, n, scale)):
+            return None
+        if scale < 1e-200:
+            scale = 1.0
+        n = int(math.floor(n))
+        if n > 6:                           # the program refuses more than 6
+            return None
+        base_sp = parse_shape(sp["suffix"])
+        base = None
+        if base_sp["kind"] not in ("SB", "ST", "TB"):
+            with _grid_of(0.1, 10):
+                base = _table_for(base_sp)
+            if base is not None:
+                base = tuple(base[:4]) + ((0.1, 10),)
+        if base is None:
+            return None
+        return _tb_table(base, c, d, t0, max(n, 0), scale,
+                         ("TB", round(c, 9), round(d, 9), round(t0, 9), max(n, 0),
+                          round(scale, 9), re.sub(r"\s+", "", sp["suffix"]).upper()))
     if kind == "ST":
         # ST(w)BASE / ST(w, d)BASE: the base peak times its own Shirley step
         ps = sp["params"]
