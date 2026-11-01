@@ -1356,6 +1356,40 @@ def _sb_table(base, d, key):
     return _cached(key, build)
 
 
+def _st_table(base, w, d, key):
+    """``ST(w, d)BASE``: the base peak multiplied by its own Shirley step
+    (``FUN_140409340``). With ``g`` the base table read at ``x * width`` and
+    ``I(x)`` its integral from ``x`` up to the high-KE end, the shape is
+    ``h(x) = g(x) * (I(x) + T / w)`` with ``T`` the whole integral: a peak with
+    a Shirley-shaped tail on the low-KE (high-BE) side, stronger the larger
+    ``w``. The program then moves the table so the **maximum** of ``h`` sits at
+    the centre (the Position of an ``ST`` component is its maximum), builds
+    ``h`` again from the moved base, smooths it with a Gaussian kernel of ``d``
+    samples when ``d`` > 0, divides by the trapezoid area and measures the
+    width as for any peak."""
+    def build():
+        np = _np()
+        y, width, off, npts = base
+        size = len(y)
+        c = (size - 1) // 2
+        idx = np.arange(size)
+
+        def product(shift):
+            g = _table_lookup(base, (idx - c - shift) * _TABLE_STEP * width)
+            integ = _integral_to_high_end(g)
+            return g * (integ + integ[0] / w)
+        h = product(0)
+        top = float(h.max())
+        shift = int(c - np.nonzero(h == top)[0][-1]) if top >= 0.0 else 0
+        h = product(shift)
+        if d > 0:
+            h = _gauss_smooth(h, d)
+        if not (float(h.sum()) - 0.5 * float(h[0] + h[-1])) * _TABLE_STEP > 1e-200:
+            return None
+        return _finish_table(h, npts)
+    return _cached(key, build)
+
+
 def _table_for(sp):
     """The table of a parsed shape, or ``None`` for a shape that is not (or
     not yet) read from the program."""
@@ -1373,6 +1407,24 @@ def _table_for(sp):
             return None
         return _sb_table(base, int(math.floor(d)),
                          ("SB", int(math.floor(d)),
+                          re.sub(r"\s+", "", sp["suffix"]).upper()))
+    if kind == "ST":
+        # ST(w)BASE / ST(w, d)BASE: the base peak times its own Shirley step
+        ps = sp["params"]
+        if len(ps) not in (1, 2) or not sp["suffix"]:
+            return None
+        w, d = ps[0], (ps[1] if len(ps) == 2 else 0.0)
+        if not (math.isfinite(w) and w >= 0.0 and math.isfinite(d)
+                and 0.0 <= d <= _LA_MAX_N):
+            return None
+        base_sp = parse_shape(sp["suffix"])
+        base = _table_for(base_sp) if base_sp["kind"] not in ("SB", "ST") else None
+        if base is None:
+            return None
+        if w <= 1e-200:                     # the program leaves the base alone
+            return base
+        return _st_table(base, w, int(math.floor(d)),
+                         ("ST", round(w, 9), int(math.floor(d)),
                           re.sub(r"\s+", "", sp["suffix"]).upper()))
     if kind == "LA":
         return _la_table(sp["a"], sp["b"], _la_n(sp["m"]))
