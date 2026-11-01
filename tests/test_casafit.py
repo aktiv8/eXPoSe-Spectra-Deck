@@ -1226,18 +1226,24 @@ class TestStEndOffsetOnRealShirleyRegions(unittest.TestCase):
             # the natural anchor below must be computed on raw counts too.
             bg = np.array(cv.background, dtype=float)
             bg = bg[~np.isnan(bg)]
-            k = max(1, min(fr.avg, len(bg) // 2 or 1))
 
             counts = np.array(r.counts, dtype=float)
             be = np.array(r.energy, dtype=float)
             ke = r.photon_energy - be
             order = np.argsort(ke)              # ascending KE, same as
-            sel = order[(ke[order] >= fr.start_ke) &     # casafit.curves'
-                        (ke[order] <= fr.end_ke)]         # own selection
-            y = counts[sel]
+            pos = np.nonzero((ke[order] >= fr.start_ke) &     # casafit.curves'
+                             (ke[order] <= fr.end_ke))[0]      # own selection
+            y = counts[order[pos]]
 
-            natural_lo = float(y[:k].mean())
-            natural_hi = float(y[-k:].mean())
+            # CasaXPS's end levels: a symmetric window of avg - 1 points
+            # either side of each limit, reaching outside the region
+            h = fr.avg - 1
+            ca = counts[order]
+            pre = ca[pos[0] - h:pos[0]] if h and pos[0] >= h else None
+            post = (ca[pos[-1] + 1:pos[-1] + 1 + h]
+                    if h and pos[-1] + h < len(ca) else None)
+            natural_lo, natural_hi = casafit.lineshapes.casa_levels(
+                y, fr.avg, pre, post)
             expected_lo = natural_lo * (1 - st / 100)
             expected_hi = natural_hi * (1 - en / 100)
             # the End anchor is exact (Shirley's cumulative sum reaches its

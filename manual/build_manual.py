@@ -1409,9 +1409,12 @@ def build_chapters(doc):
         "region), the Tougaard family (U 2 and U 4 Tougaard, the preset U Poly, "
         "U Si, U SiO2, U Ge and U Al, U 3 Tougaard with its own C, D and "
         "T0, W Tougaard, and the plain Tougaard whose scale CasaXPS sets from "
-        "the data) and Smart. Min Limits, Step Down, Poly Regression and "
-        "Spline Shirley are not reproduced: such a fit shows its components "
-        "but no envelope."
+        "the data), None (flat at the lower end level), Zero, Min Limits, "
+        "Step Up and Step Down (with the Edge forms), Poly Regression and "
+        "Smart. The end levels follow CasaXPS: the data are averaged over "
+        "a window of the stated width on both sides of each region limit. "
+        "Spline Shirley, Extrap Shirley and the other types not listed are "
+        "not reproduced: such a fit shows its components but no envelope."
     )
     h2(doc, "Goodness of fit")
     para(doc,

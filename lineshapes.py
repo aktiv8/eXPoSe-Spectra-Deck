@@ -1761,7 +1761,125 @@ def linear_bg(y, avg=1, st_offset=0.0, end_offset=0.0):
     return lo + (hi - lo) * np.linspace(0.0, 1.0, n)
 
 
-def tougaard_u2(x, y, b, c, avg=1, end_offset=0.0):
+# -- CasaXPS's own simple backgrounds, read from CasaXPS.exe (master function
+# FUN_140424f70, simple types FUN_140438ea0, Shirley FUN_1404323b0, steps
+# FUN_14043a8e0 / FUN_14043aa30, Poly Regression FUN_1404244f0) and checked
+# against the background column of a CasaXPS ASCII export of every type
+# (``amy.vms`` / ``amy.csv``, Thermo K-Alpha+ valence band and Ti 2p scans).
+
+def casa_levels(y, avg=1, pre=None, post=None, st_offset=0.0, end_offset=0.0):
+    """CasaXPS's two end levels of a region ``y`` (ascending KE): the data at
+    each limit averaged over a **symmetric window of +-(avg - 1) points**
+    (``avg`` points of the region line = a half width of ``avg - 1``), the
+    window reaching outside the region into ``pre`` / ``post`` (the data
+    immediately below / above it). The window is **all or nothing**: if either
+    end would leave the spectrum (``pre`` / ``post`` shorter than the half
+    width, or None) both ends are the single point at the limit. The
+    St / End Offset percentages then scale the levels (``I (1 - offset / 100)``).
+    Returns ``(low-KE level, high-KE level)``. Not CasaXPS's optional
+    Savitzky-Golay end value (a flag the region line does not carry)."""
+    np = _np()
+    y = np.asarray(y, dtype=float)
+    h = max(int(avg) - 1, 0)
+    lo, hi = float(y[0]), float(y[-1])
+    if (h and pre is not None and post is not None and len(y) > h
+            and len(pre) >= h and len(post) >= h):
+        pre = np.asarray(pre, dtype=float)[-h:]
+        post = np.asarray(post, dtype=float)[:h]
+        d = 2 * h + 1
+        lo = (y[0] + y[1:h + 1].sum() + pre.sum()) / d
+        hi = (y[-1] + y[-h - 1:-1].sum() + post.sum()) / d
+    return (lo * (1.0 - st_offset / 100.0), hi * (1.0 - end_offset / 100.0))
+
+
+def shirley_casa(y, lo, hi, iters=20):
+    """CasaXPS's Shirley background (FUN_1404323b0): start from the lower of
+    the two levels, then at most ``iters`` times replace the background by
+    ``(lo (S - s_i) + hi s_i) / S`` with ``s_i`` the running sum of
+    ``|y - background|`` (not clamped at zero), stopping once the summed
+    change is under 0.01 per point."""
+    np = _np()
+    y = np.asarray(y, dtype=float)
+    b = np.full(len(y), min(lo, hi))
+    for _ in range(iters):
+        d = np.abs(y - b)
+        tot = float(d.sum())
+        nb = ((lo * (tot - np.cumsum(d)) + hi * np.cumsum(d)) / tot
+              if tot > 1e-200 else np.zeros(len(y)))
+        change = float(np.abs(nb - b).sum())
+        b = nb
+        if change < len(y) * 0.01:
+            break
+    return b
+
+
+def _erfc(z):
+    import math
+    np = _np()
+    return np.array([math.erfc(float(v)) for v in np.asarray(z, dtype=float)])
+
+
+def casa_step(x, params, up):
+    """CasaXPS's Step Up / Step Down (and Edge Up / Edge Down, Fixed Step
+    Up / Down: the same functions) on the KE grid ``x``: ``p0 / 2 erfc((p1 -
+    E) / p2) + p3`` for up, ``erfc((E - p1) / p2)`` for down, with ``p0`` the
+    height, ``p1`` the position (KE), ``p2`` the width and ``p3`` the offset
+    (the region line's ``params[2:6]``). CasaXPS reads erfc from a
+    0.001-step table (0.02-0.03 % of the range from the analytic value). A
+    non-positive height or width gives CasaXPS's 1e300 marker: None here.
+    CasaXPS also draws a linear ramp when the region's name or comment says
+    "draw lines"; that is not read."""
+    np = _np()
+    if len(params) < 6:
+        return None
+    p0, p1, p2, p3 = (float(v) for v in params[2:6])
+    if p0 <= 1e-200 or p2 <= 1e-200:
+        return None
+    x = np.asarray(x, dtype=float)
+    z = (p1 - x) / p2 if up else (x - p1) / p2
+    return p0 * 0.5 * _erfc(z) + p3
+
+
+def casa_poly_regression(y, avg, params):
+    """CasaXPS's Poly Regression: a least-squares polynomial of ``order``
+    coefficients (``params[2]``, 2..36, else 2; degree order - 1) through the
+    region, on x = (i - (m - 1) / 3) / (m - 1) and the data divided by their
+    largest magnitude, evaluated at the interior points. The first and last
+    ``avg`` points are not computed by CasaXPS and are exported as the data,
+    as here. A positive St Offset lowers the curve by that percent of its
+    mean. ``params[3] == 1`` selects a derivative output, not ported (None).
+    High orders are numerically unstable in CasaXPS itself (an order-35 fit
+    of a 160-point region wanders far above the data); a QR solve follows it
+    to about 0.2 % of the range, an order of 14 to 0.05 counts."""
+    np = _np()
+    y = np.asarray(y, dtype=float)
+    p2 = float(params[2]) if len(params) > 2 else 2.0
+    order = int(p2) if 2.0 <= p2 <= 36.0 else 2
+    if len(params) > 3 and int(params[3]) == 1:
+        return None
+    m = len(y)
+    if m < order + 2:
+        return None
+    peak = float(np.abs(y).max())
+    scale = 1.0 / peak if peak > 0 else 1.0
+    x = (np.arange(m) - (m - 1) / 3.0) / (m - 1)
+    a = np.vander(x, order, increasing=True)
+    q, r = np.linalg.qr(a)
+    try:
+        c = np.linalg.solve(r, q.T @ (y * scale))
+    except np.linalg.LinAlgError:
+        c = np.linalg.lstsq(a, y * scale, rcond=None)[0]
+    fit = (a @ c) / scale
+    v = max(int(avg), 0)
+    out = y.copy()
+    if m - 2 * v > 0:
+        mid = fit[v:m - v]
+        st = float(params[0]) if len(params) > 0 else 0.0
+        out[v:m - v] = mid - (float(mid.mean()) * st / 100.0 if st > 0 else 0.0)
+    return out
+
+
+def tougaard_u2(x, y, b, c, avg=1, end_offset=0.0, base=None):
     """The two-parameter universal Tougaard background of ``y`` on the
     ascending-KE grid ``x``: the level at the high-KE end (mean of ``avg``
     points) plus the inelastic tail of everything above each point,
@@ -1780,7 +1898,8 @@ def tougaard_u2(x, y, b, c, avg=1, end_offset=0.0):
     if n < 3:
         return y.copy()
     k = max(1, min(int(avg), n // 2 or 1))
-    base = float(y[-k:].mean()) * (1.0 - end_offset / 100.0)
+    if base is None:
+        base = float(y[-k:].mean()) * (1.0 - end_offset / 100.0)
     dx = float(np.abs(np.diff(x)).mean())
     yb = y - base
     bg = np.empty(n)
@@ -1790,7 +1909,7 @@ def tougaard_u2(x, y, b, c, avg=1, end_offset=0.0):
     return base + bg * dx
 
 
-def tougaard_3param(x, y, b, c, d, avg=1, end_offset=0.0):
+def tougaard_3param(x, y, b, c, d, avg=1, end_offset=0.0, base=None):
     """The three-parameter universal Tougaard background of ``y`` on the
     ascending-KE grid ``x``: same construction as :func:`tougaard_u2` (the
     level at the high-KE end plus the inelastic tail of everything above each
@@ -1825,7 +1944,8 @@ def tougaard_3param(x, y, b, c, d, avg=1, end_offset=0.0):
     if n < 3:
         return y.copy()
     k = max(1, min(int(avg), n // 2 or 1))
-    base = float(y[-k:].mean()) * (1.0 - end_offset / 100.0)
+    if base is None:
+        base = float(y[-k:].mean()) * (1.0 - end_offset / 100.0)
     dx = float(np.abs(np.diff(x)).mean())
     yb = y - base
     bg = np.empty(n)
@@ -1895,7 +2015,7 @@ _CASA_PRESETS = {"u al": (230.0, 4.5, 0.0), "u si": (325.0, 96.0, 0.0),
 _CASA_TG = re.compile(r"^(?:(u\s*(?:al|si|sio2|ge|poly)|u\s*3|w)\s*)?tougaard\b")
 
 
-def casa_tougaard(x, y, kind, params, avg=1):
+def casa_tougaard(x, y, kind, params, avg=1, levels=None):
     """CasaXPS's Tougaard background of one of its own types (see above);
     ``kind`` is the lower-case type name, ``params`` the region line's six
     numbers after the averaging width. None for a name this does not cover."""
@@ -1912,8 +2032,11 @@ def casa_tougaard(x, y, kind, params, avg=1):
     a = max(int(avg), 1)
     st = params[0] if len(params) > 0 else 0.0
     en = params[1] if len(params) > 1 else 0.0
-    start = float(y[:a].mean()) * (1.0 - st / 100.0)
-    base = float(y[-a:].mean()) * (1.0 - en / 100.0)
+    if levels is not None:                  # CasaXPS's own end levels
+        start, base = levels
+    else:
+        start = float(y[:a].mean()) * (1.0 - st / 100.0)
+        base = float(y[-a:].mean()) * (1.0 - en / 100.0)
     step = float(np.abs(np.diff(x)).mean())
     t = np.arange(n) * step
     if sub in _CASA_PRESETS:
@@ -1949,7 +2072,16 @@ _TOUGAARD_3P = re.compile(r"^(?:u\s*(?:poly|sio2|si|ge|al|4)\s*)?tougaard\b")
 _TOUGAARD_W = re.compile(r"^w\s*tougaard\b")
 
 
-def background(kind, y, avg=1, x=None, params=()):
+def _casa_base(y, avg, ctx, st, en):
+    """The high-KE end level of a CasaXPS region (see :func:`casa_levels`), or
+    None for a source that is not CasaXPS (the Tougaard functions then take
+    their own one-sided average)."""
+    if ctx is None or len(y) < 3:
+        return None
+    return casa_levels(y, avg, ctx[0], ctx[1], st, en)[1]
+
+
+def background(kind, y, avg=1, x=None, params=(), ctx=None):
     """Background under ``y`` for a CasaXPS type name ('Shirley', 'Linear',
     'None', 'Tougaard', 'U 2 Tougaard', 'U Poly Tougaard', 'U Si Tougaard',
     'U SiO2 Tougaard', 'U Ge Tougaard', 'U Al Tougaard', 'U 4 Tougaard',
@@ -1979,10 +2111,41 @@ def background(kind, y, avg=1, x=None, params=()):
     caveats there); its ``C`` sign convention (which family it follows,
     :func:`tougaard_u2`'s negated storage or :func:`tougaard_3param`'s
     natural one) is unconfirmed, so it is read with the natural sign, the
-    more common convention among CasaXPS's Tougaard types."""
+    more common convention among CasaXPS's Tougaard types.
+
+    ``ctx`` = ``(pre, post)``, the data immediately below and above the region
+    (ascending KE; None where the spectrum ends), marks a **CasaXPS region**:
+    its end levels are then CasaXPS's own symmetric window (:func:`casa_levels`),
+    ``Shirley`` follows the program's loop (:func:`shirley_casa`), ``Linear``
+    uses the same levels, and ``None`` is a flat background at the lower of
+    the two end levels (it is zero for every other source, ``ctx`` None).
+    ``Zero``, ``Min Limits``, ``Step Up`` / ``Step Down`` (with the Edge and
+    Fixed forms) and ``Poly Regression`` are CasaXPS-only types, read the same
+    way with or without ``ctx`` (without it the ends are single points)."""
     t = str(kind or "").strip().lower()
     st = params[0] if len(params) > 0 else 0.0
     en = params[1] if len(params) > 1 else 0.0
+    pre, post = ctx if ctx is not None else (None, None)
+    if t == "zero":
+        return _np().zeros(len(y))
+    if t == "min limits":
+        lo, hi = casa_levels(y, avg, pre, post, st, en)
+        return _np().full(len(y), lo if abs(lo) < abs(hi) else hi)
+    if t in ("step up", "edge up", "fixed step up"):
+        return None if x is None else casa_step(x, params, True)
+    if t in ("step down", "edge down", "fixed step down"):
+        return None if x is None else casa_step(x, params, False)
+    if t == "poly regression":
+        return casa_poly_regression(y, avg, params)
+    if ctx is not None and len(y) >= 3:
+        if t == "shirley":
+            return shirley_casa(y, *casa_levels(y, avg, pre, post, st, en))
+        if t == "linear":
+            lo, hi = casa_levels(y, avg, pre, post, st, en)
+            return lo + (hi - lo) * _np().linspace(0.0, 1.0, len(y))
+        if t == "none":
+            lo, hi = casa_levels(y, avg, pre, post, st, en)
+            return _np().full(len(y), min(lo, hi))
     if t.startswith("shirley"):
         return shirley(y, avg, st_offset=st, end_offset=en)
     if t.startswith("smart"):
@@ -1991,9 +2154,12 @@ def background(kind, y, avg=1, x=None, params=()):
         if x is None or len(params) < 4 or not params[2]:
             return None
         return tougaard_u2(x, y, params[2], abs(params[3]) or 1643.0, avg,
-                           end_offset=en)
+                           end_offset=en, base=_casa_base(y, avg, ctx, st, en))
     if x is not None and _CASA_TG.match(t):
-        return casa_tougaard(x, y, t, params, avg)
+        return casa_tougaard(
+            x, y, t, params, avg,
+            levels=casa_levels(y, avg, pre, post, st, en)
+            if ctx is not None and len(y) >= 3 else None)
     if _TOUGAARD_W.match(t):
         if x is None or len(params) < 4 or not params[2] or not params[3]:
             return None
@@ -2002,7 +2168,8 @@ def background(kind, y, avg=1, x=None, params=()):
         if x is None or len(params) < 5 or not params[2] or not params[3]:
             return None
         return tougaard_3param(x, y, params[2], params[3], params[4], avg,
-                               end_offset=en)
+                               end_offset=en,
+                               base=_casa_base(y, avg, ctx, st, en))
     if t.startswith("linear"):
         return linear_bg(y, avg, st_offset=st, end_offset=en)
     if t in ("none", "", "offset", "sp2sp3", "zero"):

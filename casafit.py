@@ -65,6 +65,10 @@ class FitRegion:
     note: str = ""                   # a caveat about how this region's
         # background is drawn (an Avantage "Smart" background drawn as
         # Shirley), added to Curves.notes
+    casa: bool = False               # read from a ``CASA region`` line, so its
+        # background follows CasaXPS's own end-level window and "None" type
+        # (lineshapes.background(ctx=)); regions built by other readers (an
+        # Avantage project, KherveFitting) keep their own conventions
 
 
 @dataclass
@@ -243,7 +247,8 @@ def _region(line):
         start_ke=min(nums[0], nums[1]), end_ke=max(nums[0], nums[1]),
         rsf=nums[2] if len(nums) > 2 else 1.0,
         avg=int(nums[3]) if len(nums) > 3 and 0 < nums[3] < 50 else 1,
-        mass=tail[0] if tail else 0.0, params=tuple(nums[4:10]), line=line)
+        mass=tail[0] if tail else 0.0, params=tuple(nums[4:10]), line=line,
+        casa=True)
 
 
 def _comp(line, region_name):
@@ -578,11 +583,14 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
                     float(ke.min()), float(ke.max()), None)]
     cshift = fit.shift_of_comps()
     out = []
+    ks, cs = ke[order], cps[order]
     for reg, lo, hi, segments in regions:
-        sel = order[(ke[order] >= lo) & (ke[order] <= hi)]
+        pos = np.nonzero((ks >= lo) & (ks <= hi))[0]
+        sel = order[pos]
         if len(sel) < 3:
             continue
         kx, y = ke[sel], cps[sel]
+        p0 = int(pos[0])
         region_comps = fit.region_components(reg)
         notes = []
         csv_map = None
@@ -609,14 +617,23 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
                 kb = np.asarray(reg.known_background, dtype=float)
                 bg = kb[sel] / (scale or 1.0)
             elif segments:
-                bg = _stitched_background(segments, kx, y)
+                bg = _stitched_background(segments, kx, y, cs, p0)
             else:
-                bg = lineshapes.background(reg.background, y, reg.avg, x=kx,
-                                           params=reg.params)
+                bg = lineshapes.background(
+                    reg.background, y, reg.avg, x=kx, params=reg.params,
+                    ctx=_casa_ctx(reg, cs, p0, p0 + len(sel) - 1))
             comps, total = [], (np.zeros(len(sel)) if bg is None else bg.copy())
             approx = False
             if reg.note:
                 notes.append(reg.note)
+            if (bg is not None and reg.casa and len(reg.params) > 2
+                    and reg.background.strip().lower() == "poly regression"
+                    and reg.params[2] > 25):
+                notes.append(
+                    f"Poly Regression of order {int(reg.params[2])}: a "
+                    "polynomial this high is numerically unstable (CasaXPS's "
+                    "own curve wanders away from the data); reproduced only "
+                    "approximately")
             for c in region_comps:
                 bad = lineshapes.check_shape(c.shape)
                 if bad:
@@ -672,11 +689,27 @@ def curves(fit, energies, counts, hv, dwell=None, scans=1, prefer_csv=False):
     return out
 
 
-def _stitched_background(segments, kx, y):
+def _casa_ctx(reg, cs, i0, i1):
+    """``lineshapes.background(ctx=)`` for the region occupying positions
+    ``i0..i1`` of the ascending-KE intensities ``cs``: the ``avg - 1`` points
+    on each side of it that CasaXPS's end-level window reaches, or
+    ``(None, None)`` (both ends single points) when either side would leave
+    the spectrum. None for a region that did not come from a CasaXPS line."""
+    if not reg.casa:
+        return None
+    h = max(int(reg.avg) - 1, 0)
+    if h and i0 - h >= 0 and i1 + h < len(cs):
+        return cs[i0 - h:i0], cs[i1 + 1:i1 + 1 + h]
+    return (None, None)
+
+
+def _stitched_background(segments, kx, y, cs=None, p0=0):
     """The background of a segmented region: each segment's own background on
     its own points (a point shared by two segments keeps the first's), joined
     over ``kx``. NaN where no segment reaches or its type is not reproduced;
-    None when no segment's background can be drawn."""
+    None when no segment's background can be drawn. ``cs`` / ``p0`` (the
+    intensities of the whole spectrum, ascending KE, and the position of
+    ``kx[0]`` in it) give each segment its neighbouring data."""
     import numpy as np
     out = np.full(len(kx), np.nan)
     drawn = False
@@ -684,8 +717,11 @@ def _stitched_background(segments, kx, y):
         m = (kx >= lo) & (kx <= hi) & np.isnan(out)
         if m.sum() < 2:
             continue
+        idx = np.nonzero(m)[0]
+        ctx = (_casa_ctx(seg, cs, p0 + int(idx[0]), p0 + int(idx[-1]))
+               if cs is not None else None)
         part = lineshapes.background(seg.background, y[m], seg.avg, x=kx[m],
-                                     params=seg.params)
+                                     params=seg.params, ctx=ctx)
         if part is None:
             continue
         out[m] = part
