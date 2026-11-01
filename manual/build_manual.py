@@ -1413,10 +1413,11 @@ def build_chapters(doc):
         "T0, W Tougaard, and the plain Tougaard whose scale CasaXPS sets from "
         "the data), None (flat at the lower end level), Zero, Min Limits, "
         "Step Up and Step Down (with the Edge forms), Poly Regression and "
-        "Smart. The end levels follow CasaXPS: the data are averaged over "
-        "a window of the stated width on both sides of each region limit. "
-        "Spline Shirley, Extrap Shirley and the other types not listed are "
-        "not reproduced: such a fit shows its components but no envelope."
+        "Smart, and the Shirley family (Extrap, Offset, Compress, Iterated, "
+        "L and the Spline types). The end levels follow CasaXPS: the data "
+        "are averaged over a window of the stated width on both sides of "
+        "each region limit. Types not listed are not reproduced: such a fit "
+        "shows its components but no envelope."
     )
     h2(doc, "Goodness of fit")
     para(doc,

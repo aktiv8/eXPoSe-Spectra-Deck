@@ -1882,6 +1882,230 @@ def shirley_casa(y, lo, hi, iters=20):
     return b
 
 
+def casa_extrap_shirley(x, y, raw_lo, raw_hi, st_offset=0.0, end_offset=0.0,
+                        p0=0.0, p1=25.0, shift=0.0):
+    """CasaXPS's Extrap Shirley (``FUN_1404370a0`` -> ``FUN_140435470``) of
+    ``y`` on the ascending-KE grid ``x``. ``raw_lo`` / ``raw_hi`` are the two
+    end levels *before* the offset percentages (:func:`casa_levels` with none).
+
+    A straight line is fitted by least squares to the last ``p0`` eV of the
+    region (the high-KE end; the window starts at the last point below
+    ``x_max - p0`` and needs 3 points: a ``p0`` of 0 or less leaves a window
+    that is too short and the baseline is flat at the end level), less
+    ``End Offset`` per cent of ``raw_hi``, and subtracted. A Shirley step
+    ``k * integral_x^xmax |y' - bg'| dx`` is built on what is left (the window
+    itself is zero), ``k`` chosen so the step is the gap between the start
+    level (less ``St Offset`` per cent) and the line at the low-KE end,
+    repeated until ``k`` changes by under 1e-4 or ``p1`` (at most 25) passes;
+    the line is added back. ``shift`` (the region's sixth number) moves the
+    step along the axis, read here with linear rather than cubic-spline
+    interpolation. Checked only by the residual of real fits (the program's
+    own output was not available); where the decompile drops an array index
+    the loop variable is assumed."""
+    np = _np()
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    xr = x - x[0]
+    end_off = raw_hi * end_offset / 100.0
+    below = np.nonzero(xr < xr[-1] - p0)[0]
+    i0 = int(below[-1]) if len(below) else 0
+    if n - i0 >= 3:
+        a = np.vstack([np.ones(n - i0), xr[i0:]]).T
+        c, m = np.linalg.lstsq(a, y[i0:], rcond=None)[0]
+        line = c + m * xr - end_off
+        w0 = i0
+    else:
+        line = np.full(n, raw_hi * (1.0 - end_offset / 100.0))
+        w0 = n - 1
+    yp = y - line
+    yp[w0:] = 0.0
+    height = raw_lo * (1.0 - st_offset / 100.0) - line[0]
+    bg = np.zeros(n)
+    iters = int(min(max(p1, 0.0), 25.0))
+    if height > 0 and iters > 0:
+        dx = np.diff(xr)
+
+        def area(b):
+            r = np.abs(yp - b)
+            return float(np.sum((r[1:] + r[:-1]) * 0.5 * dx))
+        a0 = area(bg)
+        if a0 > 1e-200:
+            k, k_prev, it = height / a0, 200.0, 0
+            while abs(k_prev - k) > 1e-4 and it < 25 and it < p1:
+                cum = 0.0
+                for j in range(n - 1, 0, -1):
+                    bg[j] = k * cum
+                    cum += 0.5 * (abs(yp[j] - bg[j]) + abs(yp[j - 1] - bg[j - 1]))                         * dx[j - 1]
+                bg[0] = k * cum
+                k_prev = k
+                a1 = area(bg)
+                if a1 <= 1e-200:
+                    break
+                k = height / a1
+                it += 1
+    if shift:
+        bg = np.interp(np.clip(xr + shift, xr[0], xr[-1]), xr, bg)
+    return bg + line
+
+
+def casa_offset_shirley(x, y, lo, hi, p0=0.0, p1=0.0, p2=0.0, shift=0.0,
+                        compress=False, iters=20):
+    """CasaXPS's Offset Shirley (``compress`` False) and Compress Shirley
+    (``FUN_140434bb0``, mode 2 and 1) of ``y`` on the ascending-KE grid
+    ``x``; ``lo`` / ``hi`` are the end levels with the offsets applied.
+
+    The Shirley loop of :func:`shirley_casa`, started from the straight line
+    between the levels, **writes each point's value ``shift`` eV (the
+    region's sixth number, ``|shift| / step`` points) further towards low
+    KE** (Compress: squeezed linearly into the first part of the region),
+    the points left at the high-KE end take the last value written; a
+    background that rises with KE (``lo`` < ``hi``) is mirrored about the line;
+    the part below the line is scaled about it by ``p1`` and the part above
+    by ``p0`` (the first two of the four numbers); and ``p2`` (0-1) blends the
+    result towards the line. Checked only by the residual of real fits."""
+    np = _np()
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    x = np.asarray(x, dtype=float)
+    step = float(np.abs(np.diff(x)).mean()) if n > 1 else 1.0
+    e = n - 1
+    fc = e - int(math.floor(abs(shift) / step)) if step > 0 else e
+    if fc <= 0:
+        fc = 1
+    if e < 2 or not 0 < fc <= e:
+        return None
+    idx = np.arange(n)
+    lin = (lo * (e - idx) + hi * idx) / float(e)
+    out = lin.copy()
+    for _ in range(iters):
+        tot = float(np.abs(y - out).sum())
+        cum, change = 0.0, 0.0
+        for c in range(n):
+            cum += abs(y[c] - out[c])
+            new = (lo * (tot - cum) + hi * cum) / tot if abs(tot) > 1e-200                 else 0.0
+            change += abs(new - out[c])
+            a8 = int(math.floor(c * fc / float(e))) if compress else c - (e - fc)
+            if 0 <= a8 <= e:
+                out[a8] = new
+        if change < n * 0.01:
+            break
+    out[fc + 1:] = out[fc]
+    if lo < hi:
+        out = lin + (lin - out)
+    factor = np.where(lin - out >= 0, p1, p0)
+    out = out + factor * (out - lin)
+    if p2 > 0:
+        p2 = min(p2, 1.0)
+        out = out * (1.0 - p2) + p2 * lin
+    return out
+
+
+def casa_iterated_shirley(y, lo, hi, p3=0.0):
+    """CasaXPS's Iterated Shirley (``FUN_140433990``): the loop of
+    :func:`shirley_casa`, 50 passes by default, ``|p3|`` passes for a negative
+    sixth number (at most 10 000); a positive one keeps the 50 and stops
+    early once the summed change is under 0.01 per point. Read from the
+    program only (no file uses it)."""
+    np = _np()
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    iters = 50
+    if p3 < 0:
+        iters = min(int(-p3), 10000)
+    b = np.full(n, min(lo, hi))
+    for _ in range(iters):
+        d = np.abs(y - b)
+        tot = float(d.sum())
+        nb = (lo * (tot - np.cumsum(d)) + hi * np.cumsum(d)) / tot             if tot > 1e-200 else np.zeros(n)
+        change = float(np.abs(nb - b).sum())
+        b = nb
+        if p3 > 0 and change < n * 0.01:
+            break
+    return b
+
+
+def _natural_spline(xk, yk, xs):
+    """Natural cubic spline through ``(xk, yk)`` evaluated at ``xs`` (zero
+    second derivative at both ends, as CasaXPS's ``CCubicSpline``)."""
+    np = _np()
+    xk = np.asarray(xk, dtype=float)
+    yk = np.asarray(yk, dtype=float)
+    n = len(xk)
+    h = np.diff(xk)
+    a = np.zeros((n, n))
+    r = np.zeros(n)
+    a[0, 0] = a[-1, -1] = 1.0
+    for i in range(1, n - 1):
+        a[i, i - 1], a[i, i], a[i, i + 1] = h[i - 1], 2.0 * (h[i - 1] + h[i]), h[i]
+        r[i] = 6.0 * ((yk[i + 1] - yk[i]) / h[i] - (yk[i] - yk[i - 1]) / h[i - 1])
+    m = np.linalg.solve(a, r)
+    xs = np.asarray(xs, dtype=float)
+    i = np.clip(np.searchsorted(xk, xs, side="right") - 1, 0, n - 2)
+    hh = h[i]
+    t1, t2 = xk[i + 1] - xs, xs - xk[i]
+    return ((m[i] * t1 ** 3 + m[i + 1] * t2 ** 3) / (6.0 * hh)
+            + (yk[i] / hh - m[i] * hh / 6.0) * t1
+            + (yk[i + 1] / hh - m[i + 1] * hh / 6.0) * t2)
+
+
+def casa_spline_bg(base, adds):
+    """CasaXPS's Spline Shirley / Linear / Tougaard / None (``FUN_140439590``):
+    the base background ``base`` with four interior knots, at ``(n - 1) / 5``
+    spacing, raised by ``adds`` (the region's four numbers, in counts per
+    second) and the points between the ends redrawn through a natural cubic
+    spline over the six knots; the two end points keep the base. None when
+    the region is too short for the knots to be distinct."""
+    np = _np()
+    n = len(base)
+    e = n - 1
+    if e // 5 < 1 or len(adds) < 4:
+        return None
+    ks = [0] + [int(e / 5.0 * k) for k in range(1, 5)] + [e]
+    if len(set(ks)) < 6:
+        return None
+    ys = [base[0]] + [base[ks[k]] + adds[k - 1] for k in range(1, 5)] + [base[e]]
+    out = np.array(base, dtype=float)
+    out[1:e] = _natural_spline(ks, ys, np.arange(1, e))
+    return out
+
+
+def casa_l_shirley(x, y, lo_raw, hi_raw, st_offset=0.0, end_offset=0.0,
+                   p2=0.0, shift=0.0, iters=20):
+    """CasaXPS's L Shirley (``FUN_140433750`` -> ``FUN_140432b90``): a line
+    from the start level (less ``St Offset`` per cent) to the end level -- flat
+    at the end level when the region's fifth number is not 0 -- is taken off
+    the data, a Shirley step whose height is the part of the start level the
+    offset removed is built on the remainder (the loop of
+    :func:`shirley_casa`), moved by ``shift`` eV, and the line is added back
+    less ``End Offset`` per cent of the end level. Checked on one real fit."""
+    np = _np()
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    lo = lo_raw * (1.0 - st_offset / 100.0)
+    off = hi_raw * end_offset / 100.0
+    xr = x - x[0]
+    if p2 == 0:
+        line = lo + xr * (hi_raw - lo) / (xr[-1] - xr[0])
+    else:
+        line = np.full(n, hi_raw)
+    yp = y - line
+    height = lo_raw - line[0]
+    bg = np.zeros(n)
+    for _ in range(iters):
+        tot = float(np.abs(yp - bg).sum())
+        cum = np.cumsum(np.abs(yp - bg))
+        new = height * (tot - cum) / tot if tot > 1e-200 else np.zeros(n)
+        change = float(np.abs(new - bg).sum())
+        bg = new
+        if change < n * 0.01:
+            break
+    if shift:
+        bg = np.interp(np.clip(xr + shift, xr[0], xr[-1]), xr, bg)
+    return bg + line - off
+
+
 def _erfc(z):
     import math
     np = _np()
@@ -2207,6 +2431,35 @@ def background(kind, y, avg=1, x=None, params=(), ctx=None):
     if t == "poly regression":
         return casa_poly_regression(y, avg, params)
     if ctx is not None and len(y) >= 3:
+        if t == "extrap shirley" and x is not None and len(params) >= 6:
+            lo, hi = casa_levels(y, avg, pre, post)
+            return casa_extrap_shirley(x, y, lo, hi, st, en, params[2],
+                                       params[3], params[5])
+        if t == "iterated shirley":
+            return casa_iterated_shirley(
+                y, *casa_levels(y, avg, pre, post, st, en),
+                params[5] if len(params) > 5 else 0.0)
+        if t == "l shirley" and x is not None and len(params) >= 6:
+            lo, hi = casa_levels(y, avg, pre, post)
+            return casa_l_shirley(x, y, lo, hi, st, en, params[4], params[5])
+        if t.startswith("spline ") and len(params) >= 6:
+            lo, hi = casa_levels(y, avg, pre, post, st, en)
+            bases = {"spline shirley": lambda: shirley_casa(y, lo, hi),
+                     "spline linear": lambda: lo + (hi - lo) * _np().linspace(
+                         0.0, 1.0, len(y)),
+                     "spline none": lambda: _np().full(len(y), min(lo, hi)),
+                     "spline tougaard": lambda: None if x is None else
+                     casa_tougaard(x, y, "tougaard", params, avg,
+                                   levels=(lo, hi))}
+            if t in bases:
+                b = bases[t]()
+                return None if b is None else casa_spline_bg(b, params[2:6])
+        if (t in ("offset shirley", "compress shirley") and x is not None
+                and len(params) >= 6):
+            lo, hi = casa_levels(y, avg, pre, post, st, en)
+            return casa_offset_shirley(x, y, lo, hi, params[2], params[3],
+                                       params[4], params[5],
+                                       compress=t.startswith("compress"))
         if t == "shirley":
             return shirley_casa(y, *casa_levels(y, avg, pre, post, st, en))
         if t == "linear":

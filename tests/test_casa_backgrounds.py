@@ -232,5 +232,139 @@ class TestAgainstCasaXpsExport(unittest.TestCase):
             self.assertLess(d, 1e-6 if order <= 20 else 0.05, order)
 
 
+@unittest.skipUnless(HAVE_NP, "numpy needed")
+class TestShirleyFamily(unittest.TestCase):
+    def setUp(self):
+        self.x = np.linspace(1000.0, 1020.0, 201)
+        peak = 400.0 * np.exp(-((self.x - 1010.0) / 1.5) ** 2)
+        step = np.cumsum(peak[::-1])[::-1] * 0.02          # Shirley-like rise to low KE
+        self.y = 100.0 + peak + step
+
+    def test_extrap_with_no_window_is_a_flat_baseline_shirley(self):
+        lo, hi = float(self.y[0]), float(self.y[-1])
+        b = ls.casa_extrap_shirley(self.x, self.y, lo, hi, 0.0, 0.0, 0.0, 25.0)
+        self.assertAlmostEqual(b[-1], hi, 6)               # flat baseline at the end level
+        self.assertAlmostEqual(b[0], lo, delta=0.001 * lo)  # the step reaches the start level
+        self.assertTrue(np.all(np.diff(b) <= 1e-9))        # falls with KE
+
+    def test_extrap_fits_a_line_to_the_last_p0_ev(self):
+        y = self.y.copy()
+        slope = 5.0                                         # a sloping tail
+        tail = self.x > 1015.5          # the window starts at the point below 1016
+        y[tail] = 100.0 + slope * (self.x[tail] - 1016.0)
+        lo, hi = float(y[0]), float(y[-1])
+        b = ls.casa_extrap_shirley(self.x, y, lo, hi, 0.0, 0.0, 4.0, 25.0)
+        # inside the window the background is the fitted line: slope 5
+        k = np.nonzero(self.x > 1017.0)[0]
+        self.assertAlmostEqual(float(np.polyfit(self.x[k], b[k], 1)[0]), slope, 6)
+        # (k stops changing by 1e-4 after a few passes, so the step reaches the
+        # start level only to ~1.5 %: the program stops there too)
+        self.assertAlmostEqual(float(b[0]), lo, delta=0.02 * lo)
+
+    def test_extrap_shift_moves_the_step_along_the_axis(self):
+        lo, hi = float(self.y[0]), float(self.y[-1])
+        b0 = ls.casa_extrap_shirley(self.x, self.y, lo, hi, 0.0, 0.0, 0.0, 25.0)
+        b3 = ls.casa_extrap_shirley(self.x, self.y, lo, hi, 0.0, 0.0, 0.0, 25.0, 3.0)
+        j = int(np.argmin(np.abs(b0 - 0.5 * (lo + hi))))
+        k = int(np.argmin(np.abs(b3 - 0.5 * (lo + hi))))
+        self.assertAlmostEqual(self.x[j] - self.x[k], 3.0, delta=0.2)
+
+    def test_offset_shirley_shifts_and_blends(self):
+        lo, hi = float(self.y[0]), float(self.y[-1])
+        plain = ls.casa_offset_shirley(self.x, self.y, lo, hi, shift=0.0)
+        moved = ls.casa_offset_shirley(self.x, self.y, lo, hi, shift=4.0)
+        self.assertGreater(float(np.abs(plain - moved).max()), 0.05 * (lo - hi))
+        j = int(np.argmin(np.abs(plain - 0.5 * (lo + hi))))
+        k = int(np.argmin(np.abs(moved - 0.5 * (lo + hi))))
+        # (the shifted values feed back into the loop, so the step moves by
+        # about, not exactly, the shift)
+        self.assertGreater(self.x[j] - self.x[k], 3.0)
+        self.assertLess(self.x[j] - self.x[k], 6.0)
+        # p2 = 1 is the straight line between the levels
+        line = ls.casa_offset_shirley(self.x, self.y, lo, hi, p2=1.0, shift=4.0)
+        self.assertTrue(np.allclose(line, np.linspace(lo, hi, len(self.y))))
+
+    def test_compress_shirley_squeezes_into_the_start_of_the_region(self):
+        lo, hi = float(self.y[0]), float(self.y[-1])
+        c = ls.casa_offset_shirley(self.x, self.y, lo, hi, shift=6.0, compress=True)
+        self.assertIsNotNone(c)
+        self.assertAlmostEqual(c[-1], hi, 3)
+
+    def test_spline_family_keeps_the_ends_and_adds_to_the_knots(self):
+        lo, hi = float(self.y[0]), float(self.y[-1])
+        base = np.linspace(lo, hi, len(self.y))
+        same = ls.casa_spline_bg(base, [0.0, 0.0, 0.0, 0.0])
+        self.assertTrue(np.allclose(same, base))             # a line through a line
+        up = ls.casa_spline_bg(base, [0.0, 50.0, 0.0, 0.0])
+        e = len(base) - 1
+        self.assertEqual(up[0], base[0])
+        self.assertEqual(up[-1], base[-1])
+        k = int(e / 5.0 * 2)
+        self.assertAlmostEqual(up[k], base[k] + 50.0, 6)     # the second knot
+        self.assertIsNone(ls.casa_spline_bg(base[:5], [0.0] * 4))   # too short
+        params = (0.0, 0.0, 0.0, 50.0, 0.0, 0.0)
+        out = ls.background("Spline Linear", self.y, 1, x=self.x, params=params,
+                            ctx=(None, None))
+        self.assertAlmostEqual(out[int(e / 5.0 * 2)],
+                               ls.background("Linear", self.y, 1,
+                                             ctx=(None, None))[int(e / 5.0 * 2)]
+                               + 50.0, 6)
+
+    def test_l_shirley_is_a_line_when_the_start_offset_is_zero(self):
+        lo, hi = float(self.y[0]), float(self.y[-1])
+        b = ls.casa_l_shirley(self.x, self.y, lo, hi)
+        self.assertTrue(np.allclose(b, np.linspace(lo, hi, len(self.y))))
+        with_offset = ls.casa_l_shirley(self.x, self.y, lo, hi, st_offset=30.0)
+        self.assertGreater(with_offset[0], b[0] * 0.69)
+        self.assertAlmostEqual(with_offset[-1], hi, 3)
+
+    def test_iterated_shirley_converges_to_the_shirley_loop(self):
+        lo, hi = float(self.y[0]), float(self.y[-1])
+        it = ls.casa_iterated_shirley(self.y, lo, hi, 0.0)
+        sh = ls.shirley_casa(self.y, lo, hi)
+        self.assertLess(float(np.abs(it - sh).max()), 0.02 * (lo - hi))
+        one = ls.casa_iterated_shirley(self.y, lo, hi, -1.0)      # one pass
+        self.assertGreater(float(np.abs(one - it).max()), 1.0)
+
+    def test_the_dispatcher_reaches_every_member(self):
+        params = (0.0, 0.0, 2.0, 25.0, 0.0, 0.0)
+        for kind in ("Extrap Shirley", "Offset Shirley", "Compress Shirley",
+                     "L Shirley", "Spline Shirley", "Spline Linear",
+                     "Spline None", "Iterated Shirley"):
+            out = ls.background(kind, self.y, 2, x=self.x, params=params,
+                                ctx=(None, None))
+            self.assertIsNotNone(out, kind)
+            self.assertEqual(len(out), len(self.y))
+        # without a CasaXPS context they are not drawn (other sources)
+        self.assertIsNone(ls.background("Extrap Shirley", self.y, 2, x=self.x,
+                                        params=params))
+
+
+@unittest.skipUnless(HAVE_NP and FOLDER and os.path.isdir(FOLDER)
+                     and os.path.exists(os.path.join(FOLDER, "extrap_shroley.vms")),
+                     "XPS_CASA_BG with extrap_shroley.vms not set")
+class TestExtrapShirleyAgainstExport(unittest.TestCase):
+    """``extrap_shroley.vms`` / ``.csv``: 12 Ti 2p regions of Extrap Shirley
+    (window 2 eV, shifts 0-10 eV, start offset 7.1 %) exported by CasaXPS."""
+
+    def test_every_background_matches(self):
+        doc = readers.load_file(os.path.join(FOLDER, "extrap_shroley.vms"))
+        regs = [r for r in doc.regions if r.fit and r.fit.regions]
+        blocks = _blocks(os.path.join(FOLDER, "extrap_shroley.csv"))
+        self.assertEqual(len(regs), len(blocks))
+        self.assertEqual(len(regs), 12)
+        for r, (_label, be, bg) in zip(regs, blocks):
+            dwell, scans = r.dwell_and_scans()
+            cv = casafit.curves(r.fit, r.energy, r.counts, r.photon_energy,
+                                dwell, scans)[0]
+            k = dwell * scans
+            ref = np.interp(np.array(r.energy), be[::-1], bg[::-1])
+            mine = np.array(cv.background, dtype=float) / k
+            ok = ~np.isnan(mine)
+            rng = (max(r.counts) - min(r.counts)) / k
+            self.assertLess(float(np.abs(mine[ok] - ref[ok]).max() / rng), 2e-4)
+
+
+
 if __name__ == "__main__":
     unittest.main()
