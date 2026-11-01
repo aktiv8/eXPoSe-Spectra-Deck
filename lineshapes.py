@@ -629,6 +629,11 @@ def is_exact(shape) -> bool:
         # (LS: a, b 0.5-1.5, n 10-500; QA / QS: a 0.5-1, b 1-5, n 0-300)
         return (len(ps["params"]) in (2, 3) and not ps["tail"]
                 and not ps["suffix"] and ps["a"] > 0 and ps["b"] > 0)
+    if ps["kind"] == "SB":
+        # the program's step table, checked against CasaXPS's exported curves
+        # (SB(0)LA(50), LA(70), LA(90)); other bases and d > 0 are the same
+        # code but not compared
+        return _table_for(ps) is not None
     if ps["kind"] == "E":
         # checked against CasaXPS's exported curves (a = 1, 0.5 and 0.1)
         bm = _A_BASE_RE.match(ps.get("suffix") or "")
@@ -1189,6 +1194,25 @@ def _sg_integration_kernel():
     return w[0] - w[1] / 2.0 + w[2] / 3.0
 
 
+def _integral_to_high_end(a, half=False):
+    """The integral of the table ``a`` from each point up to its high-KE end,
+    as the program does it: integrate the reversed table (correlate with the
+    Savitzky-Golay integration kernel, edges extended, then a running sum x
+    step) and reverse the result. ``half``: the value half a sample further
+    up, the mean of each point and the next (what ``SB`` reads)."""
+    np = _np()
+    rev = a[::-1]
+    kern = _sg_integration_kernel()
+    pad = np.concatenate([np.full(2, rev[0]), rev, np.full(2, rev[-1])])
+    filt = np.correlate(pad, kern, mode="valid")
+    running = np.concatenate([[0.0], np.cumsum(filt[1:]) * _TABLE_STEP])
+    out = running[::-1]
+    if half:
+        out = out.copy()
+        out[:-1] = 0.5 * (out[:-1] + out[1:])
+    return out
+
+
 def _ds_cut(y, m):
     """The ``DS(a, n, m)`` block: ``y`` zeroed below ``m`` table units to the
     low-KE side of the centre, then ``y - (y_cut / I_cut) * I``."""
@@ -1198,14 +1222,7 @@ def _ds_cut(y, m):
     cut = c - int(math.floor(m / _TABLE_STEP))
     cut = 0 if cut < 0 else (size - 1 if cut >= size else cut)
     a = np.where(np.arange(size) < cut, 0.0, y)
-    # integral from each point up to the high-KE end, by integrating the
-    # reversed table: correlate with the kernel, then a running sum x step
-    rev = a[::-1]
-    kern = _sg_integration_kernel()
-    pad = np.concatenate([np.full(2, rev[0]), rev, np.full(2, rev[-1])])
-    filt = np.correlate(pad, kern, mode="valid")
-    running = np.concatenate([[0.0], np.cumsum(filt[1:]) * _TABLE_STEP])
-    integ = running[::-1]
+    integ = _integral_to_high_end(a)
     if integ[cut] == 0.0:
         return a
     out = a - (a[cut] / integ[cut]) * integ
@@ -1280,6 +1297,14 @@ def _table_values(table, x, pos, fwhm, area):
     np = _np()
     y, width, _off, npts = table
     u = np.asarray((np.asarray(x, dtype=float) - pos) / fwhm * width)
+    return _table_lookup(table, u) * (area * width / fwhm)
+
+
+def _table_lookup(table, u):
+    """The table read at ``u`` table units from its centre, the way the
+    program reads it (see :func:`_table_values`)."""
+    np = _np()
+    y, _width, _off, npts = table
     c = (len(y) - 1) // 2
     half = (npts - 1) // 2
     # The program keeps each table twice: a fine array (``npts`` samples
@@ -1296,15 +1321,59 @@ def _table_values(table, x, pos, fwhm, area):
     inside = np.abs(u) <= _TABLE_STEP * half
     # a position beyond the coarse array (hundreds of FWHM away) counts as
     # zero (the program's own lookup past its table was not read)
-    out = np.where(inside, np.interp(u, fine_u, fine),
-                   np.interp(u, coarse_u, coarse, left=0.0, right=0.0))
-    return out * (area * width / fwhm)
+    return np.where(inside, np.interp(u, fine_u, fine),
+                    np.interp(u, coarse_u, coarse, left=0.0, right=0.0))
+
+
+def _sb_table(base, d, key):
+    """``SB(d)BASE``: CasaXPS's "Shirley background" of a peak shape
+    (``FUN_140409ce0``, called by the shape parser after it has built the base
+    table): the base table, read at ``x * width`` (so the peak has a FWHM of
+    one in x), is integrated from the high-KE end down, which gives a step
+    that is level on the low-KE (high-BE) side and falls through the peak
+    (the program's Savitzky-Golay integration, window 5, order 2); ``d`` > 0
+    smooths it with a Gaussian kernel of ``d`` samples (made odd); the table
+    is divided by its trapezoid area, so the component's Area is the step
+    integrated over the table's whole +-300 units. **The width is not
+    measured again** (the half-maximum search finds nothing on a monotonic
+    step): the table keeps the base's width ``W``, so the peak whose integral
+    is the step has a FWHM of ``fwhm / W`` -- 1.62 times the stated FWHM for
+    ``LA(50)``, 1.51 for ``LA(70)``, 1.09 for ``LA(90)``. Checked against 20
+    ``SB(0)LA(m)`` components of a CasaXPS export."""
+    def build():
+        np = _np()
+        y, width, off, npts = base
+        size = len(y)
+        c = (size - 1) // 2
+        u = (np.arange(size) - c) * _TABLE_STEP * width
+        step = _integral_to_high_end(_table_lookup(base, u), half=True)
+        if d > 0:
+            step = _gauss_smooth(step, d)
+        area = (float(step.sum()) - 0.5 * float(step[0] + step[-1]))             * _TABLE_STEP
+        if not area > 1e-200:
+            return None
+        return (step / area, width, off, npts)
+    return _cached(key, build)
 
 
 def _table_for(sp):
     """The table of a parsed shape, or ``None`` for a shape that is not (or
     not yet) read from the program."""
     kind = sp["kind"]
+    if kind == "SB":
+        # SB(d)BASE: a Shirley step built from the base shape's table
+        if len(sp["params"]) != 1 or not sp["suffix"]:
+            return None
+        d = sp["params"][0]
+        if not (math.isfinite(d) and 0.0 <= d <= _LA_MAX_N):
+            return None
+        base_sp = parse_shape(sp["suffix"])
+        base = _table_for(base_sp) if base_sp["kind"] != "SB" else None
+        if base is None:
+            return None
+        return _sb_table(base, int(math.floor(d)),
+                         ("SB", int(math.floor(d)),
+                          re.sub(r"\s+", "", sp["suffix"]).upper()))
     if kind == "LA":
         return _la_table(sp["a"], sp["b"], _la_n(sp["m"]))
     if kind in ("LS", "QA", "QS") and sp["a"] > 0 and sp["b"] > 0 \

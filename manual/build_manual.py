@@ -1402,7 +1402,9 @@ def build_chapters(doc):
         "Position is the shape’s centre, as in CasaXPS. A shape this "
         "application cannot reproduce keeps its real name and is flagged as "
         "approximate rather than drawn as something else, and a component "
-        "with impossible parameters is left out of the envelope with a note."
+        "with impossible parameters is left out of the envelope with a note. "
+        "CasaXPS’s SB(d) shapes (a Shirley step built under a peak shape, such "
+        "as SB(0)LA(50)) are drawn from the program’s own table."
     )
     para(doc,
         "Backgrounds: Linear, Shirley (with the start and end offsets of the "
