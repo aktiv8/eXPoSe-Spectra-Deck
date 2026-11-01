@@ -366,5 +366,93 @@ class TestExtrapShirleyAgainstExport(unittest.TestCase):
 
 
 
+@unittest.skipUnless(HAVE_NP, "numpy needed")
+class TestUTougaardTypes(unittest.TestCase):
+    """U 2 / U 3 / U 4 Tougaard as the program draws them
+    (``FUN_14043db50`` cases 0x39 / 0x44, ``FUN_1404472f0``)."""
+
+    def setUp(self):
+        self.x = np.linspace(1000.0, 1030.0, 301)
+        peak = 5000.0 * np.exp(-((self.x - 1015.0) / 2.0) ** 2)
+        self.y = 200.0 + peak + 300.0 * (self.x < 1015.0) * 0.5
+        self.ctx = (None, None)
+
+    def tail(self, y, base, kern, step):
+        n = len(y)
+        t = np.arange(n) * step
+        yb = np.maximum(y - base, 0.0)
+        return np.correlate(yb, kern(t), mode="full")[n - 1:] * step
+
+    def test_u2_is_scaled_to_the_start_level_with_the_c_floor(self):
+        step = float(self.x[1] - self.x[0])
+        params = (0.0, 0.0, 999.0, -650.0, 0.0, 0.0)       # the stored B is not used
+        b = ls.background("U 2 Tougaard", self.y, 1, x=self.x, params=params,
+                          ctx=self.ctx)
+        base = self.y[-1]
+        tail = self.tail(self.y, base, lambda t: t / (650.0 + t * t) ** 2, step)
+        scale = (self.y[0] - base) / tail[0]
+        self.assertTrue(np.allclose(b, tail * scale + base))
+        self.assertAlmostEqual(b[0], self.y[0], 6)
+        # |C| under 0.5 is read as 0.5
+        b2 = ls.background("U 2 Tougaard", self.y, 1, x=self.x,
+                           params=(0.0, 0.0, 999.0, -0.1, 0.0, 0.0), ctx=self.ctx)
+        b3 = ls.background("U 2 Tougaard", self.y, 1, x=self.x,
+                           params=(0.0, 0.0, 999.0, -0.5, 0.0, 0.0), ctx=self.ctx)
+        self.assertTrue(np.allclose(b2, b3))
+
+    def test_u2_falls_back_to_681_when_the_start_is_below_the_end(self):
+        y = self.y.copy()
+        y[:20] = 50.0                                       # start under the end level
+        step = float(self.x[1] - self.x[0])
+        b = ls.background("U 2 Tougaard", y, 1, x=self.x,
+                          params=(0.0, 0.0, 1.0, -650.0, 0.0, 0.0), ctx=self.ctx)
+        tail = self.tail(y, y[-1], lambda t: t / (650.0 + t * t) ** 2, step)
+        self.assertTrue(np.allclose(b, tail * 681.2 + y[-1]))
+
+    def test_other_sources_keep_the_stored_b(self):
+        params = (0.0, 0.0, 800.0, -650.0, 0.0, 0.0)
+        old = ls.tougaard_u2(self.x, self.y, 800.0, 650.0, 1)
+        self.assertTrue(np.allclose(
+            ls.background("U 2 Tougaard", self.y, 1, x=self.x, params=params), old))
+
+    def test_u3_uses_the_stored_c_d_t0_and_matches_the_start(self):
+        params = (0.0, 0.0, 0.0, 551.0, 436.0, 3.0)         # "U 3 T[551,436,3]"
+        b = ls.background("U 3 Tougaard", self.y, 1, x=self.x, params=params,
+                          ctx=self.ctx)
+        self.assertAlmostEqual(b[0], self.y[0], 6)
+        self.assertTrue(np.all(b[-5:] >= self.y[-1] - 1e-9))
+        poly = ls.background("U Poly Tougaard", self.y, 1, x=self.x,
+                             params=(0.0,) * 6, ctx=self.ctx)
+        self.assertTrue(np.allclose(b, poly))               # the same cross section
+
+    def test_u4_uses_the_stored_b_c_d_and_the_t0_gate(self):
+        step = float(self.x[1] - self.x[0])
+        params = (0.0, 0.0, 300.0, 400.0, 150.0, 2.0)
+        b = ls.background("U 4 Tougaard", self.y, 1, x=self.x, params=params,
+                          ctx=self.ctx)
+        base = self.y[-1]
+
+        def kern(t):
+            den = (400.0 - t * t) ** 2 + 150.0 * t * t
+            return np.where(t >= 2.0, 300.0 * t / den, 0.0)
+        self.assertTrue(np.allclose(b, self.tail(self.y, base, kern, step) + base))
+        # no scale is derived from the data: B doubles the tail
+        b2 = ls.background("U 4 Tougaard", self.y, 1, x=self.x,
+                           params=(0.0, 0.0, 600.0, 400.0, 150.0, 2.0), ctx=self.ctx)
+        self.assertTrue(np.allclose(b2 - base, 2.0 * (b - base)))
+        # nothing below T0 contributes
+        none = ls.background("U 4 Tougaard", self.y, 1, x=self.x,
+                             params=(0.0, 0.0, 300.0, 400.0, 150.0, 1e6), ctx=self.ctx)
+        self.assertTrue(np.allclose(none, base))
+
+    def test_u4_follows_a_line_when_the_start_is_below_the_end(self):
+        y = np.full(len(self.x), 100.0)
+        y[-1] = 300.0
+        y[0] = 100.0
+        b = ls.background("U 4 Tougaard", y, 1, x=self.x,
+                          params=(0.0, 0.0, 0.0, 400.0, 150.0, 0.0), ctx=self.ctx)
+        self.assertTrue(np.allclose(b, np.linspace(100.0, 300.0, len(y))))
+
+
 if __name__ == "__main__":
     unittest.main()

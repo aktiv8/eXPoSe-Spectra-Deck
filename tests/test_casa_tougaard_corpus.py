@@ -41,7 +41,8 @@ def _residuals(root, kinds):
 class TestCasaTougaardCorpus(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.res = _residuals(ROOT, ("Tougaard", "U 3 Tougaard"))
+        cls.res = _residuals(ROOT, ("Tougaard", "U 3 Tougaard", "U 2 Tougaard",
+                                     "U 4 Tougaard"))
 
     def test_plain_tougaard_is_within_a_few_percent_of_the_range(self):
         v = self.res.get("Tougaard")
@@ -54,6 +55,21 @@ class TestCasaTougaardCorpus(unittest.TestCase):
         v = self.res.get("U 3 Tougaard")
         if not v:
             self.skipTest("no U 3 Tougaard fit in this folder")
+        self.assertLess(max(v), 0.05)
+
+
+    def test_u2_tougaard_is_drawn_from_the_programs_own_scale(self):
+        # the scale is matched to the start level, not read from the stored B
+        v = self.res.get("U 2 Tougaard")
+        if not v:
+            self.skipTest("no U 2 Tougaard fit in this folder")
+        self.assertLess(statistics.median(v), 0.03)
+        self.assertLess(sorted(v)[int(0.9 * len(v))], 0.06)
+
+    def test_u4_tougaard_is_drawn_and_close(self):
+        v = self.res.get("U 4 Tougaard")
+        if not v:
+            self.skipTest("no U 4 Tougaard fit in this folder")
         self.assertLess(max(v), 0.05)
 
 

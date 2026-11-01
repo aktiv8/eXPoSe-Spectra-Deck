@@ -2305,7 +2305,11 @@ def tougaard_w(x, y, b, c):
 _CASA_PRESETS = {"u al": (230.0, 4.5, 0.0), "u si": (325.0, 96.0, 0.0),
                  "u sio2": (542.0, 275.0, 9.3), "u ge": (260.0, 62.0, 0.0),
                  "u poly": (551.0, 436.0, 3.0)}
-_CASA_TG = re.compile(r"^(?:(u\s*(?:al|si|sio2|ge|poly)|u\s*3|w)\s*)?tougaard\b")
+_CASA_TG = re.compile(r"^(?:(u\s*(?:al|si|sio2|ge|poly)|u\s*[23]|w)\s*)?tougaard\b")
+# the scale the program uses when it cannot match the start level (the B it
+# would display): the presets' own B, 681.2 for U 2, 3035 for W
+_CASA_FALLBACK_B = {"u al": 21.4, "u si": 131.0, "u sio2": 299.0, "u ge": 93.0,
+                    "u poly": 396.0, "u 2": 681.2, "w": 3035.0}
 
 
 def casa_tougaard(x, y, kind, params, avg=1, levels=None):
@@ -2340,12 +2344,19 @@ def casa_tougaard(x, y, kind, params, avg=1, levels=None):
             return None
         c, d, t0 = params[3], params[4], params[5]
         kern = np.where(t >= t0, t / ((c - t * t) ** 2 + d * t * t), 0.0)
+    elif sub == "u 2":
+        # kernel T / (a + T^2)^2 with a = max(-C, 0.5), C the stored (negative)
+        # second number
+        if len(params) < 4:
+            return None
+        kern = t / (max(-params[3], 0.5) + t * t) ** 2
     else:
         kern = t / (t * t + 1643.0) ** 2
     yb = np.maximum(y - base, 0.0)
     tail = np.correlate(yb, kern, mode="full")[n - 1:] * step
     if sub:                                             # matched at the low-KE end
-        s = (start - base) / tail[0] if (start >= base and tail[0] > 1e-200)             else (1.0 if sub == "u 3" else 0.0)
+        s = ((start - base) / tail[0] if (start >= base and tail[0] > 1e-200)
+             else _CASA_FALLBACK_B.get(sub, 1.0))
         return tail * s + base
     if sub == "" and kind.startswith("tougaard"):       # never above the data
         s = 1.0 if tail[0] <= 1e-20 else yb[0] / tail[0]
@@ -2360,7 +2371,34 @@ def casa_tougaard(x, y, kind, params, avg=1, levels=None):
     return tail * 1.0 + base
 
 
+def casa_u4(x, y, params, lo, hi):
+    """CasaXPS's ``U 4 Tougaard`` (``FUN_1404472f0``, variant 0): the stored
+    cross section ``K(T) = B T / ((C - T^2)^2 + D T^2)`` for ``T >= T0``
+    (``params[2:6]`` = B, C, D, T0, all used as stored: no scale is derived
+    from the data) summed over the data above each point, on the data less a
+    baseline and clamped at zero -- flat at the high-KE level ``hi`` or, when
+    the start level ``lo`` is lower, the straight line from ``lo`` to ``hi``
+    -- and added to that baseline. ``lo`` / ``hi`` carry the offsets."""
+    np = _np()
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = len(y)
+    if n < 3 or len(params) < 6:
+        return None
+    b, c, d, t0 = (float(v) for v in params[2:6])
+    step = float(np.abs(np.diff(x)).mean())
+    t = np.arange(n) * step
+    den = (c - t * t) ** 2 + d * t * t
+    ok = (t >= t0) & (den > 1e-200)
+    kern = np.where(ok, b * t / np.where(ok, den, 1.0), 0.0)
+    base = lo + (hi - lo) / (n - 1) * np.arange(n) if lo < hi else np.full(n, hi)
+    yb = np.maximum(y - base, 0.0)
+    tail = np.correlate(yb, kern, mode="full")[n - 1:] * step
+    return tail + base
+
+
 _TOUGAARD_U2 = re.compile(r"^u\s*2\s*tougaard")
+_TOUGAARD_U4 = re.compile(r"^u\s*4\s*tougaard")
 _TOUGAARD_3P = re.compile(r"^(?:u\s*(?:poly|sio2|si|ge|al|4)\s*)?tougaard\b")
 _TOUGAARD_W = re.compile(r"^w\s*tougaard\b")
 
@@ -2472,6 +2510,13 @@ def background(kind, y, avg=1, x=None, params=(), ctx=None):
         return shirley(y, avg, st_offset=st, end_offset=en)
     if t.startswith("smart"):
         return smart_bg(y, avg, st_offset=st, end_offset=en)
+    if ctx is not None and x is not None and len(y) >= 3:
+        if _TOUGAARD_U2.match(t) and len(params) >= 4:
+            return casa_tougaard(x, y, t, params, avg,
+                                 levels=casa_levels(y, avg, pre, post, st, en))
+        if _TOUGAARD_U4.match(t):
+            return casa_u4(x, y, params,
+                           *casa_levels(y, avg, pre, post, st, en))
     if _TOUGAARD_U2.match(t):
         if x is None or len(params) < 4 or not params[2]:
             return None
