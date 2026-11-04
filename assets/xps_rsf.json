@@ -7313,13 +7313,13 @@
    "library": "scofield",
    "anode": "Al",
    "line": "Na 2p",
-   "rsf": 0.7827
+   "rsf": 0.1941
   },
   {
    "library": "scofield",
    "anode": "Al",
    "line": "Na 2p1/2",
-   "rsf": 0.654
+   "rsf": 0.0654
   },
   {
    "library": "scofield",
@@ -9732,12 +9732,6 @@
    "anode": "Al",
    "line": "Ta 5s",
    "rsf": 0.363
-  },
-  {
-   "library": "scofield",
-   "anode": "Al",
-   "line": "Tb 3d",
-   "rsf": 49.42
   },
   {
    "library": "scofield",
@@ -16836,12 +16830,6 @@
    "anode": "Mg",
    "line": "Ta 5s",
    "rsf": 0.291
-  },
-  {
-   "library": "scofield",
-   "anode": "Mg",
-   "line": "Tb 3d",
-   "rsf": 20.8
   },
   {
    "library": "scofield",
